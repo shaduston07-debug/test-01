@@ -11,7 +11,8 @@ import { StrokeEngine } from './engine.js';
 import { DEFAULT_BRUSHES, GRAINS, getTipMask, preloadBrush, newBrushFrom, strokePreviewPoints, rawImageToMaskCanvas } from './brushes.js';
 import { importBrushFiles } from './importers.js';
 import * as Ibis from './ibis.js';
-import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask } from './tools.js';
+import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask, wandRegion, regionToCanvas } from './tools.js';
+import { parallelAdjust, wandRegionAsync } from './pool.js';
 import * as store from './storage.js';
 import * as Toon from './webtoon.js';
 import { insertLayer, structCmd, openLayers, onDocChanged, closeLayerSheet } from './layers.js';
@@ -591,7 +592,8 @@ export function openActions(app, anchor) {
       d.mode !== 'animate' && menuItem('cube', 'Add 3D layer (model / figure)', () => app.add3DLayer()),
       menuItem('brushImport', 'Import brushes', () => importBrushesFlow(app), '.sut · .brush'),
       menuItem('brushImport', 'Import ibis Paint brush', () => Ibis.importIbisQR(app), 'QR code'),
-      d.mode === 'webtoon' && menuItem('balloon', 'Add balloon / text', () => app.setTool('balloon')),
+      d.mode !== 'animate' && menuItem('pencil', 'Add text', () => app.addText('none')),
+      d.mode !== 'animate' && menuItem('balloon', 'Add speech bubble', () => app.addText('ellipse')),
     ],
     canvas: () => [
       menuItem('canvas', 'Canvas size', () => resizeDialog(app), `${d.width}×${d.height}`),
@@ -760,13 +762,19 @@ function openAdjust(app, key, anchor) {
   const orig = ctx.getImageData(bb.x, bb.y, bb.w, bb.h);
   const maskData = app.selection.active ? app.selection.mask.getContext('2d').getImageData(bb.x, bb.y, bb.w, bb.h).data : null;
   const params = Object.fromEntries(adj.params.map(([k, , , , def]) => [k, def]));
-  let pending = false, done = false;
+  let pending = false, done = false, busy = false, again = false, ticket = 0, applying = false;
+  // runs on all worker cores in parallel bands; newest slider value wins
   const run = () => {
     if (pending) return; pending = true;
-    requestAnimationFrame(() => {
+    requestAnimationFrame(async () => {
       pending = false; if (done) return;
-      const img = new ImageData(new Uint8ClampedArray(orig.data), bb.w, bb.h);
-      adj.run(img.data, { ...params, color: app.color }, bb.w, bb.h);
+      if (busy) { again = true; return; }
+      busy = true; const my = ++ticket;
+      const data = await parallelAdjust(key, { ...params, color: app.color }, orig.data, bb.w, bb.h);
+      busy = false;
+      if (done || my !== ticket) return;
+      if (again) { again = false; run(); }
+      const img = new ImageData(data, bb.w, bb.h);
       if (maskData) {
         const o = orig.data, n = img.data;
         for (let i = 0; i < n.length; i += 4) { const m = maskData[i + 3] / 255; if (m >= 1) continue; for (let k = 0; k < 4; k++) n[i + k] = o[i + k] + (n[i + k] - o[i + k]) * m; }
@@ -775,8 +783,11 @@ function openAdjust(app, key, anchor) {
       app.requestRender();
     });
   };
-  const apply = () => {
-    if (done) return; done = true;
+  const apply = async () => {
+    if (done || applying) return; applying = true;
+    // let the latest preview finish on the workers before committing it
+    while (busy || pending || again) await new Promise((r) => setTimeout(r, 16));
+    done = true;
     const cmd = pixelCmd(c, { x: bb.x, y: bb.y, w: bb.w, h: bb.h }, adj.name, () => app.requestRender());
     if (cmd) app.history.push(cmd);
     app.changed();
@@ -896,17 +907,31 @@ export function selectTool(app) {
       app.showHud('Threshold ' + Math.round(w.tol * 100) + '%  ·  slide left / right', 900);
       if (!w.pending) { w.pending = true; requestAnimationFrame(() => { w.pending = false; if (this.wand === w) this.computeWand(); }); }
     },
-    computeWand() {
+    async computeWandFinal(w) {
+      const region = await wandRegionAsync(w.ref.data, w.ref.width, w.ref.height, w.seed.x, w.seed.y, w.tol);
+      w.mask = regionToCanvas(region, w.ref.width, w.ref.height, null, null); w.lastTol = w.tol;
+    },
+    async computeWand() {
       const w = this.wand;
-      w.mask = wandMask(w.ref, w.seed.x, w.seed.y, w.tol);
+      const my = (w.ticket = (w.ticket || 0) + 1), tol = w.tol;
+      w.busy = true;
+      const region = await wandRegionAsync(w.ref.data, w.ref.width, w.ref.height, w.seed.x, w.seed.y, tol);
+      w.busy = false;
+      if (this.wand !== w && !w.finishing) return;
+      if (my !== w.ticket) return;
+      w.mask = regionToCanvas(region, w.ref.width, w.ref.height, null, null); w.lastTol = tol;
       const tint = makeCanvas(w.mask.width, w.mask.height), x = tint.getContext('2d');
       x.drawImage(w.mask, 0, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = 'rgba(61,139,255,0.45)'; x.fillRect(0, 0, tint.width, tint.height);
       w.tint = tint;
       app.requestRender('view');
     },
-    finishWand() {
+    async finishWand() {
       const w = this.wand; this.wand = null;
-      if (!w || !w.mask) return;
+      if (!w) return;
+      w.finishing = true;
+      while (w.busy) await new Promise((r) => setTimeout(r, 16));
+      if (Math.abs((w.lastTol ?? w.tol) - w.tol) > 1e-6 || !w.mask) await this.computeWandFinal(w);
+      if (!w.mask) return;
       this.wandTol = w.tol;
       selCmd('Automatic select', () => app.selection.applyMask(w.mask, this.op));
     },
@@ -1201,7 +1226,8 @@ async function moveToFolder(app, m, folderId) {
 
 export async function renderGallery(app) {
   const grid = $('#gal-grid'), crumb = $('#gal-crumb');
-  for (const u of thumbURLs) URL.revokeObjectURL(u);
+  // free the previous render's thumbnails once the new ones have had time to load
+  const old = thumbURLs; setTimeout(() => old.forEach((u) => URL.revokeObjectURL(u)), 3000);
   thumbURLs = [];
   let metas = [];
   try { metas = await store.listDocs(); } catch (e) { console.warn(e); }

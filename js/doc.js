@@ -1,12 +1,13 @@
 // Document model: raster layers, vector layers (comic frames, balloons), animation tracks.
 import { makeCanvas, uid, canvasToBlob, blobToCanvas, dataURLToBlob, blobToDataURL } from './util.js';
+import { encodePNG } from './pool.js';
 
 // PNG-encode a layer only if it changed since the last save (canvas._ver is bumped by history).
 async function blobFor(c) {
   const v = c._ver || 0;
   if (c._blob && c._blobVer === v) return c._blob;
-  const b = await canvasToBlob(c);
-  c._blob = b; c._blobVer = v;
+  const b = await encodePNG(c);
+  if ((c._ver || 0) === v) { c._blob = b; c._blobVer = v; }
   return b;
 }
 function seedBlob(c, blob) { if (blob instanceof Blob) { c._blob = blob; c._blobVer = c._ver || 0; } }
@@ -241,7 +242,8 @@ export class Doc {
       if (!it.visible || (o.filter && !o.filter(it))) continue;
       if (it.type === 'frames' || it.type === 'balloons') {
         ctx.save(); ctx.globalAlpha = gAlpha;
-        if (it.type === 'frames') this.drawFrames(ctx, it); else drawBalloons(ctx, it.balloons, o.selectedBalloon);
+        if (it.type === 'frames') this.drawFrames(ctx, it);
+        else { ctx.globalAlpha *= it.opacity; drawBalloons(ctx, it.balloons, o.selectedBalloon); }
         ctx.restore(); continue;
       }
       const src = this.source(it, frame, preview, overlay);
@@ -355,7 +357,7 @@ export class Doc {
     };
     for (const l of this.layers) {
       const o = {}; for (const k of LAYER_PROPS) o[k] = l[k];
-      if (l.type === 'raster' || l.type === '3d') o.png = await blobFor(l.canvas);
+      if (l.type === 'raster' || l.type === '3d') o.png = blobFor(l.canvas); // encoded in parallel below
       if (l.type === '3d') { o.scene3d = l.scene3d; o.models = [...l.models.values()]; }
       if (l.type === 'frames') Object.assign(o, { panels: l.panels, border: l.border, borderColor: l.borderColor });
       if (l.type === 'balloons') o.balloons = l.balloons;
@@ -363,9 +365,11 @@ export class Doc {
     }
     for (const t of this.tracks) {
       const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, keys: t.keys, cels: [] };
-      for (const c of t.cels) o.cels.push({ start: c.start, dur: c.dur, png: await blobFor(c.canvas) });
+      for (const c of t.cels) o.cels.push({ start: c.start, dur: c.dur, png: blobFor(c.canvas) });
       out.tracks.push(o);
     }
+    // all layer PNGs encode at once across the worker cores
+    await Promise.all([...out.layers, ...out.tracks.flatMap((t) => t.cels)].filter((x) => x.png).map(async (x) => { x.png = await x.png; }));
     return out;
   }
 
@@ -425,12 +429,25 @@ export class Doc {
 async function asBlob(x) { return x instanceof Blob ? x : dataURLToBlob(x); }
 
 // ───────── speech balloons ─────────
+// Fonts that ship with iPadOS (with fallbacks elsewhere). 'custom:<family>' = an imported font.
 export const BALLOON_FONTS = {
   comic: '"Comic Neue", "Chalkboard SE", "Comic Sans MS", "Marker Felt", sans-serif',
-  sans: '-apple-system, "Helvetica Neue", Arial, sans-serif',
+  sans: '-apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif',
+  rounded: 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", sans-serif',
   serif: 'Georgia, "Times New Roman", serif',
   bold: '"Arial Black", "Helvetica Neue", Impact, sans-serif',
+  marker: '"Marker Felt", "Chalkboard SE", fantasy',
+  hand: 'Noteworthy, "Bradley Hand", "Segoe Print", cursive',
+  typewriter: '"American Typewriter", "Courier New", monospace',
+  futura: 'Futura, "Avenir Next", "Century Gothic", sans-serif',
+  avenir: '"Avenir Next", Avenir, "Segoe UI", sans-serif',
+  script: '"Snell Roundhand", "Savoye LET", "Brush Script MT", cursive',
+  mono: 'ui-monospace, Menlo, Consolas, monospace',
+  gothicJP: '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif',
+  minchoJP: '"Hiragino Mincho ProN", "Noto Serif JP", serif',
 };
+export const FONT_LABELS = [['comic', 'Comic'], ['sans', 'System'], ['rounded', 'Rounded'], ['serif', 'Serif'], ['bold', 'Heavy'], ['marker', 'Marker'], ['hand', 'Handwriting'], ['typewriter', 'Typewriter'], ['futura', 'Futura'], ['avenir', 'Avenir'], ['script', 'Script'], ['mono', 'Mono'], ['gothicJP', 'Manga Gothic (JP)'], ['minchoJP', 'Manga Mincho (JP)']];
+export const fontFamily = (key) => (key && key.startsWith('custom:') ? `"${key.slice(7)}", sans-serif` : BALLOON_FONTS[key] || BALLOON_FONTS.comic);
 
 function bodyPath(ctx, b) {
   const cx = b.x + b.w / 2, cy = b.y + b.h / 2, rx = b.w / 2, ry = b.h / 2;
@@ -508,17 +525,55 @@ export function drawBalloons(ctx, balloons, selectedId) {
       ctx.beginPath(); bodyPath(ctx, b); ctx.fill();
       ctx.beginPath(); tailPath(ctx, b); ctx.fill();
     }
-    const size = b.fontSize || 28;
-    ctx.font = `${b.font === 'bold' ? '900' : '600'} ${size}px ${BALLOON_FONTS[b.font] || BALLOON_FONTS.comic}`;
-    ctx.fillStyle = b.textColor || '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const pad = b.shape === 'none' ? 1 : b.shape === 'rect' ? 0.86 : 0.72;
-    const lines = wrapText(ctx, b.text || '', b.w * pad);
-    const lh = size * 1.18, top = b.y + b.h / 2 - ((lines.length - 1) * lh) / 2;
-    if (b.shape === 'none' && b.outline !== false) {
-      ctx.lineWidth = Math.max(3, size * 0.16); ctx.strokeStyle = b.fill || '#fff'; ctx.lineJoin = 'round';
-      lines.forEach((ln, i) => ctx.strokeText(ln, b.x + b.w / 2, top + i * lh));
-    }
-    lines.forEach((ln, i) => ctx.fillText(ln, b.x + b.w / 2, top + i * lh));
+    drawBalloonText(ctx, b);
     ctx.restore();
   }
+}
+
+// Text inside a balloon / text box: font, weight, italic, alignment, vertical (manga) layout,
+// and an optional outline around the letters.
+function drawBalloonText(ctx, b) {
+  const size = b.fontSize || 28;
+  const weight = b.bold || b.font === 'bold' ? '800' : (b.weight || '600');
+  ctx.font = `${b.italic ? 'italic ' : ''}${weight} ${size}px ${fontFamily(b.font)}`;
+  ctx.fillStyle = b.textColor || '#000';
+  ctx.textBaseline = 'middle';
+  const none = b.shape === 'none';
+  const outlineW = b.textOutline ?? (none && b.outline !== false ? Math.max(3, size * 0.16) : 0);
+  const outlineCol = b.textOutlineColor || b.fill || '#fff';
+  const draw = (str, x, y) => {
+    if (outlineW > 0) { ctx.lineWidth = outlineW; ctx.strokeStyle = outlineCol; ctx.lineJoin = 'round'; ctx.strokeText(str, x, y); }
+    ctx.fillText(str, x, y);
+  };
+  const pad = none ? 1 : b.shape === 'rect' ? 0.86 : 0.72;
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  if (b.vertical) {
+    // columns read right-to-left, characters stacked top-to-bottom
+    const step = size * 1.06, perCol = Math.max(1, Math.floor((b.h * pad) / step));
+    const cols = [];
+    for (const para of String(b.text || '').split('\n')) {
+      const chars = [...para];
+      if (!chars.length) { cols.push([]); continue; }
+      for (let i = 0; i < chars.length; i += perCol) cols.push(chars.slice(i, i + perCol));
+    }
+    const colW = size * 1.25, total = cols.length * colW;
+    ctx.textAlign = 'center';
+    cols.forEach((col, ci) => {
+      const x = cx + total / 2 - colW / 2 - ci * colW;
+      const top = cy - ((col.length - 1) * step) / 2;
+      col.forEach((ch, k) => {
+        const y = top + k * step;
+        if (/[ー〜～—\-–()（）「」『』\[\]…]/.test(ch)) { ctx.save(); ctx.translate(x, y); ctx.rotate(Math.PI / 2); draw(ch, 0, 0); ctx.restore(); }
+        else draw(ch, x, y);
+      });
+    });
+    return;
+  }
+  const lines = wrapText(ctx, b.text || '', b.w * pad);
+  const lh = size * (b.lineHeight || 1.18), top = cy - ((lines.length - 1) * lh) / 2;
+  const align = b.align || 'center';
+  const inner = b.w * pad;
+  const x = align === 'left' ? cx - inner / 2 : align === 'right' ? cx + inner / 2 : cx;
+  ctx.textAlign = align;
+  lines.forEach((ln, i) => draw(ln, x, top + i * lh));
 }

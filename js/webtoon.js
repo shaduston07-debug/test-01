@@ -1,7 +1,8 @@
 // Webtoon / comic features: panel (frame) tool, balloon & text tool, auto layout,
 // canvas extension, phone scroll preview, smart slicing export.
 import { h, toast, dialog, clamp, makeCanvas, canvasToBlob, download, field, seg, switchRow, uid } from './util.js';
-import { Layer } from './doc.js';
+import { Layer, FONT_LABELS } from './doc.js';
+import * as store from './storage.js';
 import * as UI from './ui.js';
 
 function vecCmd(app, label, obj, key, before) {
@@ -260,12 +261,12 @@ export function exportSlicesDialog(app) {
 }
 
 // ───────── balloon / text tool ─────────
-const SHAPES = [['ellipse', 'Speech'], ['cloud', 'Thought'], ['burst', 'Shout'], ['rect', 'Box'], ['none', 'Text / SFX']];
+const SHAPES = [['none', 'Text'], ['ellipse', 'Speech'], ['cloud', 'Thought'], ['burst', 'Shout'], ['rect', 'Box']];
 
 export function balloonTool(app) {
   const t = {
     sel: null, defaults: { shape: 'ellipse', font: 'comic', fontSize: 30 },
-    layer() { return ensureLayer(app, 'balloons', 'Balloons & Text'); },
+    layer() { return ensureLayer(app, 'balloons', app.doc.mode === 'webtoon' ? 'Balloons & Text' : 'Text & Bubbles'); },
     list() { const l = app.doc.layers.find((x) => x.type === 'balloons'); return l ? l.balloons : []; },
     selB() { return this.list().find((b) => b.id === this.sel); },
     enter() { this.sel = null; },
@@ -303,11 +304,13 @@ export function balloonTool(app) {
       if (g.type === 'new') {
         const c = this.cur; this.cur = null;
         if (this.sel) { this.sel = null; app.updateCtxBar(); app.requestRender(); if (!c || c.w * app.view.zoom < 20) return; }
-        const bw = c && c.w * app.view.zoom > 20 ? c.w : 320, bh = c && c.h * app.view.zoom > 20 ? c.h : 190;
-        const bx = c && c.w * app.view.zoom > 20 ? c.x : p.x - bw / 2, by = c && c.h * app.view.zoom > 20 ? c.y : p.y - bh / 2;
+        // default sizes scale with the canvas (tuned for an ~800–1000 px wide page)
+        const k = Math.max(1, Math.min(app.doc.width, app.doc.height) / 1000);
         const shape = this.defaults.shape;
-        const b = { id: uid(), x: bx, y: by, w: bw, h: bh, shape, text: '', font: this.defaults.font, fontSize: this.defaults.fontSize, fill: '#ffffff', stroke: '#000000', textColor: '#000000', lineWidth: 4,
-          tail: shape === 'none' || shape === 'rect' ? null : { x: bx + bw * 0.3, y: by + bh + Math.min(120, bh * 0.6) } };
+        const bw = c && c.w * app.view.zoom > 20 ? c.w : 320 * k, bh = c && c.h * app.view.zoom > 20 ? c.h : (shape === 'none' ? 120 : 190) * k;
+        const bx = c && c.w * app.view.zoom > 20 ? c.x : p.x - bw / 2, by = c && c.h * app.view.zoom > 20 ? c.y : p.y - bh / 2;
+        const b = { id: uid(), x: bx, y: by, w: bw, h: bh, shape, text: '', font: this.defaults.font, fontSize: Math.round((shape === 'none' ? Math.max(36, this.defaults.fontSize) : this.defaults.fontSize) * k), fill: '#ffffff', stroke: '#000000', textColor: shape === 'none' ? app.color : '#000000',
+          tail: shape === 'none' || shape === 'rect' ? null : { x: bx + bw * 0.3, y: by + bh + Math.min(120 * k, bh * 0.6) }, lineWidth: 4 * Math.min(k, 2.5) };
         this.L.balloons.push(b);
         this.sel = b.id;
         app.changed(); app.updateCtxBar();
@@ -352,7 +355,7 @@ export function balloonTool(app) {
       const shape = s ? s.shape : this.defaults.shape, font = s ? s.font : this.defaults.font;
       const items = [
         ...SHAPES.map(([v, l]) => cb(l, () => this.patch({ shape: v }), shape === v)), sep(),
-        ...[['comic', 'Comic'], ['sans', 'Sans'], ['serif', 'Serif'], ['bold', 'Bold']].map(([v, l]) => cb(l, () => this.patch({ font: v }), font === v)),
+        (() => { const sl = fontSelect(font, (k) => this.patch({ font: k })); sl.classList.add('cb-select'); return sl; })(),
       ];
       if (s) items.push(sep(),
         cb('Edit text', () => editBalloon(app, this, s)),
@@ -366,24 +369,70 @@ export function balloonTool(app) {
   return t;
 }
 
+// ───────── fonts ─────────
+// Imported fonts (TTF / OTF / WOFF) are kept in IndexedDB and registered with FontFace.
+export async function loadSavedFonts() {
+  try { for (const f of await store.listFonts()) await registerFont(f.id, f.blob); } catch (e) { console.warn('fonts', e); }
+}
+async function registerFont(family, blob) {
+  const face = new FontFace(family, await blob.arrayBuffer());
+  await face.load(); document.fonts.add(face);
+}
+export async function importFont() {
+  const { pickFile } = await import('./util.js');
+  const [f] = await pickFile('.ttf,.otf,.woff,.woff2');
+  if (!f) return null;
+  const family = f.name.replace(/\.[^.]+$/, '').replace(/[^\w\- ]+/g, ' ').trim() || 'Custom font';
+  try { await registerFont(family, f); } catch (e) { toast('Could not read that font: ' + e.message); return null; }
+  await store.saveFont({ id: family, blob: f });
+  toast(`Font "${family}" added`);
+  return 'custom:' + family;
+}
+export function fontOptions() {
+  const custom = [...document.fonts].map((ff) => ff.family.replace(/"/g, '')).filter((n, i, a) => a.indexOf(n) === i && !FONT_LABELS.some(([k]) => k === n));
+  return [...FONT_LABELS, ...custom.map((n) => ['custom:' + n, n + ' (imported)'])];
+}
+function fontSelect(value, onChange) {
+  const sel = h('select', {}, ...fontOptions().map(([k, l]) => h('option', { value: k, selected: k === value }, l)), h('option', { value: '__import' }, '＋ Import font…'));
+  sel.onchange = async () => {
+    if (sel.value === '__import') {
+      const k = await importFont();
+      if (k) { sel.prepend(h('option', { value: k }, k.slice(7) + ' (imported)')); sel.value = k; onChange(k); }
+      else sel.value = value;
+      return;
+    }
+    value = sel.value; onChange(sel.value);
+  };
+  return sel;
+}
+
 function editBalloon(app, tool, b, beforeOverride) {
   const L = tool.layer();
   const before = beforeOverride || JSON.stringify(L.balloons);
-  const ta = h('textarea', { class: 'text-in', placeholder: 'Dialogue…' }, b.text || '');
-  const fill = h('input', { type: 'color', value: b.fill || '#ffffff' });
-  const stroke = h('input', { type: 'color', value: b.stroke || '#000000' });
-  const tcol = h('input', { type: 'color', value: b.textColor || '#000000' });
-  const upd = () => { b.text = ta.value; b.fill = fill.value; b.stroke = stroke.value; b.textColor = tcol.value; app.requestRender(); };
-  for (const el of [ta, fill, stroke, tcol]) el.addEventListener('input', upd);
+  const r = () => app.requestRender('active');
+  const ta = h('textarea', { class: 'text-in', placeholder: b.shape === 'none' ? 'Text…' : 'Dialogue…' }, b.text || '');
+  const color = (key, def) => { const i = h('input', { type: 'color', value: b[key] || def }); i.oninput = () => { b[key] = i.value; r(); }; return i; };
+  ta.addEventListener('input', () => { b.text = ta.value; r(); });
+  const sw = (label, key) => switchRow(label, !!b[key], (v) => { b[key] = v; r(); });
+  const isText = b.shape === 'none';
   const body = h('div', {}, ta,
-    field('Font size', { min: 8, max: 160, step: 1, value: b.fontSize || 30, fmt: (v) => v + ' px', onInput: (v) => { b.fontSize = v; app.requestRender(); } }),
-    field('Outline width', { min: 0, max: 16, step: 0.5, value: b.lineWidth ?? 4, fmt: (v) => v + ' px', onInput: (v) => { b.lineWidth = v; app.requestRender(); } }),
-    h('div', { class: 'toggle-row' }, h('span', {}, 'Fill · Outline · Text'), h('span', { style: { display: 'flex', gap: '8px' } }, fill, stroke, tcol)),
-    h('p', { class: 'hint' }, 'Tip: use "Text / SFX" shape for narration or sound effects — it gets an outline in the fill color.'));
-  dialog({ title: 'Balloon text', body, actions: [{ label: 'Done', primary: true }], onClose: () => {
-    upd();
+    h('div', { class: 'row2' },
+      h('div', {}, h('label', {}, 'Font'), fontSelect(b.font || 'comic', (k) => { b.font = k; tool.defaults.font = k; r(); })),
+      h('div', {}, h('label', {}, 'Alignment'), seg([['left', 'Left'], ['center', 'Center'], ['right', 'Right']], b.align || 'center', (v) => { b.align = v; r(); }))),
+    field('Size', { min: 8, max: 300, step: 1, value: b.fontSize || 30, fmt: (v) => v + ' px', onInput: (v) => { b.fontSize = v; r(); } }),
+    field('Line spacing', { min: 0.8, max: 2.4, step: 0.02, value: b.lineHeight || 1.18, fmt: (v) => v.toFixed(2), onInput: (v) => { b.lineHeight = v; r(); } }),
+    h('div', { class: 'row2' }, sw('Bold', 'bold'), sw('Italic', 'italic')),
+    sw('Vertical text (manga)', 'vertical'),
+    field('Letter outline', { min: 0, max: 30, step: 0.5, value: b.textOutline ?? (isText ? Math.max(3, (b.fontSize || 30) * 0.16) : 0), fmt: (v) => v + ' px', onInput: (v) => { b.textOutline = v; r(); } }),
+    h('div', { class: 'toggle-row' }, h('span', {}, 'Text · letter outline'), h('span', { style: { display: 'flex', gap: '8px' } }, color('textColor', '#000000'), color('textOutlineColor', b.fill || '#ffffff'))),
+    !isText && field('Bubble line width', { min: 0, max: 16, step: 0.5, value: b.lineWidth ?? 4, fmt: (v) => v + ' px', onInput: (v) => { b.lineWidth = v; r(); } }),
+    !isText && h('div', { class: 'toggle-row' }, h('span', {}, 'Bubble fill · line'), h('span', { style: { display: 'flex', gap: '8px' } }, color('fill', '#ffffff'), color('stroke', '#000000'))),
+    h('p', { class: 'hint' }, 'Drag the text box to move it, the corner dot to resize, the yellow dot to aim the tail. Double-tap to edit again.'));
+  dialog({ title: isText ? 'Text' : 'Speech bubble', wide: true, body, actions: [{ label: 'Done', primary: true }], onClose: () => {
+    b.text = ta.value;
     if (!b.text.trim() && b.shape !== 'none') b.text = '…';
-    vecCmd(app, 'Balloon text', L, 'balloons', before);
+    if (!b.text.trim() && b.shape === 'none') { L.balloons = L.balloons.filter((x) => x !== b); tool.sel = null; }
+    vecCmd(app, isText ? 'Text' : 'Balloon text', L, 'balloons', before);
     app.changed(); app.updateCtxBar();
   } });
   setTimeout(() => ta.focus(), 60);

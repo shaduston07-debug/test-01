@@ -6,7 +6,8 @@ import { History, snapshot, pixelCmd, withUndo } from './history.js';
 import { StrokeEngine, detectShape, shapePoints } from './engine.js';
 import { DEFAULT_BRUSHES, preloadBrush } from './brushes.js';
 import { IBIS_PRESETS } from './ibis.js';
-import { Selection, FloatingTransform, computeFill, tracePath } from './tools.js';
+import { Selection, FloatingTransform, regionToCanvas, tracePath } from './tools.js';
+import { fillRegionAsync } from './pool.js';
 import * as store from './storage.js';
 import * as UI from './ui.js';
 import { Timeline } from './anim.js';
@@ -57,6 +58,14 @@ class App {
     this.tools = this.makeTools();
     this.timeline = new Timeline(this);
     this.add3DLayer = () => Three3D.add3DLayer(this);
+    this.addText = (shape) => {
+      if (this.doc.mode === 'animate') { toast('Text and bubbles are available in Illustrate and Webtoon canvases'); return; }
+      this.setTool('balloon');
+      this.tools.balloon.defaults.shape = shape;
+      this.tools.balloon.sel = null;
+      this.updateCtxBar();
+      toast(shape === 'none' ? 'Tap the canvas to place text (drag to size the box)' : 'Tap or drag on the canvas to add a speech bubble');
+    };
     this.dirtySave = false;
   }
 
@@ -76,6 +85,7 @@ class App {
       }
     } catch (e) { console.warn('brush store', e); }
     await Promise.all(this.brushes.map(preloadBrush));
+    Toon.loadSavedFonts();
     store.requestPersistence();
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveNow(); });
     window.addEventListener('pagehide', () => this.saveNow());
@@ -144,7 +154,8 @@ class App {
     $('#doc-title').textContent = doc.name;
     this.resize();
     this.fitView();
-    if (['panel', 'balloon'].includes(this.tool) && doc.mode !== 'webtoon') this.tool = 'brush';
+    if (this.tool === 'panel' && doc.mode !== 'webtoon') this.tool = 'brush';
+    if (['balloon', '3d'].includes(this.tool) && doc.mode === 'animate') this.tool = 'brush';
     if (this.tool === 'move' && doc.mode !== 'animate') this.tool = 'brush';
     this.setTool(this.tool);
     this.timeline.mount(doc.mode === 'animate');
@@ -578,7 +589,8 @@ class App {
   }
   toolAvailable(t) {
     if (t === '3d') return this.doc.mode !== 'animate';
-    if (['panel', 'balloon'].includes(t)) return this.doc.mode === 'webtoon';
+    if (t === 'panel') return this.doc.mode === 'webtoon';
+    if (t === 'balloon') return this.doc.mode !== 'animate';
     if (t === 'move') return this.doc.mode === 'animate';
     return true;
   }
@@ -751,7 +763,7 @@ class App {
   selectionChanged() { this.requestRender('view'); }
 
   // ───────── fill ─────────
-  fillAt(x, y, color = this.color) {
+  async fillAt(x, y, color = this.color) {
     const d = this.doc;
     const target = d.getTarget(true);
     if (!target) { toast('Pick a raster layer to fill'); return; }
@@ -765,8 +777,13 @@ class App {
       if (!hasRef) toast('No reference layer set — using all layers. Mark one in the Layers panel.');
       ref = d.flatten({ bg: false, filter: hasRef ? (it) => it.reference : null });
     } else ref = d.flatten({ bg: false });
-    const fill = computeFill(ref, x, y, color, { tolerance: s.fillTolerance, gap: s.fillGap, expand: s.fillExpand, selection: this.selection.active ? this.selection.mask : null });
-    if (!fill) return;
+    // the flood fill itself runs on a worker core; the UI stays responsive on big canvases
+    const w = ref.width, hh = ref.height;
+    const src = ref.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, hh).data;
+    const sel = this.selection.active ? this.selection.mask : null;
+    const region = await fillRegionAsync(src, w, hh, x, y, { tolerance: s.fillTolerance, gap: s.fillGap, expand: s.fillExpand });
+    if (!region || this.doc !== d) return;
+    const fill = regionToCanvas(region, w, hh, color, sel);
     withUndo(this.history, target.canvas, 'Fill', (c) => {
       c.save();
       if (target.matrix) { const inv = target.matrix.inverse(); c.setTransform(inv.a, inv.b, inv.c, inv.d, inv.e, inv.f); }

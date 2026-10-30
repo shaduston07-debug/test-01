@@ -45,16 +45,16 @@ function scanFill(open, w, h, sx, sy) {
 }
 
 // refCanvas: what boundaries are read from (doc space). Returns a doc-sized canvas with the fill.
-export function computeFill(refCanvas, x, y, color, { tolerance = 0.1, gap = 0, expand = 1, selection = null } = {}) {
-  const w = refCanvas.width, h = refCanvas.height;
+// Pure flood-fill core (runs on the main thread or in a worker): returns the filled region
+// as a 0/1 mask, or null when nothing would be filled.
+export function fillRegion(src, w, h, x, y, { tolerance = 0.1, gap = 0, expand = 1 } = {}) {
   x = Math.floor(x); y = Math.floor(y);
   if (x < 0 || y < 0 || x >= w || y >= h) return null;
-  const src = refCanvas.getContext('2d').getImageData(0, 0, w, h).data;
   const k = (y * w + x) * 4;
   const sr = src[k], sg = src[k + 1], sb = src[k + 2], sa = src[k + 3];
   const tol = tolerance * 255;
   const n = w * h;
-  let open = new Uint8Array(n);
+  const open = new Uint8Array(n);
   for (let i = 0, j = 0; i < n; i++, j += 4) {
     const a = src[j + 3];
     // compare premultiplied-ish so transparent pixels match regardless of rgb
@@ -76,15 +76,26 @@ export function computeFill(refCanvas, x, y, color, { tolerance = 0.1, gap = 0, 
     }
   } else region = scanFill(open, w, h, x, y);
   if (expand > 0) region = dilate(region, w, h, expand);
-  const [r, g, b] = hexToRgb(color);
+  for (let i = 0; i < n; i++) if (region[i]) return region;
+  return null;
+}
+
+// Region mask → canvas (coloured fill, or alpha-only when color is null), optionally clipped.
+export function regionToCanvas(region, w, h, color, selection) {
   const out = makeCanvas(w, h), ox = out.getContext('2d');
   const id = ox.createImageData(w, h), d = id.data;
-  let any = false;
-  for (let i = 0, j = 0; i < n; i++, j += 4) if (region[i]) { d[j] = r; d[j + 1] = g; d[j + 2] = b; d[j + 3] = 255; any = true; }
-  if (!any) return null;
+  const [r, g, b] = color ? hexToRgb(color) : [0, 0, 0];
+  for (let i = 0, j = 0; i < region.length; i++, j += 4) if (region[i]) { d[j] = r; d[j + 1] = g; d[j + 2] = b; d[j + 3] = 255; }
   ox.putImageData(id, 0, 0);
   if (selection) { ox.globalCompositeOperation = 'destination-in'; ox.drawImage(selection, 0, 0); }
   return out;
+}
+
+export function computeFill(refCanvas, x, y, color, opts = {}) {
+  const w = refCanvas.width, h = refCanvas.height;
+  const src = refCanvas.getContext('2d').getImageData(0, 0, w, h).data;
+  const region = fillRegion(src, w, h, x, y, opts);
+  return region ? regionToCanvas(region, w, h, color, opts.selection) : null;
 }
 
 // ───────── selection ─────────
@@ -175,24 +186,23 @@ export class Selection {
 }
 
 // Magic-wand region (Automatic selection). ref: ImageData of what is sampled.
-export function wandMask(ref, x, y, tolerance) {
-  const w = ref.width, h = ref.height, src = ref.data;
+// Magic-wand (Automatic selection) core: 0/1 region of similar colour connected to (x, y).
+export function wandRegion(src, w, h, x, y, tolerance) {
   x = Math.floor(x); y = Math.floor(y);
-  const out = makeCanvas(w, h);
-  if (x < 0 || y < 0 || x >= w || y >= h) return out;
+  const n = w * h;
+  if (x < 0 || y < 0 || x >= w || y >= h) return new Uint8Array(n);
   const k = (y * w + x) * 4, sr = src[k], sg = src[k + 1], sb = src[k + 2], sa = src[k + 3];
-  const tol = tolerance * 255, n = w * h;
+  const tol = tolerance * 255;
   const open = new Uint8Array(n);
   for (let i = 0, j = 0; i < n; i++, j += 4) {
     const a = src[j + 3];
     const dd = Math.max(Math.abs(a - sa), Math.abs(src[j] * a - sr * sa) / 255, Math.abs(src[j + 1] * a - sg * sa) / 255, Math.abs(src[j + 2] * a - sb * sa) / 255);
     open[i] = dd <= tol ? 1 : 0;
   }
-  const region = scanFill(open, w, h, x, y);
-  const ox = out.getContext('2d'), id = ox.createImageData(w, h), d = id.data;
-  for (let i = 0; i < n; i++) if (region[i]) d[i * 4 + 3] = 255;
-  ox.putImageData(id, 0, 0);
-  return out;
+  return scanFill(open, w, h, x, y);
+}
+export function wandMask(ref, x, y, tolerance) {
+  return regionToCanvas(wandRegion(ref.data, ref.width, ref.height, x, y, tolerance), ref.width, ref.height, null, null);
 }
 
 export function tracePath(x, s) {

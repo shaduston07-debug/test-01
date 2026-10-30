@@ -376,7 +376,13 @@ export class Timeline {
       const a = this.doc.anim, frames = [];
       for (let f = 0; f < a.length; f++) frames.push(this.renderFrame(f, w, hgt, this.doc.bgVisible).getContext('2d').getImageData(0, 0, w, hgt));
       if (a.loop === 'pingpong') for (let f = a.length - 2; f > 0; f--) frames.push(frames[f]);
-      const bytes = encodeGif(frames, Math.max(2, Math.round(100 / a.fps)), a.loop !== 'once');
+      const delay = Math.max(2, Math.round(100 / a.fps)), loop = a.loop !== 'once';
+      let bytes;
+      try {
+        const { run } = await import('./pool.js');
+        const bufs = frames.map((f) => f.data.slice().buffer);
+        bytes = new Uint8Array(await run('gif', { frames: bufs, w, h: hgt, delay, loop }, bufs));
+      } catch { bytes = encodeGif(frames, delay, loop); }
       download(new Blob([bytes], { type: 'image/gif' }), (this.doc.name || 'animation') + '.gif');
       toast(`GIF exported (${(bytes.length / 1e6).toFixed(1)} MB)`);
     });

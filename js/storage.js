@@ -1,5 +1,5 @@
 // IndexedDB persistence: documents (with thumbnails) and user brushes.
-const DB_NAME = 'inkwell', VERSION = 1;
+const DB_NAME = 'inkwell', VERSION = 2;
 let dbp = null;
 
 function open() {
@@ -10,6 +10,7 @@ function open() {
       if (!db.objectStoreNames.contains('docs')) db.createObjectStore('docs', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('brushes')) db.createObjectStore('brushes', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('fonts')) db.createObjectStore('fonts', { keyPath: 'id' });
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -50,6 +51,8 @@ export async function deleteDoc(id) {
     t.oncomplete = res; t.onerror = () => rej(t.error);
   });
 }
+export const listFonts = () => tx('fonts', 'readonly', (s) => req(s.getAll()));
+export const saveFont = (f) => tx('fonts', 'readwrite', (s) => req(s.put(f)));
 export const listBrushes = () => tx('brushes', 'readonly', (s) => req(s.getAll()));
 export const saveBrush = (b) => tx('brushes', 'readwrite', (s) => req(s.put(b)));
 export const deleteBrush = (id) => tx('brushes', 'readwrite', (s) => req(s.delete(id)));

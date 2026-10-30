@@ -98,6 +98,10 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **Floating windows**: pin the Color, Layers or Brush panels to keep them open while painting; drag them by the title bar
 
+**Text & speech bubbles** (Illustrate and Webtoon): Actions › Add › *Add text* / *Add speech bubble*, or the bubble tool. Speech, thought, shout, box and plain text; 14 built-in fonts including Japanese manga gothic/mincho, plus **import your own fonts** (TTF / OTF / WOFF); alignment, line spacing, bold / italic, **vertical (manga) text**, letter outlines; Rasterize to paint over it.
+
+**Multi-core**: a worker pool sized to the CPU (up to 8 workers on an M4) runs adjustments in parallel bands, flood fill and Automatic selection off the main thread, autosave PNG encoding with OffscreenCanvas (all layers at once) and GIF encoding.
+
 **Performance**: layers below and above the one being painted are cached, so a frame is about 3 image draws. Undo uses GPU canvas copies (no pixel readbacks), the paper shadow has no per-frame blur, webtoon panel masks use clip paths, and autosave only re-encodes changed layers
 
 **Tablet ergonomics**

@@ -131,6 +131,7 @@ export function onDocChanged() {
   layersOpen.t = setTimeout(() => layersOpen && !layersOpen.dragging && layersOpen.render(), 250);
 }
 
+const thumbCache = new WeakMap();
 function thumbOf(app, it) {
   const box = h('div', { class: 'layer-thumb' });
   const d = app.doc;
@@ -138,9 +139,17 @@ function thumbOf(app, it) {
   if (it.type === 'raster' || it.type === '3d') src = it.canvas;
   else if (it.type === 'track') { const c = it.celAt(d.playhead); src = c && c.canvas; }
   if (src) {
+    // thumbnails are cached per canvas version, so reopening the panel with 100 layers is free
     const s = Math.min(54 / d.width, 40 / d.height);
-    const c = makeCanvas(Math.max(1, d.width * s * 2), Math.max(1, d.height * s * 2));
-    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    let t = thumbCache.get(src);
+    if (!t || t.ver !== (src._ver || 0) || t.w !== d.width) {
+      const c = makeCanvas(Math.max(1, d.width * s * 2), Math.max(1, d.height * s * 2));
+      c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+      t = { ver: src._ver || 0, w: d.width, c };
+      thumbCache.set(src, t);
+    }
+    const c = makeCanvas(t.c.width, t.c.height);
+    c.getContext('2d').drawImage(t.c, 0, 0);
     c.style.width = c.width / 2 + 'px';
     box.append(c);
   } else {
@@ -366,6 +375,20 @@ function sheetBody(app, it, i, rerender, close) {
     box.append(field('Border width', { min: 0, max: 30, step: 1, value: it.border, fmt: (v) => v + ' px', onInput: (v) => { it.border = v; app.changed(); } }));
     const ci = h('input', { type: 'color', value: it.borderColor }); ci.oninput = () => { it.borderColor = ci.value; app.changed(); };
     box.append(h('div', { class: 'sheet-item' }, h('span', { html: ICONS.panel }), 'Border color', ci));
+  }
+  if (it.type === 'balloons' || it.type === 'frames') {
+    box.append(item('layers', 'Rasterize (make it paintable)', () => {
+      if (!app.canAddRaster()) return;
+      const r = new Layer(d.width, d.height, { name: it.name, opacity: it.opacity, groupId: it.groupId });
+      // render at full strength; the new layer carries the opacity / group itself
+      const op = it.opacity, gid = it.groupId;
+      it.opacity = 1; it.groupId = null;
+      d.composite(r.canvas.getContext('2d'), { from: i, to: i + 1, bg: false });
+      it.opacity = op; it.groupId = gid;
+      structCmd(app, 'Rasterize', () => { d.layers.splice(i, 1, r); d.active = i; });
+      if (app.tool === 'balloon' || app.tool === 'panel') app.setTool('brush');
+      rerender();
+    }));
   }
   if (it.type === 'group') {
     box.append(section('Group'));

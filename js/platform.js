@@ -1,9 +1,11 @@
 // Platform glue: native iPad app (Capacitor), Home Screen web app, or plain browser.
-const cap = window.Capacitor;
+// (guarded so this module can also load inside Web Workers, which have no window)
+const W = typeof window !== 'undefined' ? window : null;
+const cap = W && W.Capacitor;
 
 export const isNative = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
 export const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-export const isStandalone = isNative || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches || navigator.standalone === true;
+export const isStandalone = isNative || (W && W.matchMedia && W.matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) || navigator.standalone === true;
 
 // Calls a native Capacitor plugin. Works without bundling @capacitor/core because the
 // iOS shell injects window.Capacitor with the bridge.
