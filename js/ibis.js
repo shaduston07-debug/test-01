@@ -130,7 +130,10 @@ const IPBZ_FIELDS = [
   [120, 'speedSize', (v) => (v < 0 && v >= -1 ? -v : undefined)],
   [268, 'speedOpacity', (v) => (v < 0 && v >= -1 ? clamp(-v * 0.5, 0, 1) : undefined)],
   [296, 'taper', (v) => (v > 0 && v <= 1 ? v : undefined)],
+  [60, 'minSize', (v) => (v > 0 && v < 1 ? v : undefined)],
 ];
+// 16-byte id of ibis Paint's plain (untextured) brush material; anything else is a texture
+const PLAIN_MATERIAL = 'a54f0041a9e15b050f25c463f1db7449';
 async function inflateRaw(bytes) {
   if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot decompress (needs iPadOS 16.4+)');
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
@@ -150,6 +153,18 @@ export async function decodeIPBZ(bin) {
       const v = conv(dv.getFloat32(off));
       if (v !== undefined) { settings[key] = v; used.push(key); }
     }
+    // texture id (offset 236): a non-plain material makes a grainy, pencil-like stroke
+    if (rec.length >= 252 && dv.getUint32(232) === 16) {
+      const id = [...rec.slice(236, 252)].map((x) => x.toString(16).padStart(2, '0')).join('');
+      if (id !== PLAIN_MATERIAL) { Object.assign(settings, { tip: 'pencil', grain: 'paper', grainDepth: 0.7, angleJitter: 1 }); used.push('texture'); }
+    }
+    // flag 0x8000 at offset 56 = "blurring" edges; its amount sits at offset 64
+    if (rec.length >= 68 && dv.getUint32(56) & 0x8000) {
+      const blur = dv.getFloat32(64);
+      settings.hardness = clamp(1 - (blur > 0 && blur <= 1 ? blur : 0.25) * 1.8, 0.3, 1); used.push('blur');
+    }
+    // ibis spaces solid round pens wider than this engine needs; keep them smooth
+    if (settings.spacing > 0.08 && !settings.tip) settings.spacing = 0.06;
   }
   const hex = [...rec].map((x) => x.toString(16).padStart(2, '0')).join('');
   return { settings, used, version: (b[4] << 8) | b[5], length: rec.length, raw: 'IPBZ v' + ((b[4] << 8) | b[5]) + ' · ' + rec.length + ' bytes · ' + hex, fields };
@@ -210,18 +225,26 @@ export const IBIS_PRESETS = [
   P({ id: 'ibis-pluma-falcon', name: 'Pluma falcon suave (difuminado)', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'round', hardness: 0.8,
     size: 13, maxSize: 80, opacity: 1, spacing: 0.05, sizePressure: 0.89, opacityPressure: 0.15, speedSize: 0.62, speedOpacity: 0.3,
     taper: 0.695, taperAlways: true, streamline: 0.35 }),
+  P({ id: 'ibis-ink-pen', name: 'Ink Pen', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'round', hardness: 1,
+    size: 30, maxSize: 120, opacity: 1, spacing: 0.06, sizePressure: 0.95, minSize: 0.1, taper: 0.25, streamline: 0.35 }),
+  P({ id: 'ibis-rough-layout', name: 'Rough Layout Pen (Blurring)', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'pencil', hardness: 0.57,
+    size: 30, maxSize: 160, opacity: 1, spacing: 0.23, sizePressure: 0.5, opacityPressure: 0.35, grain: 'paper', grainDepth: 0.7, angleJitter: 1,
+    sizeJitter: 0.08, taper: 0.2, streamline: 0.2 }),
   P({ id: 'ibis-glow', name: 'Glow Pen', tip: 'round', hardness: 0.35, size: 24, maxSize: 160, sizePressure: 0.5, flow: 0.55, spacing: 0.05, streamline: 0.3 }),
 ];
 
 // ───────── editor (ibis Paint setting names) ─────────
 // `init`: engine settings recognised from a QR (may be empty); `meta`: {raw, used, notes}
 export function ibisEditor(app, init = {}, meta = null, onSaved) {
-  let typeKey = init.ibisType && Object.keys(IBIS_TYPES).find((k) => new RegExp(IBIS_TYPES[k].label.split(' ')[0], 'i').test(init.ibisType)) || 'pen';
+  let typeKey = init.ibisType && Object.keys(IBIS_TYPES).find((k) => new RegExp(IBIS_TYPES[k].label.split(' ')[0], 'i').test(init.ibisType)) || (init.tip === 'pencil' ? 'pencil' : 'pen');
+  // decoded settings with no slider of their own (texture, blurred edge, minimum thickness)
+  const extra = {};
+  for (const k of ['minSize', 'hardness', 'grain', 'grainDepth']) if (init[k] != null) extra[k] = init[k];
   const v = {
     name: init.name || 'ibis brush',
     size: clamp(init.size ?? 12, 1, 1000),
     opacity: clamp(init.opacity ?? 1, 0.01, 1),
-    antialias: init.antialias ?? (init.hardness == null || init.hardness > 0.9),
+    antialias: init.antialias ?? true,
     spacing: clamp(init.spacing ?? 0.05, 0.01, 3),
     taper: clamp(init.taper ?? 0.3, 0, 1),
     sizePressure: clamp(init.sizePressure ?? IBIS_TYPES[typeKey].base.sizePressure ?? 0.8, 0, 1),
@@ -247,7 +270,7 @@ export function ibisEditor(app, init = {}, meta = null, onSaved) {
   } }, 'Brush image…');
   const info = meta ? h('div', { class: 'ibis-info' },
     meta.ipbz
-      ? h('p', {}, `ibis Paint brush code decoded — ${meta.used.length} settings applied (thickness, opacity, interval, pressure, speed, start taper). ibis Paint's brush shapes and textures are built into ibis Paint itself, so the shape uses the closest Inkwell type below. Give it a name and compare with ibis if you like.`)
+      ? h('p', {}, `ibis Paint brush code decoded — ${meta.used.length} settings applied (${meta.used.join(', ')}). ibis Paint's brush shapes and textures are built into ibis Paint itself, so the shape uses the closest Inkwell type below. Give it a name and compare with ibis if you like.`)
       : meta.used.length
       ? h('p', {}, `Read from the QR code: ${meta.used.length} setting${meta.used.length === 1 ? '' : 's'} (${meta.used.slice(0, 6).join(', ')}${meta.used.length > 6 ? '…' : ''}). Check the rest against the brush in ibis Paint.`)
       : h('p', {}, "QR code scanned. ibis Paint's brush code format isn't public, so its settings couldn't be read automatically — copy them from the brush's settings in ibis Paint (same names below). The code is saved with the brush."),
@@ -281,6 +304,7 @@ export function ibisEditor(app, init = {}, meta = null, onSaved) {
       sizePressure: v.sizePressure, opacityPressure: v.opacityPressure, speedSize: v.speedSize, speedOpacity: v.speedOpacity,
       rotation: v.rotation, angleJitter: v.angleJitter, follow: v.follow, sizeJitter: v.sizeJitter, scatter: v.scatter, streamline: v.streamline,
       hardness: v.antialias ? (base.hardness ?? 1) : 1, ibisRaw: meta ? meta.raw : null,
+      ...extra,
     });
     if (v.tipImage) { b.tipImage = v.tipImage; b.tip = 'image'; }
     else if (typeKey === 'stamp') { toast('Pick a brush image for a Stamp brush'); return false; }

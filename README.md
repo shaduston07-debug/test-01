@@ -106,6 +106,8 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **Photos & video**: Insert a photo, Insert a *private* photo (never shown in the time-lapse — any layer can be marked Private), Insert a video frame (scrub to the frame), Import video as animation drawings (Animate).
 
+**ibis Paint brushes included**: Pluma falcon suave (difuminado), Ink Pen and Rough Layout Pen (Blurring), decoded from their QR codes. Scanning reads thickness, opacity, interval, pressure, speed, start taper, minimum thickness, textured material and blurred edges.
+
 **Reference window**: Actions › Canvas › Reference toggles a floating, resizable companion window — *Canvas* shows a live overview of the whole artwork, *Image* shows a reference picture you import. Pinch / scroll to zoom, drag to pan, double-tap to reset, touch and hold to pick a colour.
 
 **Brush cursor**: outline of the brush size while the Apple Pencil hovers and while painting (sized by your pressure); both switch on/off in Actions › Prefs.
