@@ -1,5 +1,5 @@
 // IndexedDB persistence: documents (with thumbnails) and user brushes.
-const DB_NAME = 'inkwell', VERSION = 2;
+const DB_NAME = 'inkwell', VERSION = 3;
 let dbp = null;
 
 function open() {
@@ -11,6 +11,7 @@ function open() {
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('brushes')) db.createObjectStore('brushes', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('fonts')) db.createObjectStore('fonts', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('timelapse')) db.createObjectStore('timelapse', { keyPath: 'id' });
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -51,6 +52,10 @@ export async function deleteDoc(id) {
     t.oncomplete = res; t.onerror = () => rej(t.error);
   });
 }
+// time-lapse frames, stored in chunks: { id: '<docId>:<chunk>', frames: [Blob, …] }
+export const putTimelapse = (rec) => tx('timelapse', 'readwrite', (s) => req(s.put(rec)));
+export const getTimelapse = (id) => tx('timelapse', 'readonly', (s) => req(s.get(id)));
+export const deleteTimelapse = (docId) => tx('timelapse', 'readwrite', (s) => req(s.delete(IDBKeyRange.bound(docId + ':', docId + ':\uffff'))));
 export const listFonts = () => tx('fonts', 'readonly', (s) => req(s.getAll()));
 export const saveFont = (f) => tx('fonts', 'readwrite', (s) => req(s.put(f)));
 export const listBrushes = () => tx('brushes', 'readonly', (s) => req(s.getAll()));

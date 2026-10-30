@@ -132,16 +132,20 @@ export class StrokeEngine {
     if (q.length > 4) q.shift();
   }
 
+  // quadratic segment a → b (control c), flattened into ~2 px pieces; no per-step allocations
   curve(a, c, b) {
     const len = Math.hypot(c.x - a.x, c.y - a.y) + Math.hypot(b.x - c.x, b.y - c.y);
     const steps = Math.max(1, Math.ceil(len / 2));
-    let prev = a;
+    const P = this._cp || (this._cp = [{ x: 0, y: 0, p: 0, t: 0, v: 0 }, { x: 0, y: 0, p: 0, t: 0, v: 0 }]);
+    let prev = P[0], cur = P[1];
+    prev.x = a.x; prev.y = a.y; prev.p = a.p; prev.t = a.t; prev.v = a.v || 0;
+    const av = a.v || 0, bv = b.v || 0;
     for (let i = 1; i <= steps; i++) {
-      const t = i / steps, u = 1 - t;
-      const q = (k) => u * u * a[k] + 2 * u * t * c[k] + t * t * b[k];
-      const cur = { x: q('x'), y: q('y'), p: q('p'), t: q('t'), v: (a.v || 0) * u + (b.v || 0) * t };
+      const t = i / steps, u = 1 - t, k0 = u * u, k1 = 2 * u * t, k2 = t * t;
+      cur.x = k0 * a.x + k1 * c.x + k2 * b.x; cur.y = k0 * a.y + k1 * c.y + k2 * b.y;
+      cur.p = k0 * a.p + k1 * c.p + k2 * b.p; cur.t = k0 * a.t + k1 * c.t + k2 * b.t; cur.v = av * u + bv * t;
       this.walk(prev, cur);
-      prev = cur;
+      const tmp = prev; prev = cur; cur = tmp;
     }
   }
 
@@ -149,14 +153,16 @@ export class StrokeEngine {
     const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
     if (len < 1e-6) return;
     if (len > 0.3) this.dir = Math.atan2(dy, dx);
+    const pt = this._wp || (this._wp = { x: 0, y: 0, p: 0, t: 0, v: 0 });
+    const av = a.v || 0, dv = (b.v || 0) - av;
     let pos = 0;
     while (pos + this.carry <= len) {
       pos += this.carry;
       const t = pos / len;
-      const pt = { x: a.x + dx * t, y: a.y + dy * t, p: a.p + (b.p - a.p) * t, t: a.t + (b.t - a.t) * t, v: (a.v || 0) + ((b.v || 0) - (a.v || 0)) * t };
+      pt.x = a.x + dx * t; pt.y = a.y + dy * t; pt.p = a.p + (b.p - a.p) * t; pt.t = a.t + (b.t - a.t) * t; pt.v = av + dv * t;
       this.travelNow = this.travel + pos;
-      this.stampAt(pt);
-      this.carry = this.spacingAt(pt);
+      // stampAt returns the un-jittered size so spacing needn't recompute it
+      this.carry = Math.max(0.4 / this.scale, this.stampAt(pt) * Math.max(0.01, this.brush.spacing));
     }
     this.carry -= len - pos;
     this.travel += len;
@@ -178,7 +184,8 @@ export class StrokeEngine {
 
   stampAt(pt) {
     const b = this.brush;
-    let size = this.sizeAt(pt);
+    const base = this.sizeAt(pt);
+    let size = base;
     if (b.sizeJitter) size *= 1 - b.sizeJitter * Math.random();
     // "opacity" dynamics are converted to per-stamp alpha so their steady state matches
     const o = (1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - (b.speedOpacity || 0) * 0.85 * Math.min(1, (pt.v || 0) / 3));
@@ -188,14 +195,20 @@ export class StrokeEngine {
     if (b.scatter) { x += (Math.random() - 0.5) * 2 * size * b.scatter; y += (Math.random() - 0.5) * 2 * size * b.scatter; }
     let ang = (b.rotation || 0) * Math.PI / 180 + (b.follow ? this.dir : 0) + (Math.random() - 0.5) * TAU * (b.angleJitter || 0);
     if (size < 1) { alpha *= size; size = 1; }
-    const list = this.sym || [null];
-    for (const f of list) {
-      const [sx, sy, sa] = f ? f(x, y, ang) : [x, y, ang];
+    const pad = size * 0.75 + 2;
+    if (!this.sym) {
+      // common case: no symmetry — no arrays, no closures
+      if (this.kind === 'smudge') this.smudgeStamp(x, y, size, alpha); else this.drawStamp(x, y, size, alpha, ang);
+      growRect(this.bounds, x, y, pad); growRect(this.dirty, x, y, pad);
+      return base;
+    }
+    for (const f of this.sym) {
+      const [sx, sy, sa] = f(x, y, ang);
       if (this.kind === 'smudge') this.smudgeStamp(sx, sy, size, alpha);
       else this.drawStamp(sx, sy, size, alpha, sa);
-      const pad = size * 0.75 + 2;
       growRect(this.bounds, sx, sy, pad); growRect(this.dirty, sx, sy, pad);
     }
+    return base;
   }
 
   drawStamp(x, y, size, alpha, ang) {

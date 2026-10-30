@@ -11,18 +11,18 @@ const tasks = {
   },
   fill({ data, w, h, x, y, opts }) {
     const r = fillRegion(new Uint8ClampedArray(data), w, h, x, y, opts);
-    return r ? [r.buffer, [r.buffer]] : [null, []];
+    return r ? [{ buf: r.buffer, bbox: r.bbox }, [r.buffer]] : [null, []];
   },
   wand({ data, w, h, x, y, tol }) {
     const r = wandRegion(new Uint8ClampedArray(data), w, h, x, y, tol);
-    return [r.buffer, [r.buffer]];
+    return [{ buf: r.buffer, bbox: r.bbox }, [r.buffer]];
   },
   // PNG encoding for autosave (OffscreenCanvas)
-  async png({ bitmap }) {
+  async png({ bitmap, type = 'image/png', quality }) {
     const c = new OffscreenCanvas(bitmap.width, bitmap.height);
     c.getContext('2d').drawImage(bitmap, 0, 0);
     bitmap.close && bitmap.close();
-    return [await c.convertToBlob({ type: 'image/png' }), []];
+    return [await c.convertToBlob({ type, quality }), []];
   },
   gif({ frames, w, h, delay, loop }) {
     const bytes = encodeGif(frames.map((b) => ({ width: w, height: h, data: new Uint8ClampedArray(b) })), delay, loop);

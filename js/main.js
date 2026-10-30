@@ -7,12 +7,13 @@ import { StrokeEngine, detectShape, shapePoints } from './engine.js';
 import { DEFAULT_BRUSHES, preloadBrush } from './brushes.js';
 import { IBIS_PRESETS } from './ibis.js';
 import { Selection, FloatingTransform, regionToCanvas, tracePath } from './tools.js';
-import { fillRegionAsync } from './pool.js';
+import { fillRegionAsync, warmUp } from './pool.js';
 import * as store from './storage.js';
 import * as UI from './ui.js';
 import { Timeline } from './anim.js';
 import * as Toon from './webtoon.js';
 import * as Three3D from './three3d.js';
+import { Timelapse } from './timelapse.js';
 
 // Apple M-series iPads (M1–M4) report 8+ cores and have 8–16 GB of RAM: give layers a
 // bigger budget there. Older devices keep a conservative one.
@@ -57,6 +58,7 @@ class App {
     this.doc = null;
     this.tools = this.makeTools();
     this.timeline = new Timeline(this);
+    this.tlapse = new Timelapse(this);
     this.add3DLayer = () => Three3D.add3DLayer(this);
     this.addText = (shape) => {
       if (this.doc.mode === 'animate') { toast('Text and bubbles are available in Illustrate and Webtoon canvases'); return; }
@@ -86,6 +88,7 @@ class App {
     } catch (e) { console.warn('brush store', e); }
     await Promise.all(this.brushes.map(preloadBrush));
     Toon.loadSavedFonts();
+    setTimeout(() => warmUp(), 1500);
     store.requestPersistence();
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveNow(); });
     window.addEventListener('pagehide', () => this.saveNow());
@@ -159,6 +162,7 @@ class App {
     if (this.tool === 'move' && doc.mode !== 'animate') this.tool = 'brush';
     this.setTool(this.tool);
     this.timeline.mount(doc.mode === 'animate');
+    this.tlapse.attach(doc);
     this.updateSliders();
     this.requestRender();
   }
@@ -170,6 +174,7 @@ class App {
     UI.closePopover();
     UI.closeAllFloats();
     await this.saveNow(true);
+    await this.tlapse.detach();
     this.doc = null;
     this.dropCaches();
     $('#studio').hidden = true; $('#gallery').hidden = false;
@@ -181,6 +186,7 @@ class App {
     this.requestRender(kind === 'active' ? 'active' : undefined);
     UI.onDocChanged(this);
     if (this.doc && this.doc.mode === 'animate') this.timeline.refreshSoon();
+    this.tlapse.schedule();
     clearTimeout(this.saveTimer);
     if (this.settings.autosave) this.saveTimer = setTimeout(() => this.saveNow(), 9000);
   }
@@ -191,6 +197,7 @@ class App {
     this.saving = true;
     try {
       const d = this.doc;
+      await this.tlapse.flush();
       const data = await d.serialize();
       const s = Math.min(1, 420 / Math.max(d.width, d.mode === 'webtoon' ? d.width * 1.4 : d.height));
       const th = d.flatten({ width: Math.max(1, d.width * s), height: Math.max(1, (d.mode === 'webtoon' ? Math.min(d.height, d.width * 1.4) : d.height) * s), frame: d.playhead });
@@ -221,6 +228,9 @@ class App {
     const key = tool === 'smudge' ? 'smudge' : tool === 'eraser' ? 'eraser' : 'brush';
     this.toolBrush[key] = id;
     store.prefs.set('toolBrush', this.toolBrush);
+    // Recents (most recent first)
+    const rec = [id, ...store.prefs.get('brushRecents', []).filter((x) => x !== id)].slice(0, 15);
+    store.prefs.set('brushRecents', rec);
     this.updateSliders();
   }
   paintToolName() { return ['smudge', 'eraser'].includes(this.tool) ? this.tool : 'brush'; }
@@ -543,21 +553,28 @@ class App {
     l.style.background = this.color; l.firstChild.style.background = col;
   }
   endPicker() {
-    this.pickData = null;
     $('#loupe').hidden = true;
     if (this.picked) this.setColor(this.picked);
     this.picked = null;
   }
-  // One flatten + readback per pick session; moving the loupe is then just an array lookup.
+  // Samples one pixel: the cached layers below / above plus the live active group are drawn
+  // into a 1×1 canvas, so moving the loupe never re-composites the whole stack.
   sampleColor(x, y) {
     const d = this.doc;
-    if (!this.pickData) {
-      const c = d.flatten({ preview: (cv) => this.previewFor(cv) });
-      this.pickData = c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, c.width, c.height);
+    const c = this._pick1 || (this._pick1 = makeCanvas(1, 1)), cx = c.getContext('2d', { willReadFrequently: true });
+    cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalCompositeOperation = 'source-over'; cx.globalAlpha = 1;
+    cx.fillStyle = d.bgVisible ? d.bg : '#ffffff'; cx.fillRect(0, 0, 1, 1);
+    cx.translate(-Math.floor(x), -Math.floor(y));
+    if (this.timeline.playing) d.composite(cx, { preview: (cv) => this.previewFor(cv) });
+    else {
+      this.ensureCaches();
+      const [gs, ge] = this.group;
+      cx.drawImage(this.belowCache, 0, 0, d.width, d.height);
+      d.composite(cx, { from: gs, to: ge, bg: false, preview: (cv) => this.previewFor(cv) });
+      if (ge < d.items.length) { if (this.aboveFlat) cx.drawImage(this.aboveCache, 0, 0, d.width, d.height); else d.composite(cx, { from: ge, bg: false }); }
     }
-    const xi = clamp(Math.floor(x), 0, d.width - 1), yi = clamp(Math.floor(y), 0, d.height - 1);
-    const k = (yi * d.width + xi) * 4, a = this.pickData.data;
-    return rgbToHex(a[k], a[k + 1], a[k + 2]);
+    const p = cx.getImageData(0, 0, 1, 1).data;
+    return rgbToHex(p[0], p[1], p[2]);
   }
 
   onKey(e) {
@@ -622,25 +639,37 @@ class App {
 
   // Layers below the active group are flattened into one cached image, and so are the
   // layers above it (when they all blend normally). A frame is then ~3 image draws.
-  cacheCanvas(name) {
-    const d = this.doc;
+  // Caches are built at the resolution the screen can actually show: when zoomed far out
+  // on a big canvas they shrink (½, ¼, ⅛), so building and drawing them touches far fewer
+  // pixels. The active layer is always drawn at full resolution.
+  cacheScale() {
+    const k = this.view.zoom * this.dpr;
+    if (k >= 0.5) return 1;
+    return Math.max(0.125, Math.pow(2, Math.ceil(Math.log2(k * 1.5))));
+  }
+  cacheCanvas(name, sc) {
+    const d = this.doc, w = Math.max(1, Math.round(d.width * sc)), h = Math.max(1, Math.round(d.height * sc));
     let c = this[name];
-    if (!c || c.width !== d.width || c.height !== d.height) c = this[name] = makeCanvas(d.width, d.height);
+    if (!c || c.width !== w || c.height !== h) c = this[name] = makeCanvas(w, h);
     const x = c.getContext('2d');
     x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
     x.clearRect(0, 0, c.width, c.height);
+    x.setTransform(sc, 0, 0, sc, 0, 0);
+    x.imageSmoothingQuality = 'medium';
     return c;
   }
   ensureCaches() {
     const d = this.doc, [gs, ge] = d.activeGroup(), n = d.items.length;
-    const key = [this.contentVer, gs, ge, n, d.playhead, d.width, d.height, d.bgVisible, d.bg, d.anim.onion.on].join('|');
+    // keep the current resolution during a pinch; re-evaluate when it ends
+    const sc = this.gesture && this.cacheSc ? this.cacheSc : this.cacheScale();
+    const key = [this.contentVer, gs, ge, n, d.playhead, d.width, d.height, d.bgVisible, d.bg, d.anim.onion.on, sc].join('|');
     if (key === this.cacheKey) return;
-    this.cacheKey = key;
-    const below = this.cacheCanvas('belowCache');
+    this.cacheKey = key; this.cacheSc = sc;
+    const below = this.cacheCanvas('belowCache', sc);
     d.composite(below.getContext('2d'), { to: gs, bg: d.bgVisible, underlay: d.mode === 'animate' ? (x) => this.timeline.drawOnion(x) : null });
     this.aboveFlat = d.canFlattenRange(ge, n);
     if (this.aboveFlat && ge < n) {
-      const above = this.cacheCanvas('aboveCache');
+      const above = this.cacheCanvas('aboveCache', sc);
       d.composite(above.getContext('2d'), { from: ge, bg: false });
     }
     this.group = [gs, ge];
@@ -691,10 +720,10 @@ class App {
     } else {
       this.ensureCaches();
       const [gs, ge] = this.group;
-      ctx.drawImage(this.belowCache, 0, 0);
+      ctx.drawImage(this.belowCache, 0, 0, d.width, d.height);
       d.composite(ctx, { from: gs, to: ge, bg: false, preview, overlay });
       if (ge < d.items.length) {
-        if (this.aboveFlat) ctx.drawImage(this.aboveCache, 0, 0);
+        if (this.aboveFlat) ctx.drawImage(this.aboveCache, 0, 0, d.width, d.height);
         else d.composite(ctx, { from: ge, bg: false });
       }
     }
@@ -789,7 +818,7 @@ class App {
       if (target.matrix) { const inv = target.matrix.inverse(); c.setTransform(inv.a, inv.b, inv.c, inv.d, inv.e, inv.f); }
       c.globalCompositeOperation = target.layer.alphaLock ? 'source-atop' : 'source-over';
       c.drawImage(fill, 0, 0); c.restore();
-    }, () => this.requestRender());
+    }, () => this.requestRender(), target.matrix ? null : fill.bbox);
     this.changed('active');
   }
 
@@ -885,7 +914,7 @@ class App {
           app.endPicker();
           if (app.oneShotReturn) { const t = app.oneShotReturn; app.oneShotReturn = null; app.setTool(t); }
         },
-        cancel() { app.pickData = null; $('#loupe').hidden = true; },
+        cancel() { $('#loupe').hidden = true; },
       },
       fill: {
         down(p) { app.fillAt(p.x, p.y); },
@@ -902,27 +931,31 @@ class App {
   }
 
   // Add an image (File/Blob) as a new layer, scaled to fit.
-  async insertImage(file) {
+  // source: File / Blob / canvas / ImageBitmap. opts.private keeps it out of the time-lapse.
+  async insertImage(source, opts = {}) {
     const d = this.doc;
+    const img = await createImageBitmap(source);
+    const name = opts.name || (source.name ? source.name.replace(/\.[^.]+$/, '') : 'Image');
+    const place = (c) => {
+      const s = Math.min(1, d.width / img.width, d.height / img.height);
+      c.drawImage(img, (d.width - img.width * s) / 2, (d.height - img.height * s) / 2, img.width * s, img.height * s);
+    };
     if (d.mode === 'animate') {
       const t = d.activeItem; if (!t) return;
       const target = d.getTarget(true);
-      const img = await createImageBitmap(file);
-      withUndo(this.history, target.canvas, 'Insert image', (c) => {
-        const s = Math.min(1, d.width / img.width, d.height / img.height);
-        c.drawImage(img, (d.width - img.width * s) / 2, (d.height - img.height * s) / 2, img.width * s, img.height * s);
-      }, () => this.requestRender());
+      withUndo(this.history, target.canvas, 'Insert image', place, () => this.requestRender());
+      if (opts.private) t.private = true;
       this.changed();
       return;
     }
     if (!this.canAddRaster()) return;
-    const img = await createImageBitmap(file);
-    const l = new Layer(d.width, d.height, { name: file.name ? file.name.replace(/\.[^.]+$/, '') : 'Image' });
-    const s = Math.min(1, d.width / img.width, d.height / img.height);
-    l.canvas.getContext('2d').drawImage(img, (d.width - img.width * s) / 2, (d.height - img.height * s) / 2, img.width * s, img.height * s);
+    const l = new Layer(d.width, d.height, { name: opts.private ? '🔒 ' + name : name, private: !!opts.private, panelMask: d.mode === 'webtoon' });
+    place(l.canvas.getContext('2d'));
     UI.insertLayer(this, l);
+    if (opts.private) toast('Private: this layer never appears in the time-lapse');
     this.setTool('transform');
   }
+
 }
 
 // Out of canvas memory while creating a layer → explain instead of failing silently

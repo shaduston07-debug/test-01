@@ -100,6 +100,16 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **Text & speech bubbles** (Illustrate and Webtoon): Actions › Add › *Add text* / *Add speech bubble*, or the bubble tool. Speech, thought, shout, box and plain text; 14 built-in fonts including Japanese manga gothic/mincho, plus **import your own fonts** (TTF / OTF / WOFF); alignment, line spacing, bold / italic, **vertical (manga) text**, letter outlines; Rasterize to paint over it.
 
+**Brush sets**: 🕘 Recent and ★ Favorites at the top of the Brush Library, plus your own sets (＋ New set; hold a brush for *Add to set…*; hold a set to rename / delete).
+
+**Gradient Map**: 20 presets (Noir, Sepia, Golden Hour, Sunset, Ocean, Neon City, …) and a stop editor (add / move / recolor stops, reverse); runs on the worker pool.
+
+**Photos & video**: Insert a photo, Insert a *private* photo (never shown in the time-lapse — any layer can be marked Private), Insert a video frame (scrub to the frame), Import video as animation drawings (Animate).
+
+**Time-lapse**: every change is captured in the background (720p / 1080p / 2K) and stored per canvas; Actions › Video › Time-lapse Replay, and export Full length or 30 seconds as MP4 (WebCodecs H.264).
+
+**Share** (Procreate's list): Share Image — Inkwell, **PSD** (layers, names, opacity, blend modes, visibility, clipping, alpha lock; RLE), **PDF**, JPEG, PNG, **TIFF**; Share Layers — PDF (page per layer), PNG files, Animated GIF, **Animated PNG**, **Animated MP4**, **Animated HEVC** (where the device supports it); Time-lapse video.
+
 **Multi-core**: a worker pool sized to the CPU (up to 8 workers on an M4) runs adjustments in parallel bands, flood fill and Automatic selection off the main thread, autosave PNG encoding with OffscreenCanvas (all layers at once) and GIF encoding.
 
 **Performance**: layers below and above the one being painted are cached, so a frame is about 3 image draws. Undo uses GPU canvas copies (no pixel readbacks), the paper shadow has no per-frame blur, webtoon panel masks use clip paths, and autosave only re-encodes changed layers

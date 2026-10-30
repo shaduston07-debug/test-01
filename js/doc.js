@@ -22,7 +22,7 @@ export const BLEND_MODES = [
 ];
 export const blendShort = (b) => (BLEND_MODES.find((m) => m[0] === b) || BLEND_MODES[0])[2];
 
-const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed'];
+const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private'];
 
 export class Layer {
   constructor(w, h, o = {}) {
@@ -40,6 +40,7 @@ export class Layer {
     // Groups: a 'group' item sits directly above its members, which carry its id.
     this.groupId = o.groupId || null;
     this.collapsed = !!o.collapsed;
+    this.private = !!o.private; // hidden from the time-lapse (Procreate's "private photo")
     if (this.type === '3d') { this.scene3d = o.scene3d || null; this.models = o.models || new Map(); }
     if (this.type === 'raster' || this.type === '3d') {
       this.canvas = makeCanvas(w, h);
@@ -68,6 +69,7 @@ export class Track {
     this.alphaLock = !!o.alphaLock;
     this.clip = !!o.clip;
     this.reference = !!o.reference;
+    this.private = !!o.private;
     this.cels = [];   // {id, start, dur, canvas}
     this.keys = o.keys || [];   // {f, x, y, s, r, o, ease}
   }
@@ -120,6 +122,7 @@ export class Doc {
     this._tmp = [];
     this.created = o.created || Date.now();
     this.folder = o.folder || null;
+    this.timelapse = o.timelapse || null;
   }
 
   static create({ name, mode, width, height, bg }) {
@@ -353,7 +356,7 @@ export class Doc {
     const out = {
       v: 1, id: this.id, name: this.name, mode: this.mode, width: this.width, height: this.height,
       bg: this.bg, bgVisible: this.bgVisible, active: this.active, playhead: this.playhead,
-      anim: this.anim, webtoon: this.webtoon, created: this.created, folder: this.folder, layers: [], tracks: [],
+      anim: this.anim, webtoon: this.webtoon, created: this.created, folder: this.folder, timelapse: this.timelapse, layers: [], tracks: [],
     };
     for (const l of this.layers) {
       const o = {}; for (const k of LAYER_PROPS) o[k] = l[k];
@@ -364,7 +367,7 @@ export class Doc {
       out.layers.push(o);
     }
     for (const t of this.tracks) {
-      const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, keys: t.keys, cels: [] };
+      const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, private: t.private, keys: t.keys, cels: [] };
       for (const c of t.cels) o.cels.push({ start: c.start, dur: c.dur, png: blobFor(c.canvas) });
       out.tracks.push(o);
     }

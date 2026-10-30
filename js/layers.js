@@ -7,7 +7,7 @@ import { withUndo, touch } from './history.js';
 import { openPopover, closePopover } from './ui.js';
 
 // ───────── structural undo ─────────
-const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed'];
+const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private'];
 function captureStruct(doc) {
   return { items: [...doc.items], props: doc.items.map((it) => Object.fromEntries(PROPS.map((k) => [k, it[k]]))), active: doc.active };
 }
@@ -193,7 +193,7 @@ export function openLayers(app, anchor) {
       const chev = h('button', { class: 'grp-chev' + (it.collapsed ? '' : ' open'), html: ICONS.chevron, onclick: (e) => { e.stopPropagation(); it.collapsed = !it.collapsed; app.dirtySave = true; render(); } });
       row = h('div', { class: 'layer-row group' + (on ? ' on' : '') }, chev, h('div', { class: 'layer-name' }, h('b', {}, it.name), h('small', {}, `${n} layer${n === 1 ? '' : 's'}${it.opacity < 1 ? ' · ' + pct(it.opacity) : ''}`)), vis);
     } else {
-      const tags = [it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip'].filter(Boolean).join(' · ');
+      const tags = [it.private && 'private', it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip'].filter(Boolean).join(' · ');
       const sub = it.type === '3d' ? `3D · ${it.scene3d ? it.scene3d.objects.length : 0} object${it.scene3d && it.scene3d.objects.length === 1 ? '' : 's'}` : it.type === 'frames' ? `${it.panels.length} panels` : it.type === 'balloons' ? `${it.balloons.length} balloons` : it.type === 'track' ? `${it.cels.length} drawings · ${it.keys.length} keys` : (tags || (it.opacity < 1 ? pct(it.opacity) : ''));
       const blendBtn = h('button', { class: 'layer-blend', onclick: (e) => { e.stopPropagation(); d.active = i; render(); openSheet(it); } }, it.type === 'raster' || it.type === 'track' ? blendShort(it.blend) : '');
       row = h('div', { class: 'layer-row' + (on ? ' on' : '') + (it.clip ? ' clip' : '') + (inGroup ? ' member' : '') },
@@ -344,7 +344,7 @@ function sheetBody(app, it, i, rerender, close) {
     const blends = h('div', { class: 'blend-grid' });
     for (const [v, l] of BLEND_MODES) blends.append(h('button', { class: 'blend-chip' + (it.blend === v ? ' on' : ''), onclick: () => { structCmd(app, 'Blend mode', () => { it.blend = v; }); rerender(); } }, l));
     box.append(blends, section('Layer'));
-    box.append(toggle('Alpha Lock', 'alphaLock', rerender), toggle('Clipping Mask', 'clip', rerender), toggle('Reference', 'reference'));
+    box.append(toggle('Alpha Lock', 'alphaLock', rerender), toggle('Clipping Mask', 'clip', rerender), toggle('Reference', 'reference'), toggle('Private (hidden from time-lapse)', 'private', rerender));
     if (d.mode === 'webtoon' && it.type === 'raster') box.append(toggle('Mask to panels', 'panelMask'));
     const target = () => (it.type === 'raster' ? it.canvas : (it.celAt(d.playhead) || {}).canvas);
     if (it.type === 'raster') box.append(item('select', 'Select', () => { app.selection.fromAlpha(it.canvas); app.selectionChanged(); app.setTool('select'); close(); }));

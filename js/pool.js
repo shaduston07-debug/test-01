@@ -27,6 +27,13 @@ function ensure() {
   return workers;
 }
 
+// Start the workers and let them load their code while the app is idle, so the first
+// adjustment / fill doesn't pay the start-up cost.
+export function warmUp() {
+  const ws = ensure();
+  return Promise.all(ws.map(() => run('adjust', { key: 'invert', params: {}, data: new Uint8ClampedArray(4096).buffer, w: 32, h: 32 }).catch(() => {})));
+}
+
 export function run(task, payload, transfer = []) {
   const ws = ensure();
   if (!ws.length) return Promise.reject(new Error('no workers'));
@@ -71,26 +78,22 @@ export async function parallelAdjust(key, params, data, w, h) {
 
 export async function fillRegionAsync(src, w, h, x, y, opts) {
   try {
-    const buf = await run('fill', { data: src.buffer, w, h, x, y, opts }, [src.buffer]);
-    return buf ? new Uint8Array(buf) : null;
+    const res = await run('fill', { data: src.buffer, w, h, x, y, opts }, [src.buffer]);
+    if (!res) return null;
+    const r = new Uint8Array(res.buf); r.bbox = res.bbox; return r;
   } catch { return src.byteLength ? fillRegion(src, w, h, x, y, opts) : null; }
 }
 
 export async function wandRegionAsync(src, w, h, x, y, tol) {
   const copy = src.slice();
-  try { return new Uint8Array(await run('wand', { data: copy.buffer, w, h, x, y, tol }, [copy.buffer])); }
+  try { const res = await run('wand', { data: copy.buffer, w, h, x, y, tol }, [copy.buffer]); const r = new Uint8Array(res.buf); r.bbox = res.bbox; return r; }
   catch { return wandRegion(src, w, h, x, y, tol); }
 }
 
-// PNG encode in a worker (OffscreenCanvas), falling back to canvas.toBlob.
-const canOffscreen = typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function';
-export async function encodePNG(canvas) {
-  if (canOffscreen) {
-    try {
-      const bitmap = await createImageBitmap(canvas);
-      const blob = await run('png', { bitmap }, [bitmap]);
-      if (blob && blob.size) return blob;
-    } catch { /* fall back */ }
-  }
-  return new Promise((res) => canvas.toBlob(res, 'image/png'));
+// Image encoding: the browser's own canvas.toBlob already encodes off the main thread and
+// benchmarked faster than shipping pixels to our workers, so it's used directly (callers
+// still encode many layers at once).
+export function encodeImage(canvas, type = 'image/png', quality) {
+  return new Promise((res) => canvas.toBlob(res, type, quality));
 }
+export const encodePNG = (canvas) => encodeImage(canvas, 'image/png');

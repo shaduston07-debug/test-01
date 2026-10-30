@@ -11,7 +11,11 @@ import { StrokeEngine } from './engine.js';
 import { DEFAULT_BRUSHES, GRAINS, getTipMask, preloadBrush, newBrushFrom, strokePreviewPoints, rawImageToMaskCanvas } from './brushes.js';
 import { importBrushFiles } from './importers.js';
 import * as Ibis from './ibis.js';
-import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask, wandRegion, regionToCanvas } from './tools.js';
+import * as Media from './media.js';
+import * as X from './exporters.js';
+import { encodeVideo, hevcSupported } from './video.js';
+import { QUALITIES as TL_QUALITIES } from './timelapse.js';
+import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask, wandRegion, regionToCanvas, GRADIENT_PRESETS } from './tools.js';
 import { parallelAdjust, wandRegionAsync } from './pool.js';
 import * as store from './storage.js';
 import * as Toon from './webtoon.js';
@@ -395,35 +399,97 @@ export function brushPreview(brush, w = 230, hgt = 40, color = '#ffffff') {
 }
 
 // ───────── brush library ─────────
+// ───────── brush library: Recent, Favorites, your own sets, then the built-in categories ─────────
+const getSets = () => store.prefs.get('brushSets', []);
+const putSets = (v) => store.prefs.set('brushSets', v);
+const getFavs = () => store.prefs.get('brushFavs', []);
+const putFavs = (v) => store.prefs.set('brushFavs', v);
+let libCat = null;
+
 export function openBrushLibrary(app, anchor) {
   const toolName = app.paintToolName();
-  const cats = () => [...new Set(app.brushes.map((b) => b.category || 'Other'))];
-  let cat = app.brushFor(toolName).category || cats()[0];
-  const catsEl = h('div', { class: 'brush-cats' });
-  const listEl = h('div', { class: 'brush-list' });
+  const byId = (id) => app.brushes.find((b) => b.id === id);
+  const builtinCats = () => [...new Set(app.brushes.map((b) => b.category || 'Other'))];
+  const catKeys = () => ['recent', 'fav', ...getSets().map((x) => 'set:' + x.id), ...builtinCats().map((c) => 'cat:' + c)];
+  const brushesIn = (key) => {
+    if (key === 'recent') return store.prefs.get('brushRecents', []).map(byId).filter(Boolean);
+    if (key === 'fav') return getFavs().map(byId).filter(Boolean);
+    if (key.startsWith('set:')) { const st = getSets().find((x) => 'set:' + x.id === key); return st ? st.ids.map(byId).filter(Boolean) : []; }
+    return app.brushes.filter((b) => 'cat:' + (b.category || 'Other') === key);
+  };
+  if (!libCat || !catKeys().includes(libCat)) libCat = 'cat:' + (app.brushFor(toolName).category || builtinCats()[0]);
+  const catsEl = h('div', { class: 'brush-cats' }), listEl = h('div', { class: 'brush-list' });
+
+  const toggleFav = (b) => { const f = getFavs(); putFavs(f.includes(b.id) ? f.filter((x) => x !== b.id) : [b.id, ...f]); render(); };
+  const addToSet = (b) => {
+    const sets = getSets();
+    dialog({ title: `Add "${b.name}" to…`, body: '', actions: [
+      ...sets.map((st) => ({ label: (st.ids.includes(b.id) ? '✓ ' : '') + st.name, onClick: () => { if (!st.ids.includes(b.id)) st.ids.push(b.id); putSets(sets); toast(`Added to ${st.name}`); render(); } })),
+      { label: '＋ New set…', onClick: async () => { const n = await promptDialog('New brush set', 'My set'); if (!n) return; putSets([...getSets(), { id: 's' + Date.now().toString(36), name: n, ids: [b.id] }]); toast(`Created "${n}"`); render(); } },
+      { label: 'Cancel', primary: true },
+    ] });
+  };
+  const brushMenu = (b) => {
+    const inSet = libCat.startsWith('set:');
+    dialog({ title: b.name, body: '', actions: [
+      { label: getFavs().includes(b.id) ? '☆ Remove from Favorites' : '★ Add to Favorites', onClick: () => toggleFav(b) },
+      { label: 'Add to set…', onClick: () => setTimeout(() => addToSet(b), 0) },
+      inSet && { label: 'Remove from this set', onClick: () => { const sets = getSets(); const st = sets.find((x) => 'set:' + x.id === libCat); st.ids = st.ids.filter((x) => x !== b.id); putSets(sets); render(); } },
+      { label: 'Edit in Brush Studio', onClick: () => { closePopover(); openBrushStudio(app, b); } },
+      { label: 'Duplicate', onClick: () => { closePopover(); openBrushStudio(app, b, true); } },
+      { label: 'Cancel', primary: true },
+    ].filter(Boolean) });
+  };
+  const setMenu = (st) => {
+    dialog({ title: st.name, body: '', actions: [
+      { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename set', st.name); if (!n) return; putSets(getSets().map((x) => (x.id === st.id ? { ...x, name: n } : x))); render(); } },
+      { label: 'Delete set', danger: true, onClick: async () => { if (await confirmDialog(`Delete the set "${st.name}"? The brushes themselves stay in the library.`, 'Delete', true)) { putSets(getSets().filter((x) => x.id !== st.id)); libCat = 'fav'; render(); } } },
+      { label: 'Cancel', primary: true },
+    ] });
+  };
+  const holdable = (el, onTap, onHold) => {
+    let t = null, held = false;
+    el.addEventListener('pointerdown', () => { held = false; t = setTimeout(() => { held = true; navigator.vibrate && navigator.vibrate(8); onHold(); }, 480); });
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) el.addEventListener(ev, () => clearTimeout(t));
+    el.addEventListener('click', (e) => { if (held) { e.preventDefault(); return; } onTap(e); });
+  };
+
   const render = () => {
     catsEl.innerHTML = '';
-    for (const c of cats()) catsEl.append(h('button', { class: c === cat ? 'on' : '', onclick: () => { cat = c; render(); } }, c));
+    const label = (k) => k === 'recent' ? '🕘 Recent' : k === 'fav' ? '★ Favorites' : k.startsWith('set:') ? '◆ ' + (getSets().find((x) => 'set:' + x.id === k) || {}).name : k.slice(4);
+    for (const k of catKeys()) {
+      const btn = h('button', { class: (k === libCat ? 'on' : '') + (k.startsWith('set:') ? ' user-set' : '') }, label(k));
+      if (k.startsWith('set:')) holdable(btn, () => { libCat = k; render(); }, () => setMenu(getSets().find((x) => 'set:' + x.id === k)));
+      else btn.onclick = () => { libCat = k; render(); };
+      catsEl.append(btn);
+      if (k === 'fav') {
+        catsEl.append(h('button', { class: 'new-set', onclick: async () => { const n = await promptDialog('New brush set', 'My set'); if (!n) return; const st = { id: 's' + Date.now().toString(36), name: n, ids: [] }; putSets([...getSets(), st]); libCat = 'set:' + st.id; render(); } }, '＋ New set'));
+      }
+      if (k === 'fav' || (k.startsWith('set:') && catKeys()[catKeys().indexOf(k) + 1]?.startsWith('cat:'))) catsEl.append(h('div', { class: 'cat-sep' }));
+    }
     listEl.innerHTML = '';
-    const cur = app.brushFor(toolName);
-    for (const b of app.brushes.filter((x) => (x.category || 'Other') === cat)) {
-      const row = h('button', { class: 'brush-row' + (b.id === cur.id ? ' on' : '') },
-        h('b', {}, b.name, h('span', {}, b.source || (b.override ? 'edited' : ''))), brushPreview(b));
-      row.onclick = () => {
+    const cur = app.brushFor(toolName), favs = getFavs(), list = brushesIn(libCat);
+    if (!list.length) listEl.append(h('p', { class: 'hint lib-empty' }, libCat === 'fav' ? 'Tap ☆ on any brush to keep it here.' : libCat === 'recent' ? 'Brushes you use show up here.' : 'Empty set — hold a brush and choose "Add to set…".'));
+    for (const b of list) {
+      const star = h('button', { class: 'fav-star' + (favs.includes(b.id) ? ' on' : ''), title: 'Favorite', onclick: (e) => { e.stopPropagation(); toggleFav(b); } }, favs.includes(b.id) ? '★' : '☆');
+      const row = h('div', { class: 'brush-row' + (b.id === cur.id ? ' on' : ''), role: 'button' },
+        h('b', {}, b.name, h('span', {}, b.source || (b.override ? 'edited' : ''))), brushPreview(b), star);
+      holdable(row, (e) => {
+        if (e.target === star) return;
         if (b.id === app.brushFor(toolName).id) { closePopover(); openBrushStudio(app, b); return; }
         app.setBrush(b.id, toolName); render();
-      };
+      }, () => brushMenu(b));
       listEl.append(row);
     }
   };
   render();
   const head = [
-    h('button', { class: 'small-btn', title: 'Import .sut (Clip Studio), .brush/.brushset (Procreate) or PNG tips', onclick: () => importBrushesFlow(app, () => { cat = 'Imported'; render(); }) }, 'Import'),
+    h('button', { class: 'small-btn', title: 'Import .sut (Clip Studio), .brush/.brushset (Procreate) or PNG tips', onclick: () => importBrushesFlow(app, () => { libCat = 'cat:Imported'; render(); }) }, 'Import'),
     h('button', { class: 'small-btn', onclick: () => { closePopover(); openBrushStudio(app, app.brushFor(toolName), true); } }, '＋ New'),
-    h('button', { class: 'small-btn ibis', title: 'Import an ibis Paint brush QR code, or create an ibis-style brush', onclick: () => ibisMenu(app, () => { cat = 'ibis Paint'; render(); }) }, 'ibis Paint'),
+    h('button', { class: 'small-btn ibis', title: 'Import an ibis Paint brush QR code, or create an ibis-style brush', onclick: () => ibisMenu(app, () => { libCat = 'cat:ibis Paint'; render(); }) }, 'ibis Paint'),
   ];
   const title = { brush: 'Brush Library', smudge: 'Smudge — brush', eraser: 'Eraser — brush' }[toolName];
-  openPopover(anchor, { title, body: h('div', {}, h('div', { class: 'brush-lib' }, catsEl, listEl), h('p', { class: 'hint', style: { margin: '8px 4px 0' } }, 'Tap a selected brush again to edit it in Brush Studio.')), head, width: 420, key: 'brushes', float: true });
+  openPopover(anchor, { title, body: h('div', {}, h('div', { class: 'brush-lib' }, catsEl, listEl), h('p', { class: 'hint', style: { margin: '8px 4px 0' } }, 'Tap ☆ to favorite · hold a brush for sets & options · hold a set to rename it · tap the selected brush to edit it.')), head, width: 440, key: 'brushes', float: true });
 }
 
 function ibisMenu(app, after) {
@@ -583,12 +649,15 @@ export function openActions(app, anchor) {
   const tabs = [['add', 'Add', 'plus'], ['canvas', 'Canvas', 'canvas'], ['share', 'Share', 'share']];
   if (d.mode === 'animate') tabs.push(['anim', 'Animation', 'video']);
   if (d.mode === 'webtoon') tabs.push(['toon', 'Webtoon', 'panel']);
-  tabs.push(['prefs', 'Prefs', 'settings'], ['help', 'Help', 'help']);
+  tabs.push(['video', 'Video', 'video'], ['prefs', 'Prefs', 'settings'], ['help', 'Help', 'help']);
   if (!tabs.some((t) => t[0] === actionsTab)) actionsTab = 'add';
   const bar = h('div', { class: 'action-tabs' }), list = h('div');
   const pages = {
     add: () => [
-      menuItem('image', 'Insert a photo', async () => { const [f] = await pickFile('image/*'); if (f) app.insertImage(f); }),
+      menuItem('image', 'Insert a photo', () => Media.insertPhoto(app, false)),
+      menuItem('image', 'Insert a private photo', () => Media.insertPhoto(app, true), 'not in time-lapse'),
+      menuItem('video', 'Insert a video frame', () => Media.insertVideoFrame(app)),
+      d.mode === 'animate' && menuItem('video', 'Import video as animation', () => Media.importVideoAsAnimation(app)),
       d.mode !== 'animate' && menuItem('cube', 'Add 3D layer (model / figure)', () => app.add3DLayer()),
       menuItem('brushImport', 'Import brushes', () => importBrushesFlow(app), '.sut · .brush'),
       menuItem('brushImport', 'Import ibis Paint brush', () => Ibis.importIbisQR(app), 'QR code'),
@@ -602,10 +671,22 @@ export function openActions(app, anchor) {
       menuItem('pencil', 'Rename', async () => { const n = await promptDialog('Name', d.name); if (n) { d.name = n; $('#doc-title').textContent = n; app.changed(); } }),
     ],
     share: () => [
-      menuItem('share', 'PNG', () => exportImage(app, 'png')),
-      menuItem('share', 'JPEG', () => exportImage(app, 'jpeg')),
-      menuItem('layers', 'PNG layers (.zip)', () => exportLayers(app)),
-      menuItem('copy', 'Inkwell project', async () => download(await d.toFile(), safeName(d.name) + '.inkwell'), '.inkwell'),
+      h('div', { class: 'menu-section' }, 'Share Image'),
+      menuItem('copy', 'Inkwell', async () => download(await d.toFile(), safeName(d.name) + '.inkwell'), 'project'),
+      menuItem('layers', 'PSD', () => shareFile(app, 'psd'), 'layered'),
+      menuItem('share', 'PDF', () => shareFile(app, 'pdf')),
+      menuItem('image', 'JPEG', () => exportImage(app, 'jpeg')),
+      menuItem('image', 'PNG', () => exportImage(app, 'png')),
+      menuItem('image', 'TIFF', () => shareFile(app, 'tiff')),
+      h('div', { class: 'menu-section' }, d.mode === 'animate' ? 'Share Frames' : 'Share Layers'),
+      menuItem('share', 'PDF', () => shareFile(app, 'layers-pdf'), 'one page each'),
+      menuItem('layers', 'PNG Files', () => exportLayers(app)),
+      menuItem('video', 'Animated GIF', () => shareAnimated(app, 'gif')),
+      menuItem('video', 'Animated PNG', () => shareAnimated(app, 'apng')),
+      menuItem('video', 'Animated MP4', () => shareAnimated(app, 'mp4')),
+      menuItem('video', 'Animated HEVC', () => shareAnimated(app, 'hevc')),
+      h('div', { class: 'menu-section' }, 'Time-lapse'),
+      menuItem('play', 'Time-lapse Video', () => app.tlapse.exportDialog()),
     ],
     anim: () => [
       menuItem('share', 'Animated GIF', () => app.timeline.exportGif()),
@@ -618,6 +699,19 @@ export function openActions(app, anchor) {
       menuItem('video', 'Phone scroll preview', () => Toon.phonePreview(app)),
       menuItem('share', 'Export episode slices (.zip)', () => Toon.exportSlicesDialog(app)),
     ],
+    video: () => {
+      const T = app.tlapse, i = T.info();
+      const q = h('select', {}, ...Object.keys(TL_QUALITIES).map((k) => h('option', { value: k, selected: i.quality === k }, k)));
+      q.onchange = () => { i.quality = q.value; app.dirtySave = true; };
+      return [
+        menuItem('play', 'Time-lapse Replay', () => T.replay(), `${i.count} frames`),
+        h('div', {}, switchRow('Record time-lapse', i.on, (v) => { i.on = v; app.dirtySave = true; if (v) T.schedule(0); })),
+        menuItem('share', 'Export Time-lapse Video…', () => T.exportDialog()),
+        h('div', { class: 'toggle-row' }, h('span', {}, 'Time-lapse quality'), q),
+        menuItem('trash', 'Clear recording', async () => { if (await confirmDialog('Delete this canvas’s time-lapse recording?', 'Delete', true)) T.reset(); }),
+        h('p', { class: 'hint', style: { padding: '0 12px' } }, 'Layers marked Private (and private photos) never appear in the time-lapse.'),
+      ];
+    },
     prefs: () => [
       h('div', {}, switchRow('Right-hand interface', app.settings.rightHanded, (v) => { app.settings.rightHanded = v; app.applySettings(); })),
       h('div', {}, switchRow('Reduce transparency', app.settings.solidUI, (v) => { app.settings.solidUI = v; app.applySettings(); })),
@@ -634,6 +728,59 @@ export function openActions(app, anchor) {
   };
   render();
   openPopover(anchor, { title: 'Actions', body: h('div', {}, bar, list), width: 380 });
+}
+
+async function shareFile(app, kind) {
+  const d = app.doc, name = safeName(d.name);
+  toast('Preparing ' + kind.replace('layers-', '').toUpperCase() + '…', 60000);
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    if (kind === 'psd') {
+      const merged = d.flatten({ bg: d.bgVisible, frame: d.playhead });
+      download(X.writePSD(d.width, d.height, X.layerCanvases(d), merged), name + '.psd');
+    } else if (kind === 'pdf') download(await X.writePDF([d.flatten({ bg: true, frame: d.playhead })]), name + '.pdf');
+    else if (kind === 'layers-pdf') {
+      const src = X.frameSource(app, 2480), pages = [];
+      for (let i = 0; i < src.count; i++) pages.push(src.render(i));
+      download(await X.writePDF(pages), name + ' layers.pdf');
+    } else if (kind === 'tiff') download(X.writeTIFF(d.flatten({ bg: d.bgVisible, frame: d.playhead })), name + '.tiff');
+    toast('Ready to share');
+  } catch (e) { console.error(e); toast('Export failed: ' + e.message, 5000); }
+}
+
+function shareAnimated(app, format) {
+  const d = app.doc, src = X.frameSource(app, format === 'gif' ? 960 : 1920);
+  if (src.count < 2) { toast(d.mode === 'animate' ? 'Add more frames first' : 'Animated exports use each visible layer as a frame — add at least two layers'); return; }
+  let fps = src.fps;
+  dialog({
+    title: { gif: 'Animated GIF', apng: 'Animated PNG', mp4: 'Animated MP4', hevc: 'Animated HEVC' }[format],
+    body: h('div', {}, h('p', {}, `${src.count} frames${d.mode === 'animate' ? '' : ' (one per visible layer, bottom to top)'} at ${src.w}×${src.h}.`),
+      field('Frames per second', { min: 1, max: 60, step: 1, value: fps, fmt: (v) => v + ' fps', onInput: (v) => (fps = v) })),
+    actions: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => { setTimeout(async () => {
+      const name = safeName(d.name);
+      toast('Rendering…', 120000);
+      try {
+        if (format === 'gif') {
+          const { run } = await import('./pool.js'), { encodeGif } = await import('./gif.js');
+          const frames = []; for (let i = 0; i < src.count; i++) frames.push(src.render(i).getContext('2d').getImageData(0, 0, src.w, src.h));
+          const delay = Math.max(2, Math.round(100 / fps));
+          let bytes;
+          try { const bufs = frames.map((f) => f.data.slice().buffer); bytes = new Uint8Array(await run('gif', { frames: bufs, w: src.w, h: src.h, delay, loop: true }, bufs)); }
+          catch { bytes = encodeGif(frames, delay, true); }
+          download(new Blob([bytes], { type: 'image/gif' }), name + '.gif');
+        } else if (format === 'apng') {
+          const frames = []; for (let i = 0; i < src.count; i++) frames.push(src.render(i));
+          download(await X.writeAPNG(frames, fps), name + '.png');
+        } else {
+          if (format === 'hevc' && !(await hevcSupported(src.w, src.h))) { toast('HEVC isn’t available on this device — exporting MP4 (H.264) instead', 3500); format = 'mp4'; }
+          const blob = await encodeVideo({ width: src.w, height: src.h, fps, count: src.count, codec: format === 'hevc' ? 'hevc' : 'avc',
+            drawFrame: (i, x) => x.drawImage(src.render(i), 0, 0, src.w - (src.w % 2), src.h - (src.h % 2)) });
+          download(blob, name + (blob.type.includes('mp4') ? '.mp4' : '.webm'));
+        }
+        toast('Ready to share');
+      } catch (e) { console.error(e); toast('Export failed: ' + e.message, 5000); }
+    }, 0); } }],
+  });
 }
 
 const safeName = (n) => (n || 'untitled').replace(/[^\w\- ]+/g, '').trim() || 'untitled';
@@ -748,6 +895,37 @@ export function openAdjustments(app, anchor) {
   openPopover(anchor, { title: 'Adjustments', body, width: 330 });
 }
 
+// Gradient map editor: presets + editable colour stops (dark → light)
+const cssGradient = (stops) => 'linear-gradient(90deg,' + [...stops].sort((a, b) => a[0] - b[0]).map(([p, c]) => `${c} ${Math.round(p * 100)}%`).join(',') + ')';
+function gradientEditor(params, run) {
+  const box = h('div', { class: 'gmap' });
+  const bar = h('div', { class: 'gmap-bar' }), stopsEl = h('div', { class: 'gmap-stops' }), presets = h('div', { class: 'gmap-presets' });
+  const changed = () => { store.prefs.set('gmapStops', params.stops); draw(); run(); };
+  const draw = () => {
+    bar.style.background = cssGradient(params.stops);
+    stopsEl.innerHTML = '';
+    params.stops.forEach((st, i) => {
+      const col = h('input', { type: 'color', value: st[1] });
+      col.oninput = () => { st[1] = col.value; changed(); };
+      const pos = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: String(st[0]) });
+      pos.oninput = () => { st[0] = parseFloat(pos.value); changed(); };
+      const del = h('button', { class: 'icon-btn', title: 'Remove stop', onclick: () => { if (params.stops.length > 2) { params.stops.splice(i, 1); changed(); } } }, '×');
+      stopsEl.append(h('div', { class: 'gmap-stop' }, col, pos, del));
+    });
+  };
+  for (const pr of GRADIENT_PRESETS) {
+    presets.append(h('button', { class: 'gmap-preset', title: pr.name, onclick: () => { params.stops = pr.stops.map((x) => [...x]); changed(); } },
+      h('span', { style: { background: cssGradient(pr.stops) } }), pr.name));
+  }
+  box.append(h('div', { class: 'menu-section' }, 'Presets'), presets, h('div', { class: 'menu-section' }, 'Gradient (shadows → highlights)'), bar, stopsEl,
+    h('div', { class: 'gmap-actions' },
+      h('button', { class: 'small-btn', onclick: () => { const s2 = [...params.stops].sort((a, b) => a[0] - b[0]); params.stops.push([0.5, '#808080']); changed(); } }, '＋ Stop'),
+      h('button', { class: 'small-btn', onclick: () => { params.stops = params.stops.map(([p2, c]) => [1 - p2, c]); changed(); } }, 'Reverse'),
+      h('button', { class: 'small-btn', onclick: () => { params.stops = [[0, '#000000'], [0.5, '#808080'], [1, '#ffffff']]; changed(); } }, 'Reset')));
+  draw();
+  return box;
+}
+
 function openAdjust(app, key, anchor) {
   const adj = ADJUSTMENTS[key];
   const target = app.doc.getTarget(false);
@@ -795,6 +973,7 @@ function openAdjust(app, key, anchor) {
   const cancel = () => { if (done) return; done = true; ctx.putImageData(orig, bb.x, bb.y); app.requestRender(); };
   const body = h('div');
   for (const [k, label, min, max, def, step] of adj.params) body.append(field(label, { min, max, step, value: def, fmt: (v) => (step < 1 ? (+v).toFixed(2) : Math.round(v)), onInput: (v) => { params[k] = v; run(); } }));
+  if (key === 'gradientMap') { params.stops = store.prefs.get('gmapStops', GRADIENT_PRESETS[0].stops); body.append(gradientEditor(params, run)); }
   if (!adj.params.length) body.append(h('p', { class: 'hint' }, 'Preview shown on canvas.'));
   if (app.selection.active) body.append(h('p', { class: 'hint' }, 'Limited to the current selection.'));
   const head = [h('button', { class: 'small-btn', onclick: () => { cancel(); closePopover(); } }, 'Cancel'), h('button', { class: 'small-btn on', onclick: () => { apply(); closePopover(); } }, 'Apply')];
@@ -1394,9 +1573,9 @@ function galleryMenu(app, m) {
     actions: [
       { label: 'Move to folder…', onClick: () => { setTimeout(() => moveDialog(app, m), 0); } },
       { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename', m.name); if (!n) return; const data = await store.loadDoc(m.id); data.name = n; await store.saveDoc(data, { ...m, name: n }); renderGallery(app); } },
-      { label: 'Duplicate', onClick: async () => { const data = await store.loadDoc(m.id); const id = 'd' + Date.now().toString(36); await store.saveDoc({ ...data, id, name: m.name + ' copy' }, { ...m, id, name: m.name + ' copy', updated: Date.now() }); renderGallery(app); } },
+      { label: 'Duplicate', onClick: async () => { const data = await store.loadDoc(m.id); const id = 'd' + Date.now().toString(36); await store.saveDoc({ ...data, id, name: m.name + ' copy', timelapse: data.timelapse ? { ...data.timelapse, count: 0 } : null }, { ...m, id, name: m.name + ' copy', updated: Date.now() }); renderGallery(app); } },
       { label: 'Export project', onClick: async () => { const doc = await Doc.deserialize(await store.loadDoc(m.id)); download(await doc.toFile(), safeName(m.name) + '.inkwell'); } },
-      { label: 'Delete', danger: true, onClick: async () => { if (await confirmDialog(`Delete "${m.name}"? This can't be undone.`, 'Delete', true)) { await store.deleteDoc(m.id); renderGallery(app); } } },
+      { label: 'Delete', danger: true, onClick: async () => { if (await confirmDialog(`Delete "${m.name}"? This can't be undone.`, 'Delete', true)) { await store.deleteDoc(m.id); store.deleteTimelapse(m.id).catch(() => {}); renderGallery(app); } } },
       { label: 'Close', primary: true },
     ],
   });

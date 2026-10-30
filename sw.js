@@ -1,10 +1,10 @@
 // Offline support: cache-first for the app shell, refreshed in the background.
-const CACHE = 'inkwell-v8';
+const CACHE = 'inkwell-v10';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
-  'js/main.js', 'js/platform.js', 'js/layers.js', 'js/three3d.js', 'js/ibis.js', 'js/pool.js', 'js/worker.js', 'js/util.js', 'js/icons.js', 'js/doc.js', 'js/history.js', 'js/engine.js', 'js/brushes.js', 'js/tools.js',
+  'js/main.js', 'js/platform.js', 'js/layers.js', 'js/three3d.js', 'js/ibis.js', 'js/pool.js', 'js/worker.js', 'js/media.js', 'js/timelapse.js', 'js/video.js', 'js/exporters.js', 'js/util.js', 'js/icons.js', 'js/doc.js', 'js/history.js', 'js/engine.js', 'js/brushes.js', 'js/tools.js',
   'js/importers.js', 'js/gif.js', 'js/storage.js', 'js/ui.js', 'js/anim.js', 'js/webtoon.js',
-  'vendor/jszip.min.js', 'vendor/three.bundle.js', 'vendor/jsQR.js', 'vendor/sql-wasm.js', 'vendor/sql-wasm.wasm',
+  'vendor/jszip.min.js', 'vendor/three.bundle.js', 'vendor/jsQR.js', 'vendor/mp4-muxer.min.mjs', 'vendor/sql-wasm.js', 'vendor/sql-wasm.wasm',
 ];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
