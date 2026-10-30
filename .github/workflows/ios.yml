@@ -9,6 +9,9 @@ on:
     branches: [claude/inkwell-studio, main]
     paths: ['js/**', 'css/**', 'index.html', 'ios/**', 'vendor/**', 'icons/**', 'package*.json', 'capacitor.config.json', '.github/workflows/ios.yml']
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15
@@ -30,9 +33,27 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/App.app Payload/
-          zip -qry InkwellStudio-unsigned.ipa Payload
+          zip -qry InkwellStudio.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
           name: InkwellStudio-ipa
-          path: InkwellStudio-unsigned.ipa
+          path: InkwellStudio.ipa
           retention-days: 30
+      # Easy-to-find download: Releases section on the repo's front page
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest InkwellStudio.ipa --target "$GITHUB_SHA" \
+            --title "Inkwell Studio for iPad (latest build)" \
+            --notes "Download **InkwellStudio.ipa** below, then install it with Sideloadly or AltStore from a computer. Built from ${GITHUB_SHA::7}." 
+      # Copy on a branch too, so it shows up in the file list
+      - name: Update download branch
+        run: |
+          mkdir dl && cp InkwellStudio.ipa dl/ && cd dl
+          git init -q -b download
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "iPad app build ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" download
