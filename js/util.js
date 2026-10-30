@@ -1,4 +1,5 @@
 // Small DOM / math / color helpers shared across the app.
+import { isNative, nativeSave, webShare, pickerAccept } from './platform.js';
 
 export const $ = (s, r = document) => r.querySelector(s);
 export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -139,7 +140,12 @@ export function promptDialog(title, value = '', multiline = false) {
   });
 }
 
-export function download(blob, filename) {
+export async function download(blob, filename) {
+  if (isNative) {
+    try { await nativeSave(blob, filename); toast('Saved to Files › Inkwell Studio › Exports'); return; }
+    catch (e) { console.warn('native save failed', e); }
+  }
+  if (await webShare(blob, filename)) return;
   const url = URL.createObjectURL(blob);
   const a = h('a', { href: url, download: filename });
   document.body.append(a); a.click(); a.remove();
@@ -148,7 +154,7 @@ export function download(blob, filename) {
 
 export function pickFile(accept, multiple = false) {
   return new Promise((res) => {
-    const inp = h('input', { type: 'file', accept, multiple });
+    const inp = h('input', { type: 'file', accept: pickerAccept(accept) || null, multiple });
     inp.style.display = 'none';
     inp.addEventListener('change', () => { res([...inp.files]); inp.remove(); });
     document.body.append(inp);

@@ -1,0 +1,12 @@
+{
+  "appId": "com.inkwell.studio",
+  "appName": "Inkwell Studio",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": false,
+    "backgroundColor": "#151517",
+    "preferredContentMode": "mobile",
+    "limitsNavigationsToAppBoundDomains": false
+  }
+}

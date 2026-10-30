@@ -61,7 +61,7 @@ class App {
     store.requestPersistence();
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveNow(); });
     window.addEventListener('pagehide', () => this.saveNow());
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
     UI.renderGallery(this);
   }
 

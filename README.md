@@ -10,15 +10,41 @@ Three modes, picked when you create a canvas:
 | **Animate** | Multi-track timeline: flipbook drawings per track, keyframed motion, live *performance* capture, onion skin, GIF / video / PNG export |
 | **Webtoon** | Long vertical canvas with comic panels, speech balloons, panel-masked layers, smart slicing export and a phone scroll preview |
 
-## Running it
+## Installing on iPad
 
-Any static file server works:
+There are two ways to get it onto an iPad. The native app is the better one.
+
+### A. Native iPad app (recommended)
+
+`ios/` is a ready-made Xcode project (Capacitor 8, Swift Package Manager, no CocoaPods). It's iPad-only, supports every orientation and Split View, hides the status bar, and has its own icon and launch screen. Exports go to **Files › On My iPad › Inkwell Studio › Exports** and open the share sheet (Save Image, AirDrop, …).
+
+**With a Mac (Xcode 16+):**
+
+```sh
+npm install
+npm run ios          # copies the web app into the project and opens Xcode
+```
+
+In Xcode: select the **App** target → *Signing & Capabilities* → choose your Team. A free Apple ID works, but the app expires after 7 days. A $99/yr developer account lasts a year and can publish to TestFlight or the App Store. Plug in the iPad and press ▶.
+
+**Without a Mac:** the **iPad app** GitHub Action (`.github/workflows/ios.yml`) builds an unsigned `InkwellStudio-unsigned.ipa` on a GitHub macOS runner on every push, or on demand from *Actions › iPad app › Run workflow*. Download it from the run's *Artifacts* and install it with **Sideloadly** (Windows/Mac) or **AltStore**. Both re-sign it with your Apple ID (7-day expiry on free accounts; AltStore can auto-refresh).
+
+After changing the web code, run `npm run sync` to copy it into the iOS project.
+
+### B. Home Screen web app
+
+Host the folder over HTTPS, open it in Safari, then *Share → Add to Home Screen*. It launches full-screen, and the service worker caches everything for offline use.
+
+- **GitHub Pages:** `.github/workflows/pages.yml` deploys it automatically. Turn it on in *Settings › Pages › Source: GitHub Actions*. Pages for **private** repos needs a paid GitHub plan, so either make the repo public or use another host.
+- **Free alternatives:** run `npm run build`, then drag the `www/` folder onto Netlify Drop (app.netlify.com/drop) or Cloudflare Pages.
+
+Artwork is stored on-device (IndexedDB). Export `.inkwell` project files for backups. In Safari the Home Screen version and the browser version keep **separate** storage.
+
+### Local development
 
 ```sh
 python3 -m http.server 8000      # then open http://localhost:8000
 ```
-
-**On iPad:** host the folder over HTTPS (e.g. GitHub Pages), open it in Safari, then *Share → Add to Home Screen*. It launches full-screen, and the service worker caches everything for offline use. Artwork is stored on-device in IndexedDB. Export `.inkwell` project files for backups.
 
 ## Features
 
@@ -91,5 +117,8 @@ js/webtoon.js               Panels, balloons, slicing, preview
 js/importers.js             .sut / .brush / .brushset / image brush import
 js/gif.js                   GIF encoder
 js/storage.js, sw.js        IndexedDB persistence, offline cache
+js/platform.js              Native app / Home Screen glue (Files + share sheet export, iOS file picker)
+ios/                        Native iPad app (Capacitor Xcode project)
+scripts/build-www.mjs       Copies the web app into www/ for the native build
 vendor/                     sql.js (SQLite → wasm), JSZip
 ```

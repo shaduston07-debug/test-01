@@ -1,0 +1,21 @@
+{
+  "name": "inkwell-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tablet painting, animation and webtoon app for iPad",
+  "scripts": {
+    "build": "node scripts/build-www.mjs",
+    "serve": "python3 -m http.server 8000",
+    "ios": "npm run build && npx cap sync ios && npx cap open ios",
+    "sync": "npm run build && npx cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/ios": "^8.6.0",
+    "@capacitor/share": "^8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
+  }
+}

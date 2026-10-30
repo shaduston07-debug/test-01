@@ -1,0 +1,38 @@
+# Builds the native iPad app on a GitHub-hosted Mac and uploads an unsigned .ipa.
+# Install it with Sideloadly / AltStore (they re-sign with your free Apple ID),
+# or open ios/App in Xcode to sign and run it yourself.
+name: iPad app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/inkwell-studio, main]
+    paths: ['js/**', 'css/**', 'index.html', 'ios/**', 'vendor/**', 'icons/**', 'package*.json', 'capacitor.config.json', '.github/workflows/ios.yml']
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build && npx cap sync ios
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Package .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry InkwellStudio-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InkwellStudio-ipa
+          path: InkwellStudio-unsigned.ipa
+          retention-days: 30

@@ -1,0 +1,35 @@
+# Publishes the web version so it can be added to the iPad Home Screen.
+# Requires Settings → Pages → Source: "GitHub Actions"
+# (Pages on private repos needs a paid GitHub plan — or make the repo public).
+name: Home Screen web app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/inkwell-studio, main]
+    paths: ['js/**', 'css/**', 'index.html', 'sw.js', 'manifest.webmanifest', 'vendor/**', 'icons/**', '.github/workflows/pages.yml']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: node scripts/build-www.mjs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: www
+      - id: deployment
+        uses: actions/deploy-pages@v4

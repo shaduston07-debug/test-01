@@ -1,8 +1,8 @@
 // Offline support: cache-first for the app shell, refreshed in the background.
-const CACHE = 'inkwell-v1';
+const CACHE = 'inkwell-v2';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
-  'js/main.js', 'js/util.js', 'js/icons.js', 'js/doc.js', 'js/history.js', 'js/engine.js', 'js/brushes.js', 'js/tools.js',
+  'js/main.js', 'js/platform.js', 'js/util.js', 'js/icons.js', 'js/doc.js', 'js/history.js', 'js/engine.js', 'js/brushes.js', 'js/tools.js',
   'js/importers.js', 'js/gif.js', 'js/storage.js', 'js/ui.js', 'js/anim.js', 'js/webtoon.js',
   'vendor/jszip.min.js', 'vendor/sql-wasm.js', 'vendor/sql-wasm.wasm',
 ];
