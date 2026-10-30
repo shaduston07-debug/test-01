@@ -59,7 +59,7 @@
   function saveCurrent() {
     const note = current();
     if (!note) return;
-    note.html = editor.innerHTML;
+    note.html = Media.serialize(editor);
     note.text = editor.innerText;
     note.updated = Date.now();
     persist();
@@ -68,7 +68,7 @@
     renderDate(note);
   }
 
-  const isBlank = note => !note.text.trim() && !note.html.includes('class="sketch"');
+  const isBlank = note => !note.text.trim() && !/class="(sketch|image-block|audio-clip)"/.test(note.html);
 
   // Drop the open note if the user left it blank.
   function discardIfEmpty(note) {
@@ -354,6 +354,7 @@
     currentId = id;
     const note = current();
     editor.innerHTML = note ? note.html : '';
+    Media.hydrate(editor);
     renderDate(note);
     renderList();
     scanSpelling();
@@ -392,6 +393,7 @@
     const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement.closest(XLAT)) continue; // translated words aren't English
+      if (node.parentElement.closest('[contenteditable="false"]')) continue; // recordings, pictures
       for (const m of node.data.matchAll(WORD_RE)) {
         const end = m.index + m[0].length;
         // Don't nag about the word that's still being typed.
@@ -877,6 +879,7 @@
     typing = false;
     hideMath();
     scheduleScan();
+    if (e.target.closest('.audio-clip, .image-block')) return closeCard(); // handled by Blocks
     const sketch = e.target.closest('.sketch');
     if (sketch) return editSketch(sketch);
     if (!SpellCheck.ready || e.detail > 1 || !getSelection().isCollapsed) return;
@@ -898,6 +901,11 @@
   // Paste as plain text so styles from other apps don't come along.
   editor.addEventListener('paste', e => {
     e.preventDefault();
+    const images = [...(e.clipboardData.files || [])].filter(f => f.type.startsWith('image/'));
+    if (images.length) {
+      Blocks.rememberCaret();
+      return Blocks.insertImages(images);
+    }
     const text = e.clipboardData.getData('text/plain');
     document.execCommand('insertText', false, text);
   });
@@ -911,6 +919,9 @@
       closeDictionary();
       closeAppearance();
       closeGroupMenu();
+      closeShare();
+      colourMenu.hidden = true;
+      Blocks.deselect();
     }
     if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
       e.preventDefault();
@@ -1213,6 +1224,75 @@
       </button>`).join('');
   }
 
+  /* Page: paper, paper colour, font, size, width */
+
+  const PAGE_KEY = 'inkwell.page';
+  const TINTS = [
+    { id: 'default', name: 'Default', light: null, dark: null },
+    { id: 'cream', name: 'Cream', light: '#fbf6e9', dark: '#29251f' },
+    { id: 'sepia', name: 'Sepia', light: '#f2e5cf', dark: '#30281d' },
+    { id: 'mint', name: 'Mint', light: '#edf7ef', dark: '#1c2922' },
+    { id: 'sky', name: 'Sky', light: '#edf3fb', dark: '#1b2430' },
+    { id: 'rose', name: 'Rose', light: '#fbeff1', dark: '#2d1f23' },
+    { id: 'slate', name: 'Slate', light: '#eceef1', dark: '#23262b' },
+  ];
+  const FONTS = [
+    { id: 'system', name: 'System', css: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif', docx: 'Calibri' },
+    { id: 'book', name: 'Book', css: '"Literata", "Iowan Old Style", Georgia, serif', docx: 'Georgia' },
+    { id: 'garamond', name: 'Garamond', css: '"EB Garamond", Garamond, "Iowan Old Style", Georgia, serif', docx: 'Garamond' },
+    { id: 'mono', name: 'Typewriter', css: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace', docx: 'Courier New' },
+    { id: 'hand', name: 'Handwriting', css: '"Caveat", "Bradley Hand", "Segoe Print", cursive', docx: 'Bradley Hand ITC' },
+  ];
+  const PAGE_DEFAULTS = { paper: 'plain', tint: 'default', font: 'system', size: '17', width: '760' };
+
+  function pageSettings() {
+    try {
+      return { ...PAGE_DEFAULTS, ...JSON.parse(localStorage.getItem(PAGE_KEY)) };
+    } catch {
+      return { ...PAGE_DEFAULTS };
+    }
+  }
+
+  function setPage(change) {
+    try { localStorage.setItem(PAGE_KEY, JSON.stringify({ ...pageSettings(), ...change })); } catch { /* this visit only */ }
+    applyPage();
+  }
+
+  function applyPage() {
+    const page = pageSettings();
+    const font = FONTS.find(f => f.id === page.font) || FONTS[0];
+    const tint = TINTS.find(t => t.id === page.tint) || TINTS[0];
+    root.style.setProperty('--page-font', font.css);
+    root.style.setProperty('--page-size', page.size + 'px');
+    root.style.setProperty('--page-width', page.width === 'none' ? 'none' : page.width + 'px');
+    for (const side of ['light', 'dark']) {
+      if (tint[side]) root.style.setProperty(`--page-bg-${side}`, tint[side]);
+      else root.style.removeProperty(`--page-bg-${side}`);
+    }
+    $('.editor-pane').dataset.paper = page.paper;
+    renderPage();
+  }
+
+  function renderPage() {
+    const page = pageSettings();
+    const check = (sel, key, value) => document.querySelectorAll(sel).forEach(b => b.setAttribute('aria-checked', b.dataset[key] === value));
+    check('#paper-choice [data-paper]', 'paper', page.paper);
+    check('#size-choice [data-size]', 'size', page.size);
+    check('#width-choice [data-width]', 'width', page.width);
+    $('#tint-choice').innerHTML = TINTS.map(t => `
+      <button role="radio" class="tint-option" data-tint="${t.id}" aria-checked="${t.id === page.tint}" title="${t.name}"
+        style="--tint-light:${t.light || 'var(--bg)'};--tint-dark:${t.dark || 'var(--bg)'}"><span class="tint-swatch"></span>${t.name}</button>`).join('');
+    $('#font-choice').innerHTML = FONTS.map(f => `
+      <button role="radio" class="font-option" data-font="${f.id}" aria-checked="${f.id === page.font}" style="font-family:${esc(f.css)}">${f.name}</button>`).join('');
+  }
+
+  // What exports use: the page's font and size, on white paper.
+  function pageForExport() {
+    const page = pageSettings();
+    const font = FONTS.find(f => f.id === page.font) || FONTS[0];
+    return { fontFamily: font.css, fontSize: +page.size, docxFont: font.docx };
+  }
+
   function closeAppearance() {
     appearanceModal.hidden = true;
   }
@@ -1230,9 +1310,195 @@
     if (btn.dataset.appearance) setPref(APPEARANCE_KEY, btn.dataset.appearance);
     if (btn.dataset.accent) setPref(ACCENT_KEY, btn.dataset.accent);
     if (btn.dataset.appearance || btn.dataset.accent) applyAppearance();
+    if (btn.dataset.paper) setPage({ paper: btn.dataset.paper });
+    if (btn.dataset.tint) setPage({ tint: btn.dataset.tint });
+    if (btn.dataset.font) setPage({ font: btn.dataset.font });
+    if (btn.closest('#size-choice')) setPage({ size: btn.dataset.size });
+    if (btn.dataset.width) setPage({ width: btn.dataset.width });
   });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyAppearance);
   applyAppearance();
+  applyPage();
+
+  /* ---------- Text colour and highlight ---------- */
+
+  const TEXT_COLOURS = [
+    ['Default', null], ['Red', '#e0453a'], ['Orange', '#e8812c'], ['Gold', '#c99a06'], ['Green', '#2f9e5b'],
+    ['Teal', '#13958d'], ['Blue', '#2f73d9'], ['Purple', '#8a52d6'], ['Pink', '#d6458a'], ['Grey', '#8a8f98'],
+  ];
+  const HIGHLIGHTS = [
+    ['None', null], ['Yellow', 'rgba(255, 214, 10, 0.42)'], ['Green', 'rgba(52, 199, 89, 0.32)'],
+    ['Blue', 'rgba(10, 132, 255, 0.26)'], ['Pink', 'rgba(255, 55, 140, 0.26)'], ['Purple', 'rgba(175, 82, 222, 0.3)'],
+  ];
+  // "Default" is applied as a marker colour and then removed, so the text
+  // goes back to following the theme (dark text in light mode, light in dark).
+  const MARKER = { color: 'rgb(1, 2, 3)', background: 'rgb(1, 2, 4)' };
+  const colourMenu = $('#colour-menu');
+  const colourButton = $('#text-colour');
+  let colourRange = null;
+
+  colourMenu.innerHTML =
+    '<p class="menu-label">Text colour</p><div class="colour-row">' +
+    TEXT_COLOURS.map(([name, c]) => `<button class="colour-swatch${c ? '' : ' default'}" data-text-colour="${c || ''}" title="${name}" aria-label="${name}" style="--swatch:${c || 'var(--text)'}">A</button>`).join('') +
+    '</div><p class="menu-label">Highlight</p><div class="colour-row">' +
+    HIGHLIGHTS.map(([name, c]) => `<button class="colour-swatch highlight${c ? '' : ' default'}" data-highlight="${c || ''}" title="${name}" aria-label="${name} highlight" style="--swatch:${c || 'transparent'}">ab</button>`).join('') +
+    '</div>';
+
+  colourButton.addEventListener('mousedown', e => e.preventDefault());
+  colourButton.addEventListener('click', () => {
+    if (!colourMenu.hidden) return (colourMenu.hidden = true);
+    const sel = getSelection();
+    colourRange = sel.rangeCount && editor.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
+    closeCard();
+    colourMenu.hidden = false;
+    const r = colourButton.getBoundingClientRect();
+    colourMenu.style.top = r.bottom + 6 + 'px';
+    colourMenu.style.left = Math.max(12, Math.min(r.left - 10, window.innerWidth - colourMenu.offsetWidth - 12)) + 'px';
+  });
+  colourMenu.addEventListener('mousedown', e => e.preventDefault());
+  colourMenu.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    editor.focus();
+    const sel = getSelection();
+    if (colourRange) {
+      sel.removeAllRanges();
+      sel.addRange(colourRange);
+    }
+    document.execCommand('styleWithCSS', false, true);
+    if (btn.dataset.textColour !== undefined) {
+      const c = btn.dataset.textColour;
+      document.execCommand('foreColor', false, c || MARKER.color);
+      colourButton.style.setProperty('--last-colour', c || 'var(--text)');
+    } else {
+      const c = btn.dataset.highlight;
+      document.execCommand('hiliteColor', false, c || MARKER.background);
+    }
+    clearColourMarkers();
+    colourMenu.hidden = true;
+    saveCurrent();
+  });
+  document.addEventListener('mousedown', e => {
+    if (!colourMenu.hidden && !colourMenu.contains(e.target) && !colourButton.contains(e.target)) colourMenu.hidden = true;
+  });
+
+  function clearColourMarkers() {
+    for (const el of editor.querySelectorAll('[style], font[color]')) {
+      if (el.style.color === MARKER.color) el.style.removeProperty('color');
+      if (el.style.backgroundColor === MARKER.background) el.style.removeProperty('background-color');
+      if (el.tagName === 'FONT' && /^#010203$/i.test(el.getAttribute('color') || '')) el.removeAttribute('color');
+      if (!el.getAttribute('style')) el.removeAttribute('style');
+      if (/^(SPAN|FONT)$/.test(el.tagName) && !el.attributes.length) el.replaceWith(...el.childNodes);
+    }
+  }
+
+  /* ---------- Pictures and recordings ---------- */
+
+  Blocks.init({ editor, scroller: editorScroll, onChange: () => saveCurrent(), flash: m => flash(m) });
+  for (const [id, action] of [['#insert-image', () => Blocks.pickImages()], ['#record-audio', () => Blocks.startRecording()]]) {
+    const btn = $(id);
+    btn.addEventListener('mousedown', e => e.preventDefault());
+    btn.addEventListener('click', () => {
+      closeCard();
+      action();
+    });
+  }
+
+  /* ---------- Sharing: PDF, Word, text, Markdown, web page, backup ---------- */
+
+  const shareModal = $('#share-modal');
+  const shareReady = $('#share-ready');
+  const FORMAT_LABELS = { pdf: 'PDF', docx: 'Word document', txt: 'text file', md: 'Markdown file', html: 'web page', backup: 'backup' };
+  let preparedFile = null;
+  let shareToken = 0;
+
+  function closeShare() {
+    shareModal.hidden = true;
+    shareToken++;
+  }
+
+  $('#share-note').addEventListener('click', () => {
+    saveCurrent();
+    closeCard();
+    preparedFile = null;
+    shareReady.hidden = true;
+    shareModal.querySelectorAll('[data-format]').forEach(b => b.classList.remove('chosen'));
+    shareModal.hidden = false;
+  });
+  $('#close-share').addEventListener('click', closeShare);
+
+  async function prepareFile(format, btn) {
+    const token = ++shareToken;
+    shareModal.querySelectorAll('[data-format]').forEach(b => b.classList.toggle('chosen', b === btn));
+    shareReady.hidden = false;
+    shareReady.innerHTML = `<p class="share-status">Preparing the ${FORMAT_LABELS[format]}\u2026</p>`;
+    try {
+      const file = format === 'backup'
+        ? await Exporter.backup({ notes: notes.filter(n => !isBlank(n)), groups, dictionary: SpellCheck.list() })
+        : await Exporter.make(current(), format, pageForExport());
+      if (token !== shareToken) return;
+      preparedFile = file;
+      const size = file.size < 1024 * 1024 ? Math.max(1, Math.round(file.size / 1024)) + ' KB' : (file.size / 1048576).toFixed(1) + ' MB';
+      const canShare = Exporter.canShareFiles(file);
+      shareReady.innerHTML = `
+        <div class="ready-file"><span class="ext">${esc(file.name.split('.').pop().toUpperCase())}</span>
+          <span class="ready-name">${esc(file.name)}</span><span class="ready-size">${size}</span></div>
+        <div class="ready-actions">
+          ${canShare ? '<button class="action" data-deliver="share">Share\u2026</button>' : ''}
+          <button class="action${canShare ? ' subtle' : ''}" data-deliver="save">${canShare ? 'Download' : 'Save'}</button>
+        </div>`;
+    } catch (err) {
+      if (token !== shareToken) return;
+      shareReady.innerHTML = '<p class="share-status">Couldn\u2019t make that file. Try again, or pick another format.</p>';
+    }
+  }
+
+  shareModal.addEventListener('click', async e => {
+    if (e.target === shareModal) return closeShare();
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.format) return prepareFile(btn.dataset.format, btn);
+    if (btn.dataset.deliver && preparedFile) {
+      try {
+        const result = btn.dataset.deliver === 'share' ? await Exporter.share(preparedFile) : await Exporter.save(preparedFile);
+        if (result === 'saved') flash(`Saved \u201C${preparedFile.name}\u201D`);
+        if (result !== 'cancelled') closeShare();
+      } catch {
+        flash('Couldn\u2019t share that file from here. Try Download instead.');
+      }
+    }
+  });
+
+  $('#restore-backup').addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      try {
+        const data = await Exporter.readBackup(file);
+        notes = notes.filter(n => !isPristineWelcome(n));
+        let added = 0;
+        for (const n of data.notes) {
+          const i = notes.findIndex(x => x.id === n.id);
+          if (i < 0) { notes.push(n); added++; } else if (n.updated > notes[i].updated) notes[i] = n;
+          Cloud.saveNote(n);
+        }
+        const known = new Set(groups.map(g => g.id));
+        groups = [...groups, ...(data.groups || []).filter(g => !known.has(g.id))];
+        persistGroups();
+        SpellCheck.merge(data.dictionary || []);
+        persist();
+        renderList();
+        closeShare();
+        flash(`Restored ${data.notes.length} note${data.notes.length === 1 ? '' : 's'} (${added} new)`);
+      } catch {
+        flash('That file isn\u2019t an Inkwell backup.');
+      }
+    });
+    input.click();
+  });
 
   /* ---------- Status messages ---------- */
 
@@ -1301,8 +1567,9 @@
       const first = [...notes].sort((a, b) => b.updated - a.updated)[0];
       if (first) openNote(first.id);
       if (!showing) app.classList.remove('show-editor');
-    } else if (document.activeElement !== editor && editor.innerHTML !== note.html) {
+    } else if (document.activeElement !== editor && Media.serialize(editor) !== note.html) {
       editor.innerHTML = note.html;
+      Media.hydrate(editor);
       renderDate(note);
       scanSpelling();
     }

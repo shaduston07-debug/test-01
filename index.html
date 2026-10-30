@@ -16,7 +16,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=IM+Fell+English+SC&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,700;1,7..72,400&family=Caveat:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -65,12 +65,22 @@
           <button class="fmt-btn" data-cmd="italic" title="Italic (Ctrl/⌘ I)"><i>I</i></button>
           <button class="fmt-btn" data-cmd="underline" title="Underline (Ctrl/⌘ U)"><u>U</u></button>
           <button class="fmt-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+          <button class="fmt-btn colour-btn" id="text-colour" title="Text colour and highlight" aria-label="Text colour" aria-haspopup="menu">
+            <span class="colour-a">A</span><span class="colour-bar"></span>
+          </button>
           <span class="divider"></span>
           <button class="fmt-btn" data-cmd="formatBlock" data-arg="h2" title="Heading">Aa</button>
           <button class="fmt-btn" data-cmd="insertUnorderedList" title="Bulleted list">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="7" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="17" r="1"/><path d="M9 7h11M9 12h11M9 17h11"/></svg>
           </button>
           <button class="fmt-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+          <span class="divider"></span>
+          <button class="fmt-btn" id="insert-image" title="Add photos or pictures" aria-label="Add image">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-8 8"/></svg>
+          </button>
+          <button class="fmt-btn" id="record-audio" title="Record audio" aria-label="Record audio">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          </button>
         </div>
         <div class="toolbar-right">
           <label class="toggle" title="Show the definition and translations when you click a word">
@@ -78,6 +88,9 @@
             <span class="toggle-track"><span class="toggle-thumb"></span></span>
             <span class="toggle-label">Look up on click</span>
           </label>
+          <button class="icon-btn" id="share-note" title="Share or export this note (PDF, Word, text …)" aria-label="Share or export">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>
+          </button>
           <button class="icon-btn" id="move-note" title="Put this note in a group" aria-label="Put in a group" aria-haspopup="menu">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
           </button>
@@ -92,12 +105,49 @@
         <div id="editor" class="editor" contenteditable="true" spellcheck="false"
              data-placeholder="Start writing…" aria-label="Note body"></div>
       </div>
+      <div class="record-bar" id="record-bar" role="status" hidden>
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span class="rec-label">Recording</span>
+        <span class="rec-time">0:00</span>
+        <span class="rec-level" aria-hidden="true"><span></span></span>
+        <button class="text-btn" data-rec="cancel">Cancel</button>
+        <button class="text-btn strong" data-rec="stop">Done</button>
+      </div>
       <div class="status" id="status" role="status"></div>
     </main>
   </div>
 
   <!-- Word card: spelling suggestions + book-like definition -->
   <div class="word-card" id="word-card" role="dialog" aria-label="Word details" hidden></div>
+
+  <!-- Text colour and highlight -->
+  <div class="menu colour-menu" id="colour-menu" role="menu" hidden></div>
+
+  <!-- Share / export -->
+  <div class="modal-backdrop" id="share-modal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="share-title">
+      <header>
+        <h2 id="share-title">Share this note</h2>
+        <button class="icon-btn" id="close-share" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div class="format-grid">
+        <button data-format="pdf"><span class="ext">PDF</span>PDF document</button>
+        <button data-format="docx"><span class="ext">DOCX</span>Word document</button>
+        <button data-format="txt"><span class="ext">TXT</span>Plain text</button>
+        <button data-format="md"><span class="ext">MD</span>Markdown</button>
+        <button data-format="html"><span class="ext">HTML</span>Web page<small>keeps recordings</small></button>
+      </div>
+      <div class="share-ready" id="share-ready" hidden></div>
+      <h3 class="setting-section">All notes</h3>
+      <div class="backup-row">
+        <button class="action subtle" data-format="backup">Back up all notes</button>
+        <button class="action subtle" id="restore-backup">Restore a backup…</button>
+      </div>
+      <p class="modal-hint">A backup holds every note, group, recording and picture, so you can move them to another device or to the full-screen app.</p>
+    </div>
+  </div>
 
   <!-- "Put in a group" menu -->
   <div class="menu" id="group-menu" role="menu" hidden></div>
@@ -122,6 +172,32 @@
       </div>
       <p class="setting-label">Colour</p>
       <div class="accent-choice" id="accent-choice" role="radiogroup" aria-label="Colour"></div>
+
+      <h3 class="setting-section">Page</h3>
+      <p class="setting-label">Paper</p>
+      <div class="segmented" id="paper-choice" role="radiogroup" aria-label="Paper">
+        <button role="radio" data-paper="plain">Plain</button>
+        <button role="radio" data-paper="lines">Lines</button>
+        <button role="radio" data-paper="grid">Grid</button>
+        <button role="radio" data-paper="dots">Dots</button>
+      </div>
+      <p class="setting-label">Paper colour</p>
+      <div class="tint-choice" id="tint-choice" role="radiogroup" aria-label="Paper colour"></div>
+      <p class="setting-label">Font</p>
+      <div class="font-choice" id="font-choice" role="radiogroup" aria-label="Font"></div>
+      <p class="setting-label">Text size</p>
+      <div class="segmented" id="size-choice" role="radiogroup" aria-label="Text size">
+        <button role="radio" data-size="15" style="font-size:13px">A</button>
+        <button role="radio" data-size="17" style="font-size:15px">A</button>
+        <button role="radio" data-size="19" style="font-size:17px">A</button>
+        <button role="radio" data-size="22" style="font-size:19px">A</button>
+      </div>
+      <p class="setting-label">Page width</p>
+      <div class="segmented" id="width-choice" role="radiogroup" aria-label="Page width">
+        <button role="radio" data-width="640">Narrow</button>
+        <button role="radio" data-width="760">Medium</button>
+        <button role="radio" data-width="none">Full</button>
+      </div>
     </div>
   </div>
 
@@ -190,7 +266,13 @@
   <script src="js/lexicons/latin.js"></script>
   <script src="js/lexicons/greek.js"></script>
   <script src="js/lexicons/argot.js"></script>
+  <script src="js/lexicons/lingala.js"></script>
+  <script src="js/lexicons/tshiluba.js"></script>
   <script src="js/calc.js"></script>
+  <script src="js/media.js"></script>
+  <script src="js/blocks.js"></script>
+  <script src="js/docx.js"></script>
+  <script src="js/export.js"></script>
   <script src="js/sketch.js"></script>
   <script src="js/app.js"></script>
 </body>

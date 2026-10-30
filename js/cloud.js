@@ -21,6 +21,12 @@ const Cloud = (() => {
   const samplePromise = !available ? Promise.resolve(null) :
     window.claude.use('sample').catch(() => null);
 
+  // Image uploads (synced across devices) and file saving on claude.ai.
+  const assetsPromise = !available ? Promise.resolve(null) :
+    window.claude.use('assets').catch(() => null);
+  const downloadsPromise = !available ? Promise.resolve(null) :
+    window.claude.use('downloads').catch(() => null);
+
   /* ---------- Notes & personal dictionary ---------- */
 
   const notesCollection = s => s.db.doc(s.base + '/notes').collection('items');
@@ -101,8 +107,11 @@ const Cloud = (() => {
   }
 
   return {
+    onClaude: available,   // opened as a claude.ai page
     store: () => storePromise,
     sample: () => samplePromise,
+    assets: () => assetsPromise,
+    downloads: () => downloadsPromise,
     loadNotes,
     saveNote,
     deleteNote,

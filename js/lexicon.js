@@ -26,7 +26,10 @@ const Lexicon = (() => {
         const [word, pos, gloss, kind = ''] = item.trim().split('|');
         return { word, pos, gloss, kind, english, lang: id };
       });
-      for (const key of keys.split(',')) lang.byKey.set(key.trim().toLowerCase(), entries);
+      for (const raw of keys.split(',')) {
+        const key = raw.trim().toLowerCase();
+        lang.byKey.set(key, [...(lang.byKey.get(key) || []), ...entries]);
+      }
       for (const e of entries) {
         const folded = fold(lang, e.word);
         if (!lang.headwords.has(folded)) lang.headwords.set(folded, []);
