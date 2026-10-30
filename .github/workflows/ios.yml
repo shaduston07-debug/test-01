@@ -1,0 +1,68 @@
+# Builds an unsigned Inkwell.ipa on a Mac and attaches it to the
+# "ipa-latest" release. Install it with a sideloader (it signs the app).
+name: Build iPad app (.ipa)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/notes-spell-check-definitions-q0ppqf]
+    paths:
+      - index.html
+      - manifest.webmanifest
+      - css/**
+      - js/**
+      - vendor/**
+      - icons/**
+      - ios/**
+      - .github/workflows/ios.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Bundle the web app
+        run: |
+          mkdir -p ios/web
+          cp -R index.html manifest.webmanifest css js vendor icons ios/web/
+
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build (unsigned)
+        working-directory: ios
+        run: |
+          xcodebuild -project Inkwell.xcodeproj -scheme Inkwell -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+      - name: Package Inkwell.ipa
+        working-directory: ios
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Inkwell.app Payload/
+          zip -qry Inkwell.ipa Payload
+          ls -lh Inkwell.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Inkwell-ipa
+          path: ios/Inkwell.ipa
+
+      - name: Publish to the "ipa-latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ipa-latest --yes --cleanup-tag || true
+          gh release create ipa-latest ios/Inkwell.ipa \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Inkwell for iPad (unsigned .ipa)" \
+            --notes "Built from ${GITHUB_SHA::7}. Unsigned: install it with a sideloader (AltStore, Sideloadly, SideStore, ESign …), which signs it for your device."

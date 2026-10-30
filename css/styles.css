@@ -1545,6 +1545,15 @@ body.sketching { overflow: hidden; }
   .sketch-bar { padding-top: calc(8px + env(safe-area-inset-top, 0px)); }
 }
 
+/* The same in the installed iPad/iPhone app (ios/), which runs edge to edge. */
+html.native-app .sidebar-header { padding-top: calc(18px + env(safe-area-inset-top, 0px)); }
+html.native-app .toolbar { padding-top: calc(10px + env(safe-area-inset-top, 0px)); }
+html.native-app .sidebar { padding-left: env(safe-area-inset-left, 0px); }
+html.native-app .editor-pane { padding-right: env(safe-area-inset-right, 0px); }
+html.native-app .sidebar-footer { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+html.native-app .status { bottom: calc(22px + env(safe-area-inset-bottom, 0px)); }
+html.native-app .sketch-bar { padding-top: calc(8px + env(safe-area-inset-top, 0px)); }
+
 /* ---------- Phones ---------- */
 
 @media (max-width: 720px) {

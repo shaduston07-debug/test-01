@@ -315,10 +315,21 @@ const Exporter = (() => {
 
   /* ---------- Handing the file over ---------- */
 
-  const canShareFiles = file => !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
+  // In the installed iPad/iPhone app, files go to the system share sheet through
+  // a native bridge (WKWebView can't download files itself).
+  const nativeShare = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.inkwellShare;
+
+  async function shareNatively(file) {
+    const dataUrl = await Media.toDataUrl(file);
+    nativeShare.postMessage({ name: file.name, data: dataUrl.slice(dataUrl.indexOf(',') + 1) });
+    return 'shared';
+  }
+
+  const canShareFiles = file => !!nativeShare || !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
 
   // Must be called from a tap (share sheets need one).
   async function share(file) {
+    if (nativeShare) return shareNatively(file);
     try {
       await navigator.share({ files: [file], title: file.name });
       return 'shared';
@@ -329,6 +340,7 @@ const Exporter = (() => {
   }
 
   async function save(file) {
+    if (nativeShare) return shareNatively(file);   // the share sheet has "Save to Files"
     const downloads = await Cloud.downloads();
     if (downloads) {
       try {

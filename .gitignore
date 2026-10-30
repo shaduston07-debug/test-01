@@ -1,0 +1,6 @@
+# iOS build products (made by .github/workflows/ios.yml)
+ios/web/
+ios/build/
+ios/Payload/
+ios/*.xcodeproj/
+ios/*.ipa

@@ -1,0 +1,52 @@
+# Xcode project for the iPad/iPhone app, generated with XcodeGen
+# (https://github.com/yonaskolb/XcodeGen) by .github/workflows/ios.yml.
+# The web app is copied into ios/web before generating.
+name: Inkwell
+options:
+  bundleIdPrefix: app.inkwell
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  Inkwell:
+    type: application
+    platform: iOS
+    sources:
+      - path: Inkwell
+      - path: web
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: Inkwell
+        PRODUCT_BUNDLE_IDENTIFIER: app.inkwell.notes
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+    info:
+      path: Inkwell/Info.plist
+      properties:
+        CFBundleDisplayName: Inkwell
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSMicrophoneUsageDescription: Inkwell records audio clips into your notes.
+        NSCameraUsageDescription: Inkwell can take photos to add to your notes.
+        NSPhotoLibraryUsageDescription: Inkwell adds pictures from your library to your notes.
+        NSPhotoLibraryAddUsageDescription: Inkwell can save exported files and pictures to your library.
+        ITSAppUsesNonExemptEncryption: false
