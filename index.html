@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inkwell Notes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- Sidebar: list of notes -->
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <h1>Notes</h1>
+        <button class="icon-btn" id="new-note" title="New note" aria-label="New note">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10.5-10.5a2.83 2.83 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>
+        </button>
+      </header>
+      <div class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="Search" autocomplete="off">
+      </div>
+      <ul class="note-list" id="note-list"></ul>
+      <footer class="sidebar-footer">
+        <button class="link-btn" id="open-dictionary">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>
+          Personal Dictionary
+        </button>
+      </footer>
+    </aside>
+
+    <!-- Main editor -->
+    <main class="editor-pane">
+      <div class="toolbar">
+        <button class="icon-btn back-btn" id="back" title="All notes" aria-label="All notes">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <div class="format-group">
+          <button class="fmt-btn" data-cmd="bold" title="Bold (Ctrl/⌘ B)"><b>B</b></button>
+          <button class="fmt-btn" data-cmd="italic" title="Italic (Ctrl/⌘ I)"><i>I</i></button>
+          <button class="fmt-btn" data-cmd="underline" title="Underline (Ctrl/⌘ U)"><u>U</u></button>
+          <button class="fmt-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+          <span class="divider"></span>
+          <button class="fmt-btn" data-cmd="formatBlock" data-arg="h2" title="Heading">Aa</button>
+          <button class="fmt-btn" data-cmd="insertUnorderedList" title="Bulleted list">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="7" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="17" r="1"/><path d="M9 7h11M9 12h11M9 17h11"/></svg>
+          </button>
+          <button class="fmt-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+        </div>
+        <div class="toolbar-right">
+          <label class="toggle" title="Show a book-style definition when you click a word">
+            <input type="checkbox" id="define-toggle" checked>
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">Define on click</span>
+          </label>
+          <button class="icon-btn" id="delete-note" title="Delete note" aria-label="Delete note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="editor-scroll" id="editor-scroll">
+        <p class="note-date" id="note-date"></p>
+        <div id="editor" class="editor" contenteditable="true" spellcheck="false"
+             data-placeholder="Start writing…" aria-label="Note body"></div>
+      </div>
+      <div class="status" id="status" role="status"></div>
+    </main>
+  </div>
+
+  <!-- Word card: spelling suggestions + book-like definition -->
+  <div class="word-card" id="word-card" role="dialog" aria-label="Word details" hidden></div>
+
+  <!-- Personal dictionary manager -->
+  <div class="modal-backdrop" id="dictionary-modal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="dict-title">
+      <header>
+        <h2 id="dict-title">Personal Dictionary</h2>
+        <button class="icon-btn" id="close-dictionary" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <p class="modal-hint">Words here are always treated as spelled correctly — names, slang, jargon, anything that's yours.</p>
+      <form id="add-word-form" class="add-word">
+        <input id="add-word-input" type="text" placeholder="Add a word…" autocomplete="off" spellcheck="false">
+        <button type="submit" class="primary-btn">Add</button>
+      </form>
+      <ul class="word-list" id="word-list"></ul>
+    </div>
+  </div>
+
+  <script src="vendor/typo/typo.js"></script>
+  <script src="vendor/typo/en_US.js"></script>
+  <script src="js/spellcheck.js"></script>
+  <script src="js/definitions.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
