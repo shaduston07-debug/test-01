@@ -1,5 +1,5 @@
 // Inkwell Studio — app core: view, input & gestures, tools, rendering, persistence.
-import { $, $$, h, clamp, toast, makeCanvas, rgbToHex, canvasToBlob, dist, confirmDialog } from './util.js';
+import { $, $$, h, clamp, emptyRect, growRect, toast, makeCanvas, rgbToHex, canvasToBlob, dist, confirmDialog } from './util.js';
 import { ICONS } from './icons.js';
 import { Doc, Layer } from './doc.js';
 import { History, snapshot, pixelCmd, withUndo } from './history.js';
@@ -360,19 +360,24 @@ class App {
     window.addEventListener('keyup', (e) => { if (e.code === 'Space') this.spaceDown = false; });
   }
 
-  pt(e) {
-    const r = this.canvas.getBoundingClientRect();
+  // raw: optional {pressure, time} replacing the event's own values (see onMove)
+  pt(e, raw, rect) {
+    const r = rect || this.canvas.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const d = this.screenToDoc(sx, sy);
     let pressure = 1, tilt = 0;
     if (e.pointerType === 'pen') {
-      pressure = Math.pow(clamp(e.pressure || 0.01, 0.01, 1), this.settings.pressureGamma);
+      // iPadOS sometimes reports 0 pressure (pen-down, some coalesced samples): reuse the last real value
+      let pr = raw && raw.pressure != null ? raw.pressure : e.pressure;
+      if (!(pr > 0)) pr = this.penPressure || 0.35;
+      else if (e.buttons) this.penPressure = pr;
+      pressure = Math.pow(clamp(pr, 0.01, 1), this.settings.pressureGamma);
       let t = 0;
       if (typeof e.altitudeAngle === 'number' && e.altitudeAngle > 0) t = 1 - e.altitudeAngle / (Math.PI / 2);
       else if (e.tiltX || e.tiltY) t = Math.min(1, Math.hypot(e.tiltX, e.tiltY) / 90);
       tilt = clamp((t - 0.4) / 0.6, 0, 1);
     }
-    return { x: d.x, y: d.y, sx, sy, pressure, tilt, type: e.pointerType, time: e.timeStamp };
+    return { x: d.x, y: d.y, sx, sy, pressure, tilt, type: e.pointerType, time: raw && raw.time != null ? raw.time : e.timeStamp };
   }
 
   touchesDown() { let n = 0; for (const p of this.ptrs.values()) if (p.type === 'touch') n++; return n; }
@@ -388,6 +393,7 @@ class App {
     e.preventDefault();
     UI.closePopover();
     try { this.canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    this.lastMoveTime = e.timeStamp;
     const p = this.pt(e);
     this.ptrs.set(e.pointerId, { id: e.pointerId, type: e.pointerType, sx: p.sx, sy: p.sy, x0: p.sx, y0: p.sy, t0: performance.now() });
     if (e.pointerType === 'pen' && !this.penSeen) {
@@ -431,10 +437,11 @@ class App {
   onMove(e) {
     if (!this.doc) return;
     const rec = this.ptrs.get(e.pointerId);
+    const prevPen = this.penPressure;
     const p = this.pt(e);
     if (!rec) {
       // hover (mouse / Apple Pencil hover)
-      if (e.pointerType !== 'touch') { this.hover = p; this.requestRender('view'); }
+      if (e.pointerType !== 'touch') { this.hover = p; this.requestRender('cursor'); }
       return;
     }
     rec.sx = p.sx; rec.sy = p.sy;
@@ -453,10 +460,23 @@ class App {
       const tool = this.tools[this.active.tool];
       if (tool.coalesced && e.getCoalescedEvents) {
         const list = e.getCoalescedEvents();
-        if (list.length) { for (const ce of list) tool.move(this.pt(ce), ce); }
-        else tool.move(p, e);
+        if (list.length > 1) {
+          // Apple Pencil samples between frames. Some arrive with no pressure or with the
+          // frame's timestamp: fill those in from their neighbours so strokes stay even.
+          const r = this.canvas.getBoundingClientRect(), n = list.length;
+          const p0 = prevPen || e.pressure || 0.5, p1 = e.pressure > 0 ? e.pressure : p0;
+          const t0 = this.lastMoveTime != null && this.lastMoveTime < e.timeStamp ? this.lastMoveTime : e.timeStamp - n * 4;
+          let lastT = -Infinity;
+          for (let j = 0; j < n; j++) {
+            const ce = list[j], f = (j + 1) / n;
+            let tm = ce.timeStamp;
+            if (!(tm > lastT) || tm > e.timeStamp) tm = t0 + (e.timeStamp - t0) * f;
+            lastT = tm;
+            tool.move(this.pt(ce, { pressure: ce.pressure > 0 ? ce.pressure : p0 + (p1 - p0) * f, time: tm }, r), ce);
+          }
+        } else tool.move(list.length ? this.pt(list[0]) : p, e);
       } else tool.move && tool.move(p, e);
-      this.hover = p;
+      this.hover = p; this.lastMoveTime = e.timeStamp;
       this.requestRender('active');
     }
   }
@@ -638,10 +658,51 @@ class App {
   // ───────── rendering ─────────
   // kind: 'view' = only the viewport/overlays changed, 'active' = only the active layer
   // group changed (it is always drawn live), anything else = layer content changed.
+  // kind: 'view' (pan/zoom/overlays), 'active' (the stroke in progress changed), 'cursor'
+  // (only the brush outline moved) or nothing (content changed: caches are rebuilt).
+  // Frames that only need 'active' / 'cursor' repaint just the changed part of the screen.
   requestRender(kind) {
-    if (kind !== 'view' && kind !== 'active') this.contentVer++;
+    if (kind !== 'view' && kind !== 'active' && kind !== 'cursor') this.contentVer++;
+    if (kind === 'active' || kind === 'cursor') { if (this.pendingPartial !== false) this.pendingPartial = true; }
+    else this.pendingPartial = false;
     if (this.raf) return;
-    this.raf = requestAnimationFrame(() => { this.raf = 0; this.render(); });
+    this.raf = requestAnimationFrame(() => { this.raf = 0; this.renderFrame(); });
+  }
+  renderFrame() {
+    const partial = this.pendingPartial === true;
+    this.pendingPartial = null;
+    this.render(partial);
+  }
+
+  // Screen rectangle (device pixels) that changed since the last frame, or null to repaint all.
+  partialRect() {
+    const d = this.doc, t = this.tools[this.tool];
+    if (!d || this.timeline.playing || this.transform || this.gesture || (t && (t.overlay || t.overlayScreen))) return null;
+    if (this.canvas.width !== this.lastFrameW || this.canvas.height !== this.lastFrameH) return null;
+    const r = emptyRect(), dpr = this.dpr;
+    const f = this.engine.takeFrame();
+    if (f) {
+      const m = this.viewMatrix();
+      // pad: 2 document pixels (image filtering reaches neighbours) + 3 screen pixels
+      const pad = 2 + Math.max(0, 1.5 / this.view.zoom);
+      for (const [x, y] of [[f.x0 - pad, f.y0 - pad], [f.x1 + pad, f.y0 - pad], [f.x0 - pad, f.y1 + pad], [f.x1 + pad, f.y1 + pad]]) growRect(r, (m.a * x + m.c * y + m.e) * dpr, (m.b * x + m.d * y + m.f) * dpr, 3);
+    }
+    for (const c of [this.lastCursorRect, this.cursorRect()]) if (c) { growRect(r, c.x0, c.y0, 2); growRect(r, c.x1, c.y1, 2); }
+    if (!(r.x1 > r.x0 && r.y1 > r.y0)) return { x: 0, y: 0, w: 0, h: 0 };
+    const x = Math.max(0, Math.floor(r.x0)), y = Math.max(0, Math.floor(r.y0));
+    const w = Math.min(this.canvas.width, Math.ceil(r.x1)) - x, h = Math.min(this.canvas.height, Math.ceil(r.y1)) - y;
+    // a big change is cheaper as one full repaint
+    if (w * h > this.canvas.width * this.canvas.height * 0.6) return null;
+    return { x, y, w: Math.max(0, w), h: Math.max(0, h) };
+  }
+  // brush outline circle (device pixels), or null when it isn't shown
+  cursorRect() {
+    const painting = this.active && this.active.id != null;
+    if (!this.hover || !(painting ? this.settings.cursorPaint : this.settings.cursor) || !['brush', 'eraser', 'smudge'].includes(this.tool) || this.gesture) return null;
+    const b = painting && this.brushFor(this.paintToolName());
+    const pr = b && b.sizePressure ? 1 - b.sizePressure + b.sizePressure * clamp(this.hover.pressure || 0.5, 0, 1) : 1;
+    const r = Math.max(1.5, (this.getSize() * pr * this.view.zoom) / 2) + 2, dpr = this.dpr;
+    return { x0: (this.hover.sx - r) * dpr, y0: (this.hover.sy - r) * dpr, x1: (this.hover.sx + r) * dpr, y1: (this.hover.sy + r) * dpr, sx: this.hover.sx, sy: this.hover.sy, r: r - 2 };
   }
 
   // Layers below the active group are flattened into one cached image, and so are the
@@ -690,8 +751,20 @@ class App {
     return null;
   }
 
-  render() {
+  render(partial = false) {
     if (!this.doc) return;
+    const clip = partial ? this.partialRect() : null;
+    if (!clip) this.engine.takeFrame(); // full repaint: the stroke's pending area is covered
+    if (clip && (clip.w <= 0 || clip.h <= 0)) return;
+    const ctx = this.ctx;
+    ctx.save();
+    if (clip) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.beginPath(); ctx.rect(clip.x, clip.y, clip.w, clip.h); ctx.clip(); }
+    this.renderScene();
+    ctx.restore();
+    this.lastFrameW = this.canvas.width; this.lastFrameH = this.canvas.height;
+  }
+
+  renderScene() {
     const ctx = this.ctx, d = this.doc, v = this.view, dpr = this.dpr;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
@@ -714,8 +787,8 @@ class App {
       ctx.fillStyle = this.checker; ctx.fillRect(0, 0, d.width, d.height);
     }
     ctx.imageSmoothingEnabled = v.zoom < 2.5;
-    // cheap bilinear while drawing / navigating; nicer filtering once things are still
-    ctx.imageSmoothingQuality = this.gesture || this.pan1 || this.engine.active || this.transform ? 'low' : 'medium';
+    // cheap bilinear while navigating; painting keeps the same filtering (frames are partial)
+    ctx.imageSmoothingQuality = this.gesture || this.pan1 || this.transform ? 'low' : 'medium';
     if (this.engine.active) this.engine.updatePreview();
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, d.width, d.height); ctx.clip();
@@ -744,17 +817,15 @@ class App {
     t && t.overlay && t.overlay(ctx, px);
     // screen-space overlays
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const painting = this.active && this.active.id != null;
-    if (this.hover && (painting ? this.settings.cursorPaint : this.settings.cursor) && ['brush', 'eraser', 'smudge'].includes(this.tool) && !this.gesture) {
-      // while painting, show the size the current pressure actually produces
-      const b = painting && this.brushFor(this.paintToolName());
-      const pr = b && b.sizePressure ? 1 - b.sizePressure + b.sizePressure * clamp(this.hover.pressure || 0.5, 0, 1) : 1;
-      const r = (this.getSize() * pr * v.zoom) / 2;
-      ctx.beginPath(); ctx.arc(this.hover.sx, this.hover.sy, Math.max(1.5, r), 0, Math.PI * 2);
+    // brush outline; while painting it shows the size the current pressure produces
+    const cr = this.cursorRect();
+    if (cr) {
+      ctx.beginPath(); ctx.arc(cr.sx, cr.sy, cr.r, 0, Math.PI * 2);
       ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.stroke();
-      ctx.beginPath(); ctx.arc(this.hover.sx, this.hover.sy, Math.max(1.5, r) + 1, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(cr.sx, cr.sy, cr.r + 1, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.stroke();
     }
+    this.lastCursorRect = cr;
     t && t.overlayScreen && t.overlayScreen(ctx);
   }
 

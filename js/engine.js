@@ -50,7 +50,7 @@ export class StrokeEngine {
     if (this.grain) {
       this.pattern = this.bctx.createPattern(this.grain, 'repeat');
     }
-    this.bounds = emptyRect(); this.dirty = emptyRect();
+    this.bounds = emptyRect(); this.dirty = emptyRect(); this.frame = emptyRect();
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
     this.speed = 0; this.lastTime = null;
     this.sym = this.symTransforms(o.symmetry);
@@ -93,7 +93,9 @@ export class StrokeEngine {
   add(p) {
     if (!this.active) return;
     const l = this.target.toLocal(p.x, p.y);
-    const pt = { x: l.x, y: l.y, p: clamp(p.pressure, 0, 1), t: p.tilt || 0, v: 0 };
+    // light pressure smoothing: Apple Pencil readings jitter a little, which shows as beads
+    const pr = clamp(p.pressure, 0, 1), pp = this.lastRaw ? this.lastRaw.p + (pr - this.lastRaw.p) * 0.5 : pr;
+    const pt = { x: l.x, y: l.y, p: pp, t: p.tilt || 0, v: 0 };
     // pointer speed in screen px per ms, smoothed (drives speed dynamics)
     if (this.lastRaw && p.time != null && this.lastTime != null) {
       const dt = Math.max(1, p.time - this.lastTime);
@@ -199,14 +201,14 @@ export class StrokeEngine {
     if (!this.sym) {
       // common case: no symmetry — no arrays, no closures
       if (this.kind === 'smudge') this.smudgeStamp(x, y, size, alpha); else this.drawStamp(x, y, size, alpha, ang);
-      growRect(this.bounds, x, y, pad); growRect(this.dirty, x, y, pad);
+      growRect(this.bounds, x, y, pad); growRect(this.dirty, x, y, pad); growRect(this.frame, x, y, pad);
       return base;
     }
     for (const f of this.sym) {
       const [sx, sy, sa] = f(x, y, ang);
       if (this.kind === 'smudge') this.smudgeStamp(sx, sy, size, alpha);
       else this.drawStamp(sx, sy, size, alpha, sa);
-      growRect(this.bounds, sx, sy, pad); growRect(this.dirty, sx, sy, pad);
+      growRect(this.bounds, sx, sy, pad); growRect(this.dirty, sx, sy, pad); growRect(this.frame, sx, sy, pad);
     }
     return base;
   }
@@ -274,7 +276,7 @@ export class StrokeEngine {
   // QuickShape: replace the stroke with a clean path (local coords, each {x,y,p,t}).
   reshape(points) {
     if (!this.active || this.kind === 'smudge') return;
-    this.dirty = { ...this.bounds };
+    this.dirty = { ...this.bounds }; this.markFrame();
     this.bctx.setTransform(1, 0, 0, 1, 0, 0);
     this.bctx.clearRect(0, 0, this.W, this.H);
     this.carry = 0; this.travel = 1e9; this.travelNow = 1e9;
@@ -282,6 +284,20 @@ export class StrokeEngine {
     this.q = []; this.s = null;
   }
   avgPressure() { return this.lastRaw ? this.lastRaw.p : 1; }
+
+  // Area changed since the last screen frame, in document coordinates (null = nothing).
+  // Lets the app repaint just that part of the screen while a stroke is in progress.
+  markFrame() { const b = this.bounds, f = this.frame; if (!b || !f) return; f.x0 = Math.min(f.x0, b.x0); f.y0 = Math.min(f.y0, b.y0); f.x1 = Math.max(f.x1, b.x1); f.y1 = Math.max(f.y1, b.y1); }
+  takeFrame() {
+    const f = this.frame;
+    if (!f || !(f.x1 > f.x0 && f.y1 > f.y0)) return null;
+    this.frame = emptyRect();
+    const m = this.target && this.target.matrix;
+    if (!m) return f;
+    const out = emptyRect();
+    for (const [x, y] of [[f.x0, f.y0], [f.x1, f.y0], [f.x0, f.y1], [f.x1, f.y1]]) { const p = m.transformPoint({ x, y }); growRect(out, p.x, p.y, 1); }
+    return out;
+  }
 
   updatePreview() {
     if (!this.active || this.kind === 'smudge') return;
@@ -353,6 +369,7 @@ export class StrokeEngine {
       t.restore();
     }
     this.active = false;
+    this.markFrame();
     return this.o.noUndo ? null : pixelCmd(this.target.canvas, rect, label || this.kind, this.o.onChange, before);
   }
 
@@ -365,7 +382,7 @@ export class StrokeEngine {
         this.tctx.drawImage(getBackup(), r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
       }
     }
-    this.active = false;
+    this.active = false; this.markFrame();
   }
 }
 
