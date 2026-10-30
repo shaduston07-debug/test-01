@@ -15,6 +15,7 @@ const Sketch = (() => {
   const canvas = overlay.querySelector('canvas');
   const ctx = canvas.getContext('2d');
   const hint = overlay.querySelector('.sketch-hint');
+  const HINT = hint.innerHTML;
 
   let strokes = [];
   let undone = [];
@@ -124,6 +125,7 @@ const Sketch = (() => {
       ctx.fill(new Path2D(outline(s)));
     }
     ctx.globalAlpha = 1;
+    hint.innerHTML = HINT;
     hint.hidden = strokes.length > 0 || !!current;
   }
 
@@ -226,11 +228,19 @@ const Sketch = (() => {
         redraw();
         break;
       case 'clear':
-        if (strokes.length && confirm('Clear the whole sketch?')) {
-          strokes = [];
-          undone = [];
-          redraw();
+        // Second tap clears (pop-up confirms aren't available everywhere).
+        if (!strokes.length) break;
+        if (!btn.classList.contains('armed')) {
+          btn.classList.add('armed');
+          hint.hidden = false;
+          hint.textContent = 'Tap the bin again to clear the sketch';
+          setTimeout(() => { btn.classList.remove('armed'); redraw(); }, 3000);
+          break;
         }
+        btn.classList.remove('armed');
+        strokes = [];
+        undone = [];
+        redraw();
         break;
       case 'done':
         return close(strokes);

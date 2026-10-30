@@ -12,7 +12,9 @@ A notes app in the style of Apple Notes, with a few extras:
 
 ## Running it
 
-You don't need to build or install anything. Open `index.html` in a browser (double-clicking it works). Notes and your personal dictionary are saved in the browser's local storage.
+**On a tablet or phone:** open the published version at https://claude.ai/artifact/BJ7rWPs8uzsiPmKZ5s4N4D (sign in to claude.ai). There, notes and your personal dictionary are saved to your claude.ai account, so they're on every device. claude.ai pages can't reach outside websites, so Claude writes the definitions and the extra Old Norse translations instead. The first time, the page asks your permission.
+
+**On a computer:** you don't need to build or install anything. Open `index.html` in a browser (double-clicking it works). Notes and your personal dictionary are saved in the browser's local storage.
 
 To serve it instead, for example to open it on your phone:
 

@@ -398,27 +398,52 @@ const Norse = (() => {
     return found;
   }
 
-  function wiktionary(word) {
+  // More translations: Wiktionary when the browser can reach it, otherwise Claude.
+  // Resolves { source, words }.
+  function more(word) {
     const key = lemmas(word)[0];
     if (!wikiCache.has(key)) {
-      const request = (async () => {
-        const page = await wikitext(key);
-        const englishSection = (page.split(/^==English==\s*$/m)[1] || '').split(/^==[^=]/m)[0];
-        let results = parseTranslations(englishSection);
-        if (!results.length) {
-          // Big entries keep their tables on a separate "/translations" page.
-          try { results = parseTranslations(await wikitext(key + '/translations')); } catch { /* none */ }
-        }
-        const seen = new Set();
-        return results.filter(r => !seen.has(r.word) && seen.add(r.word));
-      })().catch(err => {
-        wikiCache.delete(key);
-        throw err;
-      });
+      const request = fromWiktionary(key)
+        .then(words => ({ source: 'Wiktionary', words }))
+        .catch(async err => {
+          const sample = await Cloud.sample();
+          if (!sample) throw err;
+          return { source: 'Claude', words: await fromClaude(sample, key) };
+        })
+        .catch(err => {
+          wikiCache.delete(key);
+          throw err;
+        });
       wikiCache.set(key, request);
     }
     return wikiCache.get(key);
   }
 
-  return { english, similar, wiktionary, plain, fold, KIND_LABEL };
+  async function fromWiktionary(key) {
+    const page = await wikitext(key);
+    const englishSection = (page.split(/^==English==\s*$/m)[1] || '').split(/^==[^=]/m)[0];
+    let results = parseTranslations(englishSection);
+    if (!results.length) {
+      // Big entries keep their tables on a separate "/translations" page.
+      try { results = parseTranslations(await wikitext(key + '/translations')); } catch { /* none */ }
+    }
+    const seen = new Set();
+    return results.filter(r => !seen.has(r.word) && seen.add(r.word));
+  }
+
+  async function fromClaude(sample, word) {
+    const reply = await sample.json(
+      `Give Old Norse translations of the English word "${word}".
+Use standard normalized Old Norse spelling (with ð, þ, ǫ, æ, ø and accents) in dictionary form.
+Prefer words attested in the sagas or in Eddic and skaldic poetry; include poetic synonyms (heiti) or kennings when they exist.
+Reply with JSON only: {"words": [{"word": "...", "pos": "m. | f. | n. | adj. | v. | adv. | empty", "gloss": "short English meaning", "kind": "prose | poetic | kenning"}]}
+At most 8 words. If Old Norse has no good equivalent, reply {"words": []}.`,
+      { modelTier: 'default' });
+    const kinds = { prose: '', poetic: 'p', kenning: 'k' };
+    return ((reply && reply.words) || [])
+      .filter(w => w && typeof w.word === 'string' && w.word.trim())
+      .map(w => ({ word: w.word.trim(), pos: w.pos || '', gloss: w.gloss || '', kind: kinds[w.kind] ?? '' }));
+  }
+
+  return { english, similar, more, plain, fold, KIND_LABEL };
 })();

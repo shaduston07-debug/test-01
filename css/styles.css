@@ -24,7 +24,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #1e1e1e;
     --sidebar: #262624;
     --sidebar-border: #3a3936;
@@ -42,6 +42,25 @@
     --rubric: #e08b6d;
     color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #1e1e1e;
+  --sidebar: #262624;
+  --sidebar-border: #3a3936;
+  --text: #ececec;
+  --muted: #98989d;
+  --accent: #f0be1d;
+  --accent-soft: #5b4a12;
+  --selected: #6a5513;
+  --hover: #33322f;
+  --misspelled: #ff6159;
+  --paper: #2a251d;
+  --paper-edge: #4a3f2c;
+  --ink: #efe6d2;
+  --ink-soft: #bba98a;
+  --rubric: #e08b6d;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -81,8 +100,7 @@ svg {
 .app {
   display: grid;
   grid-template-columns: 300px 1fr;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
 }
 
 .sidebar {
@@ -118,6 +136,7 @@ svg {
   color: var(--accent);
 }
 .icon-btn:hover { background: var(--hover); }
+.icon-btn.armed { background: var(--misspelled); color: #fff; }
 .icon-btn.small { width: 26px; height: 26px; color: var(--muted); }
 .icon-btn.small svg { width: 14px; height: 14px; }
 

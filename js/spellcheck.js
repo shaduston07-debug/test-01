@@ -128,6 +128,21 @@ const SpellCheck = (() => {
     return true;
   }
 
+  // Add words saved elsewhere (another device) in one go.
+  function merge(words) {
+    let added = false;
+    for (const w of words) {
+      const word = normalize(String(w).trim());
+      if (word && !personal.has(word.toLowerCase())) {
+        personal.set(word.toLowerCase(), word);
+        added = true;
+      }
+    }
+    suggestCache.clear();
+    if (added) savePersonal();
+    else listeners.forEach(fn => fn());
+  }
+
   function removePersonal(word) {
     personal.delete(word.toLowerCase());
     suggestCache.clear();
@@ -149,6 +164,7 @@ const SpellCheck = (() => {
     isCorrect,
     suggest,
     addPersonal,
+    merge,
     removePersonal,
     ignore,
     list,

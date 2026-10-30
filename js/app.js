@@ -63,6 +63,7 @@
     note.text = editor.innerText;
     note.updated = Date.now();
     persist();
+    Cloud.saveNote(note);
     renderList();
     renderDate(note);
   }
@@ -74,6 +75,7 @@
     if (note && isBlank(note)) {
       notes = notes.filter(n => n !== note);
       persist();
+      Cloud.deleteNote(note.id);
     }
   }
 
@@ -369,17 +371,17 @@
   function showNorse(original, token = cardToken) {
     active.norseFor = original;
     active.wiki = undefined;
-    // Words the glossary doesn't know are looked up on Wiktionary straight away.
-    if (!Norse.english(original).length) loadWiktionary(token);
+    // Words the glossary doesn't know are looked up further straight away.
+    if (!Norse.english(original).length) loadMore(token);
     else renderNorse();
   }
 
-  function loadWiktionary(token = cardToken) {
+  function loadMore(token = cardToken) {
     active.wiki = 'loading';
     renderNorse();
-    Norse.wiktionary(active.norseFor).then(list => {
+    Norse.more(active.norseFor).then(result => {
       if (token !== cardToken) return;
-      active.wiki = list;
+      active.wiki = result;
       renderNorse();
     }).catch(() => {
       if (token !== cardToken) return;
@@ -396,20 +398,22 @@
     const found = Norse.english(original);
     const lookalikes = found.length ? [] : Norse.similar(original);
     const known = new Set([...found, ...lookalikes].map(e => e.word));
-    const wiki = Array.isArray(active.wiki) ? active.wiki.filter(e => !known.has(e.word)) : [];
+    const result = active.wiki && active.wiki.words ? active.wiki : null;
+    const extra = result ? result.words.filter(e => !known.has(e.word)) : [];
 
     let wikiSection;
     if (active.wiki === undefined) {
-      wikiSection = '<button class="action subtle" data-action="wiki">More from Wiktionary</button>';
+      wikiSection = '<button class="action subtle" data-action="wiki">More translations</button>';
     } else if (active.wiki === 'loading') {
-      wikiSection = '<p class="muted serif">Searching Wiktionary…</p>';
+      wikiSection = '<p class="muted serif">Searching for more translations\u2026</p>';
     } else if (active.wiki === 'error') {
-      wikiSection = '<p class="muted serif">Wiktionary is out of reach — check your internet connection.</p>' +
+      wikiSection = '<p class="muted serif">More translations are out of reach \u2014 check your internet connection.</p>' +
         '<button class="action subtle" data-action="wiki">Try again</button>';
-    } else if (wiki.length) {
-      wikiSection = norseGroup('From Wiktionary', wiki, chosen);
+    } else if (extra.length) {
+      wikiSection = norseGroup('From ' + result.source, extra, chosen) +
+        (result.source === 'Claude' ? '<p class="norse-note">Suggested by Claude. Worth checking against a dictionary before you rely on them.</p>' : '');
     } else {
-      wikiSection = `<p class="muted serif">${known.size ? 'Wiktionary has nothing more.' : `No Old Norse word for “${esc(original)}” was found.`}</p>`;
+      wikiSection = `<p class="muted serif">${known.size ? 'No further translations found.' : `No Old Norse word for \u201C${esc(original)}\u201D was found.`}</p>`;
     }
 
     const scroll = card.scrollTop;
@@ -584,7 +588,7 @@
         showDefinition(active.word);
         break;
       case 'wiki':
-        loadWiktionary();
+        loadMore();
         break;
       case 'restore':
         replaceActive(active.norse.dataset.original);
@@ -710,12 +714,27 @@
     openNote((blank || createNote()).id, { focus: true });
   });
 
-  $('#delete-note').addEventListener('click', () => {
+  // Pop-up confirm dialogs don't work everywhere (claude.ai blocks them), so
+  // destructive buttons ask for a second tap instead.
+  function confirmByTapping(btn, message) {
+    if (btn.classList.contains('armed')) {
+      btn.classList.remove('armed');
+      clearTimeout(btn.armTimer);
+      return true;
+    }
+    btn.classList.add('armed');
+    flash(message);
+    btn.armTimer = setTimeout(() => btn.classList.remove('armed'), 3000);
+    return false;
+  }
+
+  $('#delete-note').addEventListener('click', e => {
     const note = current();
     if (!note) return;
-    if (!isBlank(note) && !confirm('Delete this note?')) return;
+    if (!isBlank(note) && !confirmByTapping(e.currentTarget, 'Tap the bin again to delete this note')) return;
     notes = notes.filter(n => n !== note);
     persist();
+    Cloud.deleteNote(note.id);
     currentId = null;
     const next = [...notes].sort((a, b) => b.updated - a.updated)[0];
     if (next) {
@@ -784,9 +803,16 @@
     input.focus();
   });
 
+  let dictionarySynced = false;
+  let lastSavedWords = '';
   SpellCheck.onChange(() => {
     scanSpelling();
     if (!dictModal.hidden) renderDictionary();
+    const words = SpellCheck.list();
+    if (dictionarySynced && JSON.stringify(words) !== lastSavedWords) {
+      lastSavedWords = JSON.stringify(words);
+      Cloud.saveDictionary(words);
+    }
   });
 
   /* ---------- Status messages ---------- */
@@ -818,7 +844,8 @@
     tmp.innerHTML = WELCOME;
     tmp.style.cssText = 'position:absolute;left:-9999px;white-space:pre-wrap';
     document.body.append(tmp);
-    createNote(WELCOME.trim(), tmp.innerText);
+    createNote(WELCOME.trim(), tmp.innerText).welcome = true;
+    persist();
     tmp.remove();
   }
 
@@ -831,6 +858,51 @@
   } else {
     flash('Loading dictionary…', true);
   }
+  /* ---------- Your claude.ai account (when opened there) ---------- */
+
+  const isPristineWelcome = n => n.welcome && n.html === WELCOME.trim();
+
+  // Bring in notes saved from other devices, and upload ones only this device has.
+  Cloud.loadNotes().then(remote => {
+    if (!remote) return;
+    if (remote.length) notes = notes.filter(n => !isPristineWelcome(n));
+    for (const r of remote) {
+      const i = notes.findIndex(n => n.id === r.id);
+      if (i < 0) notes.push(r);
+      else if (r.updated > notes[i].updated) notes[i] = r;
+    }
+    for (const n of notes) {
+      const r = remote.find(x => x.id === n.id);
+      if ((!r || n.updated > r.updated) && !isPristineWelcome(n)) Cloud.saveNote(n);
+    }
+    persist();
+    const showing = app.classList.contains('show-editor');
+    const note = current();
+    if (!note) {
+      const first = [...notes].sort((a, b) => b.updated - a.updated)[0];
+      if (first) openNote(first.id);
+      if (!showing) app.classList.remove('show-editor');
+    } else if (document.activeElement !== editor && editor.innerHTML !== note.html) {
+      editor.innerHTML = note.html;
+      renderDate(note);
+      scanSpelling();
+    }
+    renderList();
+  }).catch(() => flash('Couldn\u2019t load the notes saved to your account. Notes on this device still work.'));
+
+  Cloud.loadDictionary().then(words => {
+    if (words === null) return;
+    lastSavedWords = JSON.stringify(words);
+    dictionarySynced = true;
+    SpellCheck.merge(words);
+  }).catch(() => { /* the word list on this device still works */ });
+
+  Cloud.onError(err => {
+    if (err && err.code === 'invalid_argument') flash('This note is too big to save to your account. It\u2019s still saved on this device.');
+    else if (err && err.code === 'quota_exceeded') flash('Your account storage for this app is full. Delete some notes to make room.');
+    else flash('Couldn\u2019t save to your account just now. It\u2019s still saved on this device.');
+  });
+
   // Parse the dictionary after the first paint so the app appears instantly.
   setTimeout(() => {
     SpellCheck.init();

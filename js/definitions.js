@@ -8,15 +8,18 @@ const Definitions = (() => {
   const cache = new Map();
 
   // Resolves to an entry object, or null when the word isn't in the dictionary.
-  // Rejects on network failure.
+  // Rejects when no source can be reached.
   function lookup(word) {
-    const key = word.toLowerCase().replace(/[‘’]/g, "'");
+    const key = word.toLowerCase().replace(/[\u2018\u2019]/g, "'");
     if (!cache.has(key)) {
-      const request = fetch(API + encodeURIComponent(key))
-        .then(res => {
-          if (res.status === 404) return null;
-          if (!res.ok) throw new Error(`Dictionary returned ${res.status}`);
-          return res.json().then(toEntry);
+      const request = fromApi(key)
+        .catch(() => undefined) // unreachable: try Claude instead
+        .then(async entry => {
+          if (entry) return entry;
+          const sample = await Cloud.sample();
+          if (sample) return fromClaude(sample, key);
+          if (entry === null) return null;
+          throw new Error('No dictionary reachable');
         })
         .catch(err => {
           cache.delete(key); // allow a retry later
@@ -25,6 +28,41 @@ const Definitions = (() => {
       cache.set(key, request);
     }
     return cache.get(key);
+  }
+
+  function fromApi(key) {
+    return fetch(API + encodeURIComponent(key)).then(res => {
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Dictionary returned ${res.status}`);
+      return res.json().then(toEntry);
+    });
+  }
+
+  // Inside claude.ai the page can't reach dictionaryapi.dev, so Claude writes the entry.
+  async function fromClaude(sample, word) {
+    const reply = await sample.json(
+      `Write a dictionary entry for the English word "${word}", as a classic printed dictionary would.
+Reply with JSON only, in this shape:
+{"word": "${word}", "phonetic": "IPA between slashes, or empty", "origin": "one-sentence etymology, or empty",
+ "meanings": [{"pos": "noun | verb | adjective | adverb | ...", "senses": [{"text": "definition", "example": "short example sentence, or empty"}], "synonyms": ["up to 6"], "antonyms": ["up to 4"]}]}
+Give at most 4 senses per part of speech. If "${word}" is not an English word, reply {"word": "${word}", "meanings": []}.`,
+      { modelTier: 'quick' });
+    if (!reply || !Array.isArray(reply.meanings) || !reply.meanings.length) return null;
+    return {
+      word: reply.word || word,
+      phonetic: reply.phonetic || '',
+      audio: '',
+      origin: reply.origin || '',
+      meanings: reply.meanings.map(m => ({
+        pos: m.pos || '',
+        senses: (m.senses || []).slice(0, MAX_SENSES).map(x => ({ text: x.text, example: x.example })),
+        more: 0,
+        synonyms: (m.synonyms || []).slice(0, 6),
+        antonyms: (m.antonyms || []).slice(0, 4),
+      })),
+      source: '',
+      by: 'Written by Claude',
+    };
   }
 
   // Merge the API's (often several) results into one tidy entry.
@@ -106,6 +144,7 @@ const Definitions = (() => {
         <footer class="colophon">
           <span aria-hidden="true">❦</span>
           ${entry.source ? `<a href="${escape(entry.source)}" target="_blank" rel="noopener">Wiktionary</a>` : ''}
+          ${entry.by ? `<span>${escape(entry.by)}</span>` : ''}
         </footer>
       </article>`;
   }
