@@ -40,6 +40,7 @@ export async function saveDoc(data, meta) {
   });
 }
 export const loadDoc = (id) => tx('docs', 'readonly', (s) => req(s.get(id)));
+export const saveMeta = (meta) => tx('meta', 'readwrite', (s) => req(s.put(meta)));
 export const listDocs = () => tx('meta', 'readonly', (s) => req(s.getAll()));
 export async function deleteDoc(id) {
   const db = await open();

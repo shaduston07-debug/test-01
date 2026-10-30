@@ -118,6 +118,7 @@ export class Doc {
     this.webtoon = Object.assign({ sliceHeight: 1280, gutter: 60 }, o.webtoon || {});
     this._tmp = [];
     this.created = o.created || Date.now();
+    this.folder = o.folder || null;
   }
 
   static create({ name, mode, width, height, bg }) {
@@ -350,7 +351,7 @@ export class Doc {
     const out = {
       v: 1, id: this.id, name: this.name, mode: this.mode, width: this.width, height: this.height,
       bg: this.bg, bgVisible: this.bgVisible, active: this.active, playhead: this.playhead,
-      anim: this.anim, webtoon: this.webtoon, created: this.created, layers: [], tracks: [],
+      anim: this.anim, webtoon: this.webtoon, created: this.created, folder: this.folder, layers: [], tracks: [],
     };
     for (const l of this.layers) {
       const o = {}; for (const k of LAYER_PROPS) o[k] = l[k];

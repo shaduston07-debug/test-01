@@ -116,6 +116,7 @@ class App {
     this.opSlider = UI.vslider(this, $('#sl-opacity'), 'opacity');
     $('#gal-new').onclick = () => UI.newDocDialog(this);
     $('#gal-import').onclick = () => UI.importAny(this);
+    $('#gal-folder').onclick = () => UI.createFolderFlow(this);
     $('#gal-settings').onclick = () => UI.openSettings(this);
     for (const c of $$('.mode-card')) c.onclick = () => UI.newDocDialog(this, c.dataset.mode);
     this.updateColorChip();
@@ -183,7 +184,7 @@ class App {
       const s = Math.min(1, 420 / Math.max(d.width, d.mode === 'webtoon' ? d.width * 1.4 : d.height));
       const th = d.flatten({ width: Math.max(1, d.width * s), height: Math.max(1, (d.mode === 'webtoon' ? Math.min(d.height, d.width * 1.4) : d.height) * s), frame: d.playhead });
       const thumb = await canvasToBlob(th, 'image/jpeg', 0.8);
-      await store.saveDoc(data, { id: d.id, name: d.name, mode: d.mode, width: d.width, height: d.height, updated: Date.now(), created: d.created, thumb });
+      await store.saveDoc(data, { id: d.id, name: d.name, mode: d.mode, width: d.width, height: d.height, updated: Date.now(), created: d.created, folder: d.folder || null, thumb });
       this.dirtySave = false;
     } catch (e) {
       console.error(e);

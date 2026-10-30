@@ -1184,33 +1184,179 @@ export function moveTool(app) {
 
 // ───────── gallery ─────────
 let thumbURLs = [];
+// ───────── gallery folders (Procreate-style stacks) ─────────
+// Folders live in prefs; each canvas's gallery entry (meta) records its folder id.
+const getFolders = () => store.prefs.get('folders', []);
+const setFolders = (f) => store.prefs.set('folders', f);
+async function newFolder(name) {
+  const f = { id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: name || 'Folder', created: Date.now() };
+  setFolders([...getFolders(), f]);
+  return f;
+}
+async function moveToFolder(app, m, folderId) {
+  m.folder = folderId || null;
+  await store.saveMeta(m);
+  if (app.doc && app.doc.id === m.id) app.doc.folder = m.folder;
+}
+
 export async function renderGallery(app) {
-  const grid = $('#gal-grid');
+  const grid = $('#gal-grid'), crumb = $('#gal-crumb');
   for (const u of thumbURLs) URL.revokeObjectURL(u);
   thumbURLs = [];
   let metas = [];
   try { metas = await store.listDocs(); } catch (e) { console.warn(e); }
   metas.sort((a, b) => b.updated - a.updated);
+  let folders = getFolders();
+  const known = new Set(folders.map((f) => f.id));
+  for (const m of metas) if (m.folder && !known.has(m.folder)) m.folder = null; // folder was deleted
+  if (app.currentFolder && !known.has(app.currentFolder)) app.currentFolder = null;
+  const cur = folders.find((f) => f.id === app.currentFolder) || null;
   grid.innerHTML = '';
-  if (!metas.length) { grid.append(h('div', { class: 'gal-empty' }, 'No artwork yet — pick a mode above or tap ＋ New.')); return; }
-  for (const m of metas) {
-    const url = m.thumb ? URL.createObjectURL(m.thumb) : '';
-    if (url) thumbURLs.push(url);
-    const card = h('div', { class: 'gal-card' },
-      h('button', { class: 'gal-thumb', style: { backgroundImage: url ? `url(${url})` : '', width: '100%', display: 'block' }, onclick: () => openSaved(app, m.id) }),
+  const thumbURL = (m) => { if (!m.thumb) return ''; const u = URL.createObjectURL(m.thumb); thumbURLs.push(u); return u; };
+
+  // breadcrumb inside a folder (also a drop target to move artwork back out)
+  crumb.hidden = !cur;
+  crumb.innerHTML = '';
+  if (cur) {
+    const back = h('button', { class: 'crumb-back', onclick: () => { app.currentFolder = null; renderGallery(app); } }, '‹ Gallery');
+    back.dataset.drop = 'root';
+    crumb.append(back, h('span', { class: 'crumb-sep' }, '/'), h('b', {}, cur.name),
+      h('button', { class: 'pill', onclick: () => folderMenu(app, cur) }, '⋯'));
+  }
+
+  const docs = metas.filter((m) => (m.folder || null) === (cur ? cur.id : null));
+  if (!cur) {
+    for (const f of folders) {
+      const inside = metas.filter((m) => m.folder === f.id);
+      const stack = h('button', { class: 'gal-thumb gal-stack', onclick: () => { app.currentFolder = f.id; renderGallery(app); } });
+      inside.slice(0, 3).reverse().forEach((m, i, arr) => {
+        const u = thumbURL(m);
+        stack.append(h('span', { class: 'stack-page', style: { backgroundImage: u ? `url(${u})` : '', transform: `rotate(${(arr.length - 1 - i) * -4}deg) translate(${(arr.length - 1 - i) * -6}px, ${(arr.length - 1 - i) * 3}px)` } }));
+      });
+      if (!inside.length) stack.append(h('span', { class: 'stack-empty', html: ICONS.folder }));
+      const card = h('div', { class: 'gal-card folder' }, stack,
+        h('button', { class: 'gal-more', onclick: () => folderMenu(app, f) }, '⋯'),
+        h('div', { class: 'gal-meta' }, h('b', {}, f.name), h('span', { class: 'badge' }, `${inside.length}`)),
+        h('small', { class: 'hint' }, inside.length === 1 ? '1 artwork' : `${inside.length} artworks`));
+      card.dataset.drop = 'folder:' + f.id;
+      grid.append(card);
+    }
+  }
+  if (!docs.length && !(!cur && folders.length)) {
+    grid.append(h('div', { class: 'gal-empty' }, cur ? 'This folder is empty — drag artwork onto it, or tap ＋ New to create one here.' : 'No artwork yet — pick a mode above or tap ＋ New.'));
+  }
+  for (const m of docs) {
+    const url = thumbURL(m);
+    const thumb = h('button', { class: 'gal-thumb', style: { backgroundImage: url ? `url(${url})` : '', width: '100%', display: 'block' } });
+    const card = h('div', { class: 'gal-card' }, thumb,
       h('button', { class: 'gal-more', onclick: () => galleryMenu(app, m) }, '⋯'),
       h('div', { class: 'gal-meta' }, h('b', {}, m.name), h('span', { class: 'badge ' + m.mode }, { paint: 'Illustration', animate: 'Animation', webtoon: 'Webtoon' }[m.mode] || m.mode)),
       h('small', { class: 'hint' }, `${m.width}×${m.height} · ${new Date(m.updated).toLocaleDateString()}`));
+    card.dataset.drop = 'doc:' + m.id;
+    bindGalleryDrag(app, card, thumb, m, metas);
     grid.append(card);
   }
 }
 
-async function openSaved(app, id) {
+// tap = open · hold & drag = move onto a folder, onto another artwork (new folder) or onto "‹ Gallery"
+function bindGalleryDrag(app, card, thumb, m, metas) {
+  thumb.addEventListener('pointerdown', (e) => {
+    const st = { x: e.clientX, y: e.clientY, lifted: false, cancelled: false };
+    let ghost = null, over = null;
+    st.timer = setTimeout(() => {
+      if (st.cancelled) return;
+      st.lifted = true;
+      const r = card.getBoundingClientRect();
+      ghost = card.cloneNode(true); ghost.classList.add('gal-ghost');
+      Object.assign(ghost.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px' });
+      document.body.append(ghost); card.classList.add('dragging');
+      st.dx = e.clientX - r.left; st.dy = e.clientY - r.top;
+      navigator.vibrate && navigator.vibrate(8);
+    }, e.pointerType === 'mouse' ? 160 : 260);
+    const move = (ev) => {
+      if (!st.lifted) { if (Math.hypot(ev.clientX - st.x, ev.clientY - st.y) > 8) { st.cancelled = true; clearTimeout(st.timer); } return; }
+      ev.preventDefault();
+      ghost.style.left = ev.clientX - st.dx + 'px'; ghost.style.top = ev.clientY - st.dy + 'px';
+      ghost.hidden = true;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      ghost.hidden = false;
+      const t = el && el.closest('[data-drop]');
+      if (over && over !== t) over.classList.remove('drop-over');
+      over = t && t !== card ? t : null;
+      if (over) over.classList.add('drop-over');
+    };
+    const block = (ev) => { if (st.lifted) ev.preventDefault(); };
+    const up = async () => {
+      clearTimeout(st.timer);
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
+      document.removeEventListener('touchmove', block);
+      if (!st.lifted) { if (!st.cancelled) openSaved(app, m); return; }
+      ghost.remove(); card.classList.remove('dragging');
+      if (!over) return;
+      over.classList.remove('drop-over');
+      const [kind, id] = over.dataset.drop.split(':');
+      if (kind === 'root') await moveToFolder(app, m, null);
+      else if (kind === 'folder') await moveToFolder(app, m, id);
+      else if (kind === 'doc') {
+        const other = metas.find((x) => x.id === id);
+        const name = await promptDialog('New folder name', 'Folder');
+        if (name == null) return;
+        const f = await newFolder(name);
+        await moveToFolder(app, m, f.id); if (other) await moveToFolder(app, other, f.id);
+        toast(`Created "${f.name}"`);
+      }
+      renderGallery(app);
+    };
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+    document.addEventListener('touchmove', block, { passive: false });
+  });
+}
+
+export async function createFolderFlow(app) {
+  const name = await promptDialog('New folder', 'Folder');
+  if (name == null) return;
+  await newFolder(name.trim() || 'Folder');
+  renderGallery(app);
+}
+
+function folderMenu(app, f) {
+  dialog({
+    title: f.name, body: '',
+    actions: [
+      { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename folder', f.name); if (!n) return; setFolders(getFolders().map((x) => (x.id === f.id ? { ...x, name: n } : x))); renderGallery(app); } },
+      { label: 'Delete folder', danger: true, onClick: async () => {
+        if (!(await confirmDialog(`Delete the folder "${f.name}"? Its artwork moves back to the Gallery.`, 'Delete folder', true))) return;
+        for (const m of (await store.listDocs()).filter((x) => x.folder === f.id)) await moveToFolder(app, m, null);
+        setFolders(getFolders().filter((x) => x.id !== f.id));
+        if (app.currentFolder === f.id) app.currentFolder = null;
+        renderGallery(app);
+      } },
+      { label: 'Close', primary: true },
+    ],
+  });
+}
+
+function moveDialog(app, m) {
+  const folders = getFolders();
+  dialog({
+    title: `Move "${m.name}"`, body: '',
+    actions: [
+      ...folders.filter((f) => f.id !== m.folder).map((f) => ({ label: '📁 ' + f.name, onClick: async () => { await moveToFolder(app, m, f.id); renderGallery(app); } })),
+      m.folder && { label: 'Gallery (no folder)', onClick: async () => { await moveToFolder(app, m, null); renderGallery(app); } },
+      { label: '＋ New folder…', onClick: async () => { const n = await promptDialog('New folder', 'Folder'); if (n == null) return; const f = await newFolder(n.trim() || 'Folder'); await moveToFolder(app, m, f.id); renderGallery(app); } },
+      { label: 'Cancel', primary: true },
+    ].filter(Boolean),
+  });
+}
+
+async function openSaved(app, m) {
   toast('Opening…', 6000);
   try {
-    const data = await store.loadDoc(id);
+    const data = await store.loadDoc(m.id);
     if (!data) { toast('Document not found'); return; }
     const doc = await Doc.deserialize(data);
+    doc.folder = m.folder || null;
     await app.openDoc(doc);
     $('#toast').hidden = true;
   } catch (e) { console.error(e); toast('Could not open: ' + e.message); }
@@ -1220,6 +1366,7 @@ function galleryMenu(app, m) {
   dialog({
     title: m.name, body: '',
     actions: [
+      { label: 'Move to folder…', onClick: () => { setTimeout(() => moveDialog(app, m), 0); } },
       { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename', m.name); if (!n) return; const data = await store.loadDoc(m.id); data.name = n; await store.saveDoc(data, { ...m, name: n }); renderGallery(app); } },
       { label: 'Duplicate', onClick: async () => { const data = await store.loadDoc(m.id); const id = 'd' + Date.now().toString(36); await store.saveDoc({ ...data, id, name: m.name + ' copy' }, { ...m, id, name: m.name + ' copy', updated: Date.now() }); renderGallery(app); } },
       { label: 'Export project', onClick: async () => { const doc = await Doc.deserialize(await store.loadDoc(m.id)); download(await doc.toFile(), safeName(m.name) + '.inkwell'); } },
@@ -1264,6 +1411,7 @@ export function newDocDialog(app, mode = 'paint') {
       W = clamp(parseInt(wIn.value) || W, 16, 16384); H = clamp(parseInt(hIn.value) || H, 16, 16384);
       if (W * H > 16.7e6) { toast('Canvas too large for iPad Safari (max ~16.7 megapixels). Try a smaller size.'); return false; }
       const doc = Doc.create({ name: name.value || 'Untitled', mode, width: W, height: H });
+      doc.folder = app.currentFolder || null;
       if (mode === 'animate') { doc.anim.fps = parseInt(fps.value); doc.anim.length = clamp(parseInt(len.value) || 24, 1, 2000); }
       await app.openDoc(doc);
       app.dirtySave = true; app.saveNow();
@@ -1286,6 +1434,7 @@ export async function importAny(app) {
         const data = JSON.parse(await f.text());
         data.id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
         const doc = await Doc.deserialize(data);
+        doc.folder = app.currentFolder || null;
         await app.openDoc(doc); app.dirtySave = true; await app.saveNow();
       } catch (e) { toast('Not a valid project: ' + e.message); }
     } else if (f.type.startsWith('image/')) {
@@ -1296,6 +1445,7 @@ export async function importAny(app) {
       const doc = Doc.create({ name: f.name.replace(/\.[^.]+$/, ''), mode: 'paint', width: w, height: hh });
       doc.layers[0].canvas.getContext('2d').drawImage(img, 0, 0, w, hh);
       doc.layers[0].name = 'Image';
+      doc.folder = app.currentFolder || null;
       await app.openDoc(doc); app.dirtySave = true; await app.saveNow();
     }
   }

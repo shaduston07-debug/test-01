@@ -377,3 +377,20 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .ibis-info p { background: rgba(139, 107, 255, 0.14); border: 1px solid rgba(139, 107, 255, 0.35); border-radius: 12px; padding: 10px 12px; color: var(--text) !important; }
 .ibis-raw summary { color: var(--muted); font-size: 13px; padding: 8px 0; cursor: pointer; }
 .ibis-raw code { display: block; font-size: 11px; word-break: break-all; color: var(--muted); background: rgba(0, 0, 0, 0.25); border-radius: 8px; padding: 8px; max-height: 120px; overflow: auto; }
+
+/* gallery folders (stacks) */
+.gal-crumb { display: flex; align-items: center; gap: 10px; margin: -6px 0 18px; font-size: 22px; }
+.gal-crumb b { font-weight: 700; letter-spacing: -0.4px; }
+.crumb-back { font-size: 17px; font-weight: 600; color: var(--accent-2); padding: 8px 12px; border-radius: 999px; }
+.crumb-back.drop-over { background: rgba(47, 125, 255, 0.25); box-shadow: 0 0 0 2px var(--accent-2); }
+.crumb-sep { color: var(--faint); }
+.gal-crumb .pill { min-height: 34px; padding: 0 14px; }
+.gal-stack { width: 100%; display: block; position: relative; background: transparent !important; box-shadow: none !important; overflow: visible !important; }
+.stack-page { position: absolute; inset: 6% 6% 0; border-radius: 6px; background: #3a3a40 center / cover no-repeat; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55); border: 2px solid rgba(255, 255, 255, 0.85); }
+.stack-empty { position: absolute; inset: 6%; border-radius: 10px; border: 2px dashed rgba(255, 255, 255, 0.25); display: grid; place-items: center; color: var(--faint); }
+.stack-empty svg { width: 44px; height: 44px; }
+.gal-card.folder .badge { color: var(--text); }
+.gal-card.dragging { opacity: 0.35; }
+.gal-card.drop-over .gal-thumb { box-shadow: 0 0 0 3px var(--accent-2), 0 10px 28px rgba(0, 0, 0, 0.55) !important; transform: scale(1.03); }
+.gal-ghost { position: fixed; z-index: 100; pointer-events: none; transform: scale(1.06) rotate(-2deg); opacity: 0.92; filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.6)); }
+.gal-thumb { touch-action: pan-y; }
