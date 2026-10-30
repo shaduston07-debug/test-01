@@ -39,7 +39,11 @@ export class Timeline {
     this.onionBtn = btn('Onion', () => { a.onion.on = !a.onion.on; this.syncHead(); this.app.requestRender(); });
     this.recBtn = btn('● Perform', () => this.toggleRecord(), 'rec', 'Arm, then drag the canvas with the Move tool while playing to record motion live');
     this.frameLbl = h('span', { class: 'tl-frame' });
-    this.collapseBtn = btn('▾', () => { this.el.classList.toggle('collapsed'); this.collapseBtn.textContent = this.el.classList.contains('collapsed') ? '▴' : '▾'; });
+    this.collapseBtn = btn('▾', () => {
+      const c = this.el.classList.toggle('collapsed');
+      document.body.classList.toggle('tl-collapsed', c);
+      this.collapseBtn.textContent = c ? '▴' : '▾';
+    });
     const head = h('div', { class: 'tl-head' },
       this.playBtn, this.loopBtn, this.fpsSel, this.lenIn, this.onionBtn,
       btn('⚙︎', () => this.onionDialog(), '', 'Onion skin settings'), this.recBtn,

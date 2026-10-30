@@ -21,7 +21,7 @@ export const BLEND_MODES = [
 ];
 export const blendShort = (b) => (BLEND_MODES.find((m) => m[0] === b) || BLEND_MODES[0])[2];
 
-const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked'];
+const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed'];
 
 export class Layer {
   constructor(w, h, o = {}) {
@@ -36,7 +36,15 @@ export class Layer {
     this.reference = !!o.reference;
     this.panelMask = !!o.panelMask;
     this.locked = !!o.locked;
-    if (this.type === 'raster') this.canvas = makeCanvas(w, h);
+    // Groups: a 'group' item sits directly above its members, which carry its id.
+    this.groupId = o.groupId || null;
+    this.collapsed = !!o.collapsed;
+    if (this.type === '3d') { this.scene3d = o.scene3d || null; this.models = o.models || new Map(); }
+    if (this.type === 'raster' || this.type === '3d') {
+      this.canvas = makeCanvas(w, h);
+      // Safari returns no context when its canvas memory is exhausted
+      if (!this.canvas.getContext('2d')) { this.canvas.width = this.canvas.height = 0; throw new Error('OUT_OF_MEMORY'); }
+    }
     if (this.type === 'frames') {
       this.panels = o.panels || [];
       this.border = o.border ?? 6;
@@ -45,6 +53,7 @@ export class Layer {
     if (this.type === 'balloons') this.balloons = o.balloons || [];
   }
   get isRaster() { return this.type === 'raster'; }
+  get hasPixels() { return this.type === 'raster' || this.type === '3d'; }
 }
 
 export class Track {
@@ -62,6 +71,7 @@ export class Track {
     this.keys = o.keys || [];   // {f, x, y, s, r, o, ease}
   }
   get isRaster() { return true; }
+  get hasPixels() { return true; }
   celAt(f) { return this.cels.find((c) => f >= c.start && f < c.start + c.dur) || null; }
   sortCels() { this.cels.sort((a, b) => a.start - b.start); }
   transformAt(f) {
@@ -133,7 +143,7 @@ export class Doc {
   get pixelBytes() { return this.width * this.height * 4; }
   rasterCount() {
     if (this.mode === 'animate') return this.tracks.reduce((n, t) => n + t.cels.length, 0);
-    return this.layers.filter((l) => l.isRaster).length;
+    return this.layers.filter((l) => l.hasPixels).length;
   }
   framesLayer() { return this.layers.find((l) => l.type === 'frames'); }
   panels() { const f = this.framesLayer(); return f && f.visible ? f.panels : []; }
@@ -173,20 +183,31 @@ export class Doc {
   }
 
   // Source canvas + matrix + opacity for a raster-ish item at a given frame.
-  source(it, frame, preview) {
+  // preview(canvas) may substitute a canvas; overlay(canvas) may add a live stroke on top.
+  source(it, frame, preview, overlay) {
+    let c, matrix = null, alpha = 1;
     if (it.type === 'track') {
       const cel = it.celAt(frame);
       if (!cel) return null;
       const t = it.transformAt(frame);
-      return { canvas: (preview && preview(cel.canvas)) || cel.canvas, matrix: isIdentity(t) ? null : trackMatrix(t, this.width, this.height), alpha: t.o ?? 1 };
-    }
-    if (it.type !== 'raster') return null;
-    return { canvas: (preview && preview(it.canvas)) || it.canvas, matrix: null, alpha: 1 };
+      c = cel.canvas; matrix = isIdentity(t) ? null : trackMatrix(t, this.width, this.height); alpha = t.o ?? 1;
+    } else if (it.type === 'raster' || it.type === '3d') c = it.canvas;
+    else return null;
+    return { canvas: (preview && preview(c)) || c, matrix, alpha, overlay: overlay ? overlay(c) : null };
   }
 
   drawSource(ctx, src) {
-    if (src.matrix) { ctx.save(); const m = src.matrix; ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f); ctx.drawImage(src.canvas, 0, 0); ctx.restore(); }
-    else ctx.drawImage(src.canvas, 0, 0);
+    if (src.matrix) { ctx.save(); const m = src.matrix; ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f); }
+    ctx.drawImage(src.canvas, 0, 0);
+    if (src.overlay) {
+      const a = ctx.globalAlpha;
+      ctx.globalAlpha = a * src.overlay.alpha;
+      const r = src.overlay.rect;
+      if (r) { if (r.w > 0 && r.h > 0) ctx.drawImage(src.overlay.canvas, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h); }
+      else ctx.drawImage(src.overlay.canvas, 0, 0);
+      ctx.globalAlpha = a;
+    }
+    if (src.matrix) ctx.restore();
   }
 
   panelPath(ctx) {
@@ -198,27 +219,35 @@ export class Doc {
   // o.from / o.to restrict it to a slice of the items (used for render caches).
   composite(ctx, o = {}) {
     const frame = o.frame ?? this.playhead;
-    const preview = o.preview || null;
+    const preview = o.preview || null, overlay = o.overlay || null;
     const items = this.items;
     const from = o.from ?? 0, to = o.to ?? items.length;
     if (o.bg !== false && this.bgVisible) { ctx.fillStyle = this.bg; ctx.fillRect(0, 0, this.width, this.height); }
     if (o.underlay) o.underlay(ctx);
+    const groups = this.groupMap();
     for (let i = from; i < to; i++) {
       const it = items[i];
+      if (it.type === 'group') continue;
+      const grp = it.groupId ? groups.get(it.groupId) : null;
+      if (grp && !grp.visible) continue;
+      const gAlpha = grp ? grp.opacity : 1;
       if (it.clip && this.clipBase(i) >= 0) continue;
       const clips = [];
-      if (it.isRaster) for (let j = i + 1; j < items.length && items[j].clip; j++) clips.push(items[j]);
+      if (it.hasPixels) for (let j = i + 1; j < items.length && items[j].clip; j++) clips.push(items[j]);
       if (!it.visible || (o.filter && !o.filter(it))) continue;
-      if (it.type === 'frames') { this.drawFrames(ctx, it); continue; }
-      if (it.type === 'balloons') { drawBalloons(ctx, it.balloons, o.selectedBalloon); continue; }
-      const src = this.source(it, frame, preview);
+      if (it.type === 'frames' || it.type === 'balloons') {
+        ctx.save(); ctx.globalAlpha = gAlpha;
+        if (it.type === 'frames') this.drawFrames(ctx, it); else drawBalloons(ctx, it.balloons, o.selectedBalloon);
+        ctx.restore(); continue;
+      }
+      const src = this.source(it, frame, preview, overlay);
       if (!src) continue;
       const visClips = clips.filter((c) => c.visible);
       const masked = it.panelMask && this.panels().length;
       ctx.save();
       // panel masks are a clip path on the destination — no off-screen passes
       if (masked) { this.panelPath(ctx); ctx.clip(); }
-      ctx.globalAlpha = it.opacity * src.alpha; ctx.globalCompositeOperation = it.blend;
+      ctx.globalAlpha = it.opacity * src.alpha * gAlpha; ctx.globalCompositeOperation = it.blend;
       if (!visClips.length) {
         this.drawSource(ctx, src);
         ctx.restore();
@@ -228,13 +257,23 @@ export class Doc {
       const G = this.tmp(0), g = G.getContext('2d');
       this.drawSource(g, src);
       for (const c of visClips) {
-        const cs = this.source(c, frame, preview); if (!cs) continue;
-        const T = this.tmp(1), t = T.getContext('2d');
-        t.globalAlpha = c.opacity * cs.alpha; this.drawSource(t, cs); t.globalAlpha = 1;
-        t.globalCompositeOperation = 'destination-in'; this.drawSource(t, src);
-        g.globalCompositeOperation = c.blend === 'source-over' ? 'source-atop' : c.blend;
-        g.drawImage(T, 0, 0);
-        g.globalCompositeOperation = 'source-over';
+        const cs = this.source(c, frame, preview, overlay); if (!cs) continue;
+        if (c.blend === 'source-over') {
+          // normal clipping: paint atop the group — keeps the base's alpha exactly and
+          // shows the clip layer's own colour (no base colour bleeding through soft edges)
+          g.globalCompositeOperation = 'source-atop';
+          g.globalAlpha = c.opacity * cs.alpha;
+          this.drawSource(g, cs);
+        } else {
+          // blend-mode clipping: compute blend(group, clip) off-screen, keep it only where the
+          // clip layer has paint, then lay that atop the group (so the group's alpha is exact)
+          const T = this.tmp(1), t = T.getContext('2d'), a = c.opacity * cs.alpha;
+          t.drawImage(G, 0, 0);
+          t.globalCompositeOperation = c.blend; t.globalAlpha = a; this.drawSource(t, cs);
+          t.globalCompositeOperation = 'destination-in'; this.drawSource(t, cs);
+          g.globalCompositeOperation = 'source-atop'; g.drawImage(T, 0, 0);
+        }
+        g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
       }
       ctx.drawImage(G, 0, 0);
       ctx.restore();
@@ -248,7 +287,7 @@ export class Doc {
     let s = a;
     if (items[a].clip) { const b = this.clipBase(a); if (b >= 0) s = b; }
     let e = s + 1;
-    if (items[s].isRaster) while (e < items.length && items[e].clip) e++;
+    if (items[s].hasPixels) while (e < items.length && items[e].clip) e++;
     return [s, Math.max(e, a + 1)];
   }
   // Items above can be pre-flattened only if they all blend normally.
@@ -261,17 +300,31 @@ export class Doc {
     return true;
   }
 
+  groupMap() {
+    const m = new Map();
+    for (const it of this.layers) if (it.type === 'group') m.set(it.id, it);
+    return m;
+  }
+  // [start, end] indices of a group's block (members + header) or of a single item
+  blockOf(i) {
+    const items = this.items, it = items[i];
+    if (!it || it.type !== 'group') return [i, i];
+    let s = i;
+    while (s > 0 && items[s - 1].groupId === it.id) s--;
+    return [s, i];
+  }
+
   clipBase(i) {
     const items = this.items;
     for (let j = i - 1; j >= 0; j--) {
-      if (!items[j].clip) return items[j].isRaster ? j : -1;
+      if (!items[j].clip) return items[j].hasPixels ? j : -1;
     }
     return -1;
   }
 
   drawFrames(ctx, layer) {
     ctx.save();
-    ctx.globalAlpha = layer.opacity;
+    ctx.globalAlpha *= layer.opacity;
     ctx.strokeStyle = layer.borderColor; ctx.lineWidth = layer.border; ctx.lineJoin = 'miter';
     for (const p of layer.panels) {
       const b = layer.border / 2;
@@ -298,7 +351,8 @@ export class Doc {
     };
     for (const l of this.layers) {
       const o = {}; for (const k of LAYER_PROPS) o[k] = l[k];
-      if (l.type === 'raster') o.png = await blobFor(l.canvas);
+      if (l.type === 'raster' || l.type === '3d') o.png = await blobFor(l.canvas);
+      if (l.type === '3d') { o.scene3d = l.scene3d; o.models = [...l.models.values()]; }
       if (l.type === 'frames') Object.assign(o, { panels: l.panels, border: l.border, borderColor: l.borderColor });
       if (l.type === 'balloons') o.balloons = l.balloons;
       out.layers.push(o);
@@ -315,7 +369,12 @@ export class Doc {
     const d = new Doc(o);
     for (const lo of o.layers || []) {
       const l = new Layer(d.width, d.height, lo);
-      if (l.type === 'raster' && lo.png) { l.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(lo.png)), 0, 0); seedBlob(l.canvas, lo.png); }
+      if (l.type === '3d') {
+        l.scene3d = lo.scene3d;
+        l.models = new Map();
+        for (const m of lo.models || []) l.models.set(m.id, { ...m, blob: await asBlob(m.blob) });
+      }
+      if ((l.type === 'raster' || l.type === '3d') && lo.png) { l.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(lo.png)), 0, 0); seedBlob(l.canvas, lo.png); }
       d.layers.push(l);
     }
     for (const to of o.tracks || []) {
@@ -335,7 +394,10 @@ export class Doc {
   async toFile() {
     const s = await this.serialize();
     const conv = async (x) => (x instanceof Blob ? await blobToDataURL(x) : x);
-    for (const l of s.layers) if (l.png) l.png = await conv(l.png);
+    for (const l of s.layers) {
+      if (l.png) l.png = await conv(l.png);
+      if (l.models) l.models = await Promise.all(l.models.map(async (m) => ({ ...m, blob: await conv(m.blob) })));
+    }
     for (const t of s.tracks) for (const c of t.cels) c.png = await conv(c.png);
     return new Blob([JSON.stringify(s)], { type: 'application/json' });
   }
@@ -347,7 +409,7 @@ export class Doc {
       return n;
     };
     for (const l of this.layers) {
-      if (l.type === 'raster') l.canvas = move(l.canvas);
+      if (l.type === 'raster' || l.type === '3d') l.canvas = move(l.canvas);
       if (anchorY && l.type === 'frames') for (const p of l.panels) p.y += anchorY;
       if (anchorY && l.type === 'balloons') for (const b of l.balloons) { b.y += anchorY; if (b.tail) b.tail.y += anchorY; }
     }

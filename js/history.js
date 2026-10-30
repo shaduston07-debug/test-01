@@ -69,14 +69,16 @@ function putRect(dst, img, x, y) {
   touch(dst);
 }
 
-export function pixelCmd(canvas, rect, label, after) {
+// `beforeImg` (optional): a rect-sized copy taken before the change; otherwise the
+// shared snapshot() backup is used.
+export function pixelCmd(canvas, rect, label, after, beforeImg) {
   const W = canvas.width, H = canvas.height;
   const r = rect || { x: 0, y: 0, w: W, h: H };
   const x = clamp(r.x | 0, 0, W), y = clamp(r.y | 0, 0, H);
   const w = clamp(Math.ceil(r.w), 0, W - x), hh = clamp(Math.ceil(r.h), 0, H - y);
   touch(canvas);
   if (w <= 0 || hh <= 0) return null;
-  const before = copyRect(backup, x, y, w, hh);
+  const before = beforeImg && beforeImg.width === w && beforeImg.height === hh ? beforeImg : copyRect(backup, x, y, w, hh);
   let redoImg = null;
   return {
     label, bytes: w * hh * 8,

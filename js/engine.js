@@ -35,9 +35,14 @@ export class StrokeEngine {
     this.bctx.setTransform(1, 0, 0, 1, 0, 0);
     this.bctx.globalCompositeOperation = 'source-over';
     this.bctx.clearRect(0, 0, W, H);
-    if (!o.noUndo) snapshot(target.canvas);
     this.size = o.size; this.opacity = o.opacity; this.scale = target.scale || 1;
     this.alphaLock = !!target.layer.alphaLock;
+    // Fast path: plain painting on a normal 100% layer → the live stroke is drawn as an
+    // overlay above the layer (no preview canvas, no per-frame copies).
+    const L = target.layer;
+    this.fast = !o.noFast && this.kind === 'paint' && !this.alphaLock && !o.selection && (L.opacity ?? 1) === 1 && (L.blend || 'source-over') === 'source-over';
+    // Paint/erase don't touch the layer until the end, so only smudge needs a full snapshot.
+    if (!o.noUndo && this.kind === 'smudge') snapshot(target.canvas);
     this.op = this.kind === 'erase' ? 'destination-out' : this.alphaLock ? 'source-atop' : 'source-over';
     this.tip = this.kind === 'paint' ? getTintedTip(brush, o.color) : getTintedTip(brush, '#000');
     this.mask = getTipMask(brush);
@@ -48,11 +53,11 @@ export class StrokeEngine {
     this.bounds = emptyRect(); this.dirty = emptyRect();
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
     this.sym = this.symTransforms(o.symmetry);
-    if (this.kind !== 'smudge') {
+    if (this.kind !== 'smudge' && !this.fast) {
       const p = this.preview.getContext('2d');
       p.setTransform(1, 0, 0, 1, 0, 0); p.globalAlpha = 1; p.globalCompositeOperation = 'source-over';
       p.globalCompositeOperation = 'copy'; p.drawImage(target.canvas, 0, 0); p.globalCompositeOperation = 'source-over';
-    } else {
+    } else if (this.kind === 'smudge') {
       const S = clamp(Math.ceil(this.size / this.scale), 2, 512);
       this.smS = S;
       this.smudgeBuf = makeCanvas(S, S);
@@ -257,6 +262,7 @@ export class StrokeEngine {
 
   updatePreview() {
     if (!this.active || this.kind === 'smudge') return;
+    if (this.fast) { this.dirty = emptyRect(); return; }
     const r = clampRect(this.dirty, this.W, this.H);
     this.dirty = emptyRect();
     if (r.w <= 0 || r.h <= 0) return;
@@ -284,7 +290,11 @@ export class StrokeEngine {
   }
 
   previewFor(canvas) {
-    return this.active && this.kind !== 'smudge' && this.target && canvas === this.target.canvas ? this.preview : null;
+    return this.active && !this.fast && this.kind !== 'smudge' && this.target && canvas === this.target.canvas ? this.preview : null;
+  }
+  overlayFor(canvas) {
+    if (!(this.active && this.fast && this.target && canvas === this.target.canvas)) return null;
+    return { canvas: this.buffer, alpha: this.opacity, rect: clampRect(this.bounds, this.W, this.H) };
   }
 
   end(label) {
@@ -307,6 +317,11 @@ export class StrokeEngine {
       } else b.drawImage(this.o.selection, rect.x, rect.y, rect.w, rect.h, rect.x, rect.y, rect.w, rect.h);
       b.restore();
     }
+    let before = null;
+    if (this.kind !== 'smudge' && rect.w > 0 && rect.h > 0 && !this.o.noUndo) {
+      before = makeCanvas(rect.w, rect.h);
+      before.getContext('2d').drawImage(this.target.canvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+    }
     if (this.kind !== 'smudge' && rect.w > 0 && rect.h > 0) {
       const t = this.tctx;
       t.save();
@@ -315,7 +330,7 @@ export class StrokeEngine {
       t.restore();
     }
     this.active = false;
-    return this.o.noUndo ? null : pixelCmd(this.target.canvas, rect, label || this.kind, this.o.onChange);
+    return this.o.noUndo ? null : pixelCmd(this.target.canvas, rect, label || this.kind, this.o.onChange, before);
   }
 
   cancel() {

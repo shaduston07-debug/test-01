@@ -10,10 +10,19 @@ import * as store from './storage.js';
 import * as UI from './ui.js';
 import { Timeline } from './anim.js';
 import * as Toon from './webtoon.js';
+import * as Three3D from './three3d.js';
+
+// Apple M-series iPads (M1–M4) report 8+ cores and have 8–16 GB of RAM: give layers a
+// bigger budget there. Older devices keep a conservative one.
+function defaultMemoryMB() {
+  const cores = navigator.hardwareConcurrency || 4;
+  return cores >= 8 ? 2000 : cores >= 6 ? 1000 : 600;
+}
+const SETTINGS_VERSION = 2;
 
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 550,
-  fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: 700, fingerSmudge: false,
+  fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
   gestures: true, autosave: true, cursor: true,
 };
 
@@ -23,6 +32,11 @@ class App {
     this.ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
     this.contentVer = 0;
     this.settings = { ...DEFAULT_SETTINGS, ...store.prefs.get('settings', {}) };
+    if ((this.settings.v || 1) < SETTINGS_VERSION) {
+      // older builds stored a 700 MB budget; move up to the device-appropriate default
+      if (this.settings.memoryMB <= 700) this.settings.memoryMB = defaultMemoryMB();
+      this.settings.v = SETTINGS_VERSION;
+    }
     this.history = new History(() => this.updateUndoButtons());
     this.engine = new StrokeEngine();
     this.view = { x: 0, y: 0, zoom: 1, rot: 0, flip: 1 };
@@ -41,6 +55,7 @@ class App {
     this.doc = null;
     this.tools = this.makeTools();
     this.timeline = new Timeline(this);
+    this.add3DLayer = () => Three3D.add3DLayer(this);
     this.dirtySave = false;
   }
 
@@ -69,6 +84,7 @@ class App {
 
   applySettings() {
     document.body.classList.toggle('right-handed', !!this.settings.rightHanded);
+    document.body.classList.toggle('solid-ui', !!this.settings.solidUI);
     store.prefs.set('settings', this.settings);
   }
 
@@ -540,7 +556,7 @@ class App {
     if (mod && k === 'd') { e.preventDefault(); this.selection.clear(); this.requestRender('view'); return; }
     if (mod) return;
     if (e.code === 'Space') { this.spaceDown = true; e.preventDefault(); return; }
-    const map = { b: 'brush', e: 'eraser', s: 'smudge', v: 'transform', g: 'fill', i: 'eyedropper', m: 'move', p: 'panel', t: 'balloon', l: null };
+    const map = { b: 'brush', e: 'eraser', s: 'smudge', v: 'transform', g: 'fill', i: 'eyedropper', m: 'move', p: 'panel', t: 'balloon', d: '3d', l: null };
     if (k in map) {
       if (k === 'l') UI.openLayers(this, $('#btn-layers'));
       else if (this.tools[map[k]] && this.toolAvailable(map[k])) this.setTool(map[k]);
@@ -559,6 +575,7 @@ class App {
     if (k === 'enter' && this.doc.mode === 'animate') { this.timeline.toggle(); }
   }
   toolAvailable(t) {
+    if (t === '3d') return this.doc.mode !== 'animate';
     if (['panel', 'balloon'].includes(t)) return this.doc.mode === 'webtoon';
     if (t === 'move') return this.doc.mode === 'animate';
     return true;
@@ -647,19 +664,21 @@ class App {
       ctx.fillStyle = this.checker; ctx.fillRect(0, 0, d.width, d.height);
     }
     ctx.imageSmoothingEnabled = v.zoom < 2.5;
-    ctx.imageSmoothingQuality = this.gesture ? 'low' : 'medium';
+    // cheap bilinear while drawing / navigating; nicer filtering once things are still
+    ctx.imageSmoothingQuality = this.gesture || this.pan1 || this.engine.active || this.transform ? 'low' : 'medium';
     if (this.engine.active) this.engine.updatePreview();
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, d.width, d.height); ctx.clip();
     const preview = (c) => this.previewFor(c);
+    const overlay = this.engine.active ? (c) => this.engine.overlayFor(c) : null;
     if (this.timeline.playing) {
       // every frame differs during playback: composite directly
-      d.composite(ctx, { preview, bg: d.bgVisible });
+      d.composite(ctx, { preview, overlay, bg: d.bgVisible });
     } else {
       this.ensureCaches();
       const [gs, ge] = this.group;
       ctx.drawImage(this.belowCache, 0, 0);
-      d.composite(ctx, { from: gs, to: ge, bg: false, preview });
+      d.composite(ctx, { from: gs, to: ge, bg: false, preview, overlay });
       if (ge < d.items.length) {
         if (this.aboveFlat) ctx.drawImage(this.aboveCache, 0, 0);
         else d.composite(ctx, { from: ge, bg: false });
@@ -763,7 +782,11 @@ class App {
       down(p) {
         const d = app.doc;
         const target = d.getTarget(true);
-        if (!target) { toast(d.activeItem ? `"${d.activeItem.name}" isn't a paint layer — pick or add a raster layer` : 'Add a layer first'); return false; }
+        if (!target) {
+          const a = d.activeItem;
+          toast(!a ? 'Add a layer first' : a.type === '3d' ? '3D layer — use the 3D tool, or Rasterize it to paint on it' : a.type === 'group' ? 'Pick a layer inside the group to paint on' : `"${a.name}" isn't a paint layer — pick or add a raster layer`);
+          return false;
+        }
         if (!target.layer.visible) toast('Layer is hidden');
         const toolName = kind === 'paint' ? 'brush' : kind === 'erase' ? 'eraser' : 'smudge';
         app.engine.begin(target, app.brushFor(toolName), {
@@ -853,6 +876,7 @@ class App {
       transform: UI.transformTool(app),
       move: UI.moveTool(app),
       panel: Toon.panelTool(app),
+      '3d': Three3D.tool3d(app),
       balloon: Toon.balloonTool(app),
     };
     return tools;
@@ -881,6 +905,16 @@ class App {
     this.setTool('transform');
   }
 }
+
+// Out of canvas memory while creating a layer → explain instead of failing silently
+const oom = (e) => {
+  const m = (e && (e.message || (e.reason && e.reason.message))) || '';
+  if (!m.includes('OUT_OF_MEMORY')) return;
+  e.preventDefault && e.preventDefault();
+  toast("This iPad is out of canvas memory for another layer — merge or delete layers, or lower Settings › Memory budget.", 4500);
+};
+window.addEventListener('error', oom);
+window.addEventListener('unhandledrejection', oom);
 
 const app = new App();
 window.inkwell = app;

@@ -62,7 +62,7 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - **Procreate `.brush` / `.brushset`**: unzips Shape/Grain PNGs and reads `Brush.archive` (binary plist / NSKeyedArchiver) for name, spacing, jitter, StreamLine and pressure settings
 - **PNG / JPG**: any image as a tip
 
-**Layers** (Procreate-style, plus CSP extras)
+**Layers** (Procreate-style, plus CSP extras): hold and drag to reorder, **groups** (collapse, hide, opacity, flatten; drop a layer onto a group to put it inside), and options in a scrollable side sheet next to the panel
 - 17 blend modes, opacity, alpha lock, clipping masks, merge, duplicate, reorder, fill, clear, select-from-alpha
 - **Reference layer** (from CSP): the fill tool reads boundaries from it, so you can fill colors on a separate layer under your line art
 - A layer limit based on canvas size, so Safari doesn't run out of memory
@@ -73,6 +73,8 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - Selection: **Automatic** (magic wand; slide left/right to change the threshold), **Freehand** lasso (drag, or tap to place polygon points and tap the start dot to close), Rectangle, Ellipse; New / Add / Subtract / Intersect; feather, save & load, invert, copy & paste, cut & paste, color fill, clear
 - Transform: uniform or freeform, flip, rotate, fit
 - Adjustments with live preview: HSB, color balance, levels, blur, sharpen, noise, posterize, threshold, gradient map, *brightness → opacity* (clean up scanned line art), *change line color*
+
+**3D layers**: a posable drawing figure (tap a body part in *Pose* and drag to bend it, plus presets), imported **glTF/GLB/VRM, FBX and OBJ** models (the open formats Clip Studio Paint imports; CSP's own `.cmo` files are a closed format), primitive shapes, orbit / pan / zoom camera, move / rotate / scale, lighting and outlines, then *Rasterize* to draw over it. three.js loads only when a 3D layer is used.
 
 **Animation (Dreams-style)**
 - Tracks of flipbook drawings. Retime by dragging blocks; hold ±, duplicate, delete

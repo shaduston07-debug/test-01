@@ -31,6 +31,15 @@ export const ICONS = {
   pause: s('<path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor"/>'),
   trash: s('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
   copy: s('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>'),
+  folder: s('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+  chevron: s('<path d="m9 6 6 6-6 6"/>'),
+  cube: s('<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>'),
+  check: s('<path d="m5 12 5 5 9-10"/>'),
+  pencil: s('<path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4"/>'),
+  person: s('<circle cx="12" cy="5" r="2.2"/><path d="M12 8v7M8 10.5h8M12 15l-3 6M12 15l3 6"/>'),
+  sphere: s('<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/>'),
+  orbit: s('<circle cx="12" cy="12" r="3"/><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="m18 3 .5 3.7-3.7.3M6 21l-.5-3.7 3.7-.3"/>'),
+  '3d': s('<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>'),
   brushImport: s('<path d="M12 3v11M8 10l4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>'),
 };
 

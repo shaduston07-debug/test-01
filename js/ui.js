@@ -13,6 +13,8 @@ import { importBrushFiles } from './importers.js';
 import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask } from './tools.js';
 import * as store from './storage.js';
 import * as Toon from './webtoon.js';
+import { insertLayer, structCmd, openLayers, onDocChanged, closeLayerSheet } from './layers.js';
+export { insertLayer, structCmd, openLayers, onDocChanged, closeLayerSheet };
 
 // ───────── popover / floating windows ─────────
 // Any panel opened with `float: true` gets a pin button that turns it into a floating
@@ -36,8 +38,10 @@ export function openPopover(anchor, { title, body, width = 340, head = [], onClo
   el.hidden = false;
   const r = anchor.getBoundingClientRect();
   const W = Math.min(width, innerWidth - 16);
-  el.style.left = clamp(r.left + r.width / 2 - W / 2, 8, innerWidth - W - 8) + 'px';
-  el.style.top = (r.bottom + 8) + 'px';
+  const left = clamp(r.left + r.width / 2 - W / 2, 8, innerWidth - W - 8);
+  el.style.left = left + 'px';
+  el.style.top = (r.bottom + 12) + 'px';
+  el.append(h('div', { class: 'pop-arrow', style: { left: clamp(r.left + r.width / 2 - left, 24, W - 24) + 'px' } }));
   pop = { el, anchor, onClose, key: k, body: bodyEl };
   const floatify = () => {
     const rect = el.getBoundingClientRect();
@@ -91,7 +95,7 @@ export function closePopover() {
 }
 document.addEventListener('pointerdown', (e) => {
   if (!pop) return;
-  if (pop.el.contains(e.target) || pop.anchor.contains(e.target) || e.target.closest('.modal-bg')) return;
+  if (pop.el.contains(e.target) || pop.anchor.contains(e.target) || e.target.closest('.modal-bg, .side-sheet, .drag-ghost, .float-win')) return;
   if (e.target.id === 'view') return; // handled by the canvas (closes too)
   closePopover();
 }, true);
@@ -185,8 +189,7 @@ export function openColor(app, anchor) {
   const tabsEl = h('div', { class: 'pop-tabs' });
   const view = h('div', { class: 'color-view' });
   const bars = h('div', { class: 'hsb-bars' });
-  const chipRow = h('div', { class: 'chip-row' }, h('span', { class: 'hint' }, 'Previous'), head, h('span', { class: 'hint' }, 'Current'));
-  body.append(tabsEl, view, chipRow, bars);
+  body.append(view, bars, tabsEl);
 
   const hex = () => rgbToHex(...hsvToRgb(hh, s, v));
   const commit = () => { app.setColor(hex(), true); };
@@ -348,7 +351,7 @@ export function openColor(app, anchor) {
   let cur = null;
   const renderTab = () => {
     tabsEl.innerHTML = '';
-    for (const [k, l] of [['triangle', 'Triangle'], ['square', 'Classic'], ['values', 'Values'], ['palettes', 'Palettes']]) {
+    for (const [k, l] of [['triangle', 'Triangle'], ['square', 'Classic'], ['values', 'Value'], ['palettes', 'Palettes']]) {
       tabsEl.append(h('button', { class: tab === k ? 'on' : '', onclick: () => { tab = k; store.prefs.set('colorTab', k); renderTab(); } }, l));
     }
     cur = builders[tab]();
@@ -366,7 +369,7 @@ export function openColor(app, anchor) {
   const listener = (c) => { if (selfSet) return; [hh, s, v] = rgbToHsv(...hexToRgb(c)); refresh(); renderSw && renderSw(); };
   app.colorListeners.add(listener);
   renderTab();
-  openPopover(anchor, { title: 'Color', body, width: 330, key: 'color', float: true, onClose: () => app.colorListeners.delete(listener) });
+  openPopover(anchor, { title: 'Colors', body, head: [head], width: 330, key: 'color', float: true, onClose: () => app.colorListeners.delete(listener) });
 }
 
 // ───────── brush previews ─────────
@@ -498,7 +501,7 @@ export function openBrushStudio(app, base, asNew = false) {
     const r = pad.getBoundingClientRect();
     if (pad.width !== Math.round(r.width * 2)) { pad.width = r.width * 2; pad.height = r.height * 2; clearPad(); }
     padTarget = { canvas: pad, layer: { alphaLock: false }, scale: 1, matrix: null, toLocal: (x, y) => ({ x, y }) };
-    padEngine.begin(padTarget, b, { kind: 'paint', color: app.color === '#ffffff' ? '#000000' : app.color, size: Math.min(b.size, 120), opacity: b.opacity, noUndo: true, simTaper: e.pointerType !== 'pen' });
+    padEngine.begin(padTarget, b, { kind: 'paint', color: app.color === '#ffffff' ? '#000000' : app.color, size: Math.min(b.size, 120), opacity: b.opacity, noUndo: true, noFast: true, simTaper: e.pointerType !== 'pen' });
     padEngine.add(padPoint(e));
     drawPadPreview();
   });
@@ -558,240 +561,65 @@ export function openBrushStudio(app, base, asNew = false) {
 }
 
 // ───────── layers ─────────
-const PROPS = ['name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked'];
-function captureStruct(doc) {
-  return { items: [...doc.items], props: doc.items.map((it) => Object.fromEntries(PROPS.map((k) => [k, it[k]]))), active: doc.active };
-}
-function restoreStruct(doc, s) {
-  if (doc.mode === 'animate') doc.tracks = [...s.items]; else doc.layers = [...s.items];
-  s.items.forEach((it, i) => Object.assign(it, s.props[i]));
-  doc.active = s.active;
-}
-export function structCmd(app, label, fn) {
-  const doc = app.doc;
-  const before = captureStruct(doc);
-  fn();
-  const after = captureStruct(doc);
-  app.history.push({ label, bytes: 1000, undo() { restoreStruct(doc, before); app.changed(); }, redo() { restoreStruct(doc, after); app.changed(); } });
-  app.changed();
-}
-export function insertLayer(app, layer, index) {
-  const d = app.doc;
-  structCmd(app, 'Add layer', () => {
-    const i = index ?? Math.min(d.active + 1, d.items.length);
-    d.items.splice(i, 0, layer);
-    d.active = i;
-  });
-}
-function addTrack(app) {
-  const d = app.doc;
-  if (!app.canAddRaster()) return;
-  const t = new Track({ name: 'Track ' + (d.tracks.length + 1) });
-  d.addCel(t, d.playhead, 1);
-  insertLayer(app, t);
-}
-
-let layersOpen = null;
-export function onDocChanged(app) {
-  if (!layersOpen) return;
-  clearTimeout(layersOpen.t);
-  layersOpen.t = setTimeout(() => layersOpen && layersOpen.render(), 250);
-}
-
-function thumbOf(app, it) {
-  const box = h('div', { class: 'layer-thumb' });
-  const d = app.doc;
-  let src = null;
-  if (it.type === 'raster') src = it.canvas;
-  else if (it.type === 'track') { const c = it.celAt(d.playhead); src = c && c.canvas; }
-  if (src) {
-    const s = Math.min(54 / d.width, 40 / d.height);
-    const c = makeCanvas(Math.max(1, d.width * s * 2), Math.max(1, d.height * s * 2));
-    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-    c.style.width = c.width / 2 + 'px';
-    box.append(c);
-  } else {
-    box.style.background = '#3a3a42';
-    box.innerHTML = it.type === 'frames' ? ICONS.panel : ICONS.balloon;
-    box.firstChild.style.width = '24px';
-  }
-  return box;
-}
-
-export function openLayers(app, anchor) {
-  app.finishTransient();
-  const d = app.doc;
-  let expanded = null;
-  const list = h('div');
-  const render = () => {
-    list.innerHTML = '';
-    const items = d.items;
-    const maxR = app.maxRaster();
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      const vis = h('button', { class: 'layer-vis' + (it.visible ? ' on' : ''), onclick: (e) => { e.stopPropagation(); it.visible = !it.visible; app.changed(); render(); } });
-      const tags = [it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip'].filter(Boolean).join(' · ');
-      const sub = it.type === 'frames' ? `${it.panels.length} panels` : it.type === 'balloons' ? `${it.balloons.length} balloons` : it.type === 'track' ? `${it.cels.length} drawings · ${it.keys.length} keys` : (tags || pct(it.opacity));
-      const row = h('div', { class: 'layer-row' + (i === d.active ? ' on' : '') + (it.clip ? ' clip' : '') },
-        thumbOf(app, it), h('div', { class: 'layer-name' }, h('b', {}, it.name), h('small', {}, sub)),
-        h('span', { class: 'layer-blend' }, it.type === 'raster' || it.type === 'track' ? blendShort(it.blend) : ''), vis);
-      row.onclick = () => {
-        if (d.active === i) expanded = expanded === it ? null : it;
-        else { d.active = i; expanded = null; if (it.type === 'balloons' && app.tool !== 'balloon' && d.mode === 'webtoon') app.setTool('balloon'); if (it.type === 'frames' && d.mode === 'webtoon') app.setTool('panel'); }
-        render(); app.requestRender();
-        if (d.mode === 'animate') app.timeline.refresh();
-      };
-      list.append(row);
-      if (expanded === it) list.append(layerOptions(app, it, i, render));
-    }
-    // background
-    if (d.mode !== 'animate' || true) {
-      const colorIn = h('input', { type: 'color', value: d.bg });
-      colorIn.oninput = () => { d.bg = colorIn.value; app.changed(); };
-      list.append(h('div', { class: 'bg-row' }, h('span', { style: { flex: 1 } }, 'Background'), colorIn,
-        h('button', { class: 'layer-vis' + (d.bgVisible ? ' on' : ''), onclick: () => { d.bgVisible = !d.bgVisible; app.changed(); render(); } })));
-    }
-    list.append(h('p', { class: 'hint', style: { margin: '8px 4px' } }, `${d.rasterCount()} / ${maxR} ${d.mode === 'animate' ? 'drawings' : 'raster layers'} available at ${d.width}×${d.height}. Tap a selected layer for options.`));
-  };
-  const addBtn = h('button', { class: 'icon-btn', title: 'Add', html: ICONS.plus });
-  addBtn.onclick = () => {
-    if (d.mode === 'animate') { addTrack(app); render(); return; }
-    if (d.mode === 'webtoon') {
-      dialog({ title: 'Add', body: '', actions: [
-        { label: 'Raster layer', primary: true, onClick: () => { if (app.canAddRaster()) insertLayer(app, new Layer(d.width, d.height, { name: 'Layer ' + (d.layers.length + 1), panelMask: true })); render(); } },
-        { label: 'Panel layer', onClick: () => { insertLayer(app, new Layer(d.width, d.height, { type: 'frames', name: 'Panels' })); render(); } },
-        { label: 'Balloon layer', onClick: () => { insertLayer(app, new Layer(d.width, d.height, { type: 'balloons', name: 'Balloons' })); render(); } },
-        { label: 'Cancel' },
-      ] });
-      return;
-    }
-    if (app.canAddRaster()) { insertLayer(app, new Layer(d.width, d.height, { name: 'Layer ' + (d.layers.length + 1) })); render(); }
-  };
-  const p = openPopover(anchor, { title: d.mode === 'animate' ? 'Tracks' : 'Layers', body: list, head: [addBtn], width: 340, key: 'layers', float: true, onClose: () => { layersOpen = null; } });
-  if (!p) return;
-  layersOpen = { render };
-  render();
-}
-
-function layerOptions(app, it, i, rerender) {
-  const d = app.doc;
-  const box = h('div', { class: 'layer-opts' });
-  const btn = (label, fn, cls = '') => h('button', { class: 'small-btn ' + cls, onclick: () => { fn(); rerender(); } }, label);
-  box.append(h('button', { class: 'small-btn', onclick: async () => { const n = await promptDialog('Rename', it.name); if (n) { structCmd(app, 'Rename', () => { it.name = n; }); rerender(); } } }, 'Rename “' + it.name + '”'));
-  let opStart = null;
-  const op = field('Opacity', { min: 0, max: 1, step: 0.01, value: it.opacity, fmt: pct, onInput: (v) => { if (!opStart) opStart = captureStruct(d); it.opacity = v; app.requestRender(); } });
-  op.querySelector('input').addEventListener('change', () => {
-    if (!opStart) return; const before = opStart; opStart = null; const after = captureStruct(d);
-    app.history.push({ label: 'Opacity', undo() { restoreStruct(d, before); app.changed(); }, redo() { restoreStruct(d, after); app.changed(); } });
-    app.changed();
-  });
-  box.append(op);
-  if (it.type === 'raster' || it.type === 'track') {
-    const sel = h('select', {}, ...BLEND_MODES.map(([v, l]) => h('option', { value: v, selected: it.blend === v }, l)));
-    sel.onchange = () => { structCmd(app, 'Blend mode', () => { it.blend = sel.value; }); rerender(); };
-    box.append(sel);
-    box.append(switchRow('Alpha lock', it.alphaLock, (v) => structCmd(app, 'Alpha lock', () => { it.alphaLock = v; })));
-    box.append(switchRow('Clipping mask', it.clip, (v) => { structCmd(app, 'Clipping mask', () => { it.clip = v; }); rerender(); }));
-    box.append(switchRow('Reference layer (fill reads this)', it.reference, (v) => structCmd(app, 'Reference', () => { it.reference = v; })));
-    if (d.mode === 'webtoon' && it.type === 'raster') box.append(switchRow('Mask to panels', it.panelMask, (v) => structCmd(app, 'Panel mask', () => { it.panelMask = v; })));
-  }
-  if (it.type === 'frames') {
-    box.append(field('Border width', { min: 0, max: 30, step: 1, value: it.border, fmt: (v) => v + ' px', onInput: (v) => { it.border = v; app.changed(); } }));
-    const ci = h('input', { type: 'color', value: it.borderColor }); ci.oninput = () => { it.borderColor = ci.value; app.changed(); };
-    box.append(h('div', { class: 'toggle-row' }, h('span', {}, 'Border color'), ci));
-  }
-  const g = h('div', { class: 'grid2' });
-  g.append(btn('Move up ↑', () => move(1)), btn('Move down ↓', () => move(-1)));
-  const move = (dir) => {
-    const j = i + dir; if (j < 0 || j >= d.items.length) return;
-    structCmd(app, 'Reorder', () => { const arr = d.items; [arr[i], arr[j]] = [arr[j], arr[i]]; d.active = j; });
-  };
-  if (it.type === 'raster' || it.type === 'track') {
-    g.append(btn('Duplicate', () => {
-      if (!app.canAddRaster(it.type === 'track' ? it.cels.length : 1)) return;
-      let copy;
-      if (it.type === 'raster') { copy = new Layer(d.width, d.height, { ...it, id: null, name: it.name + ' copy' }); copy.canvas.getContext('2d').drawImage(it.canvas, 0, 0); }
-      else { copy = new Track({ ...it, id: null, name: it.name + ' copy', keys: JSON.parse(JSON.stringify(it.keys)) }); for (const c of it.cels) { const n = d.addCel(copy, c.start, c.dur); n.canvas.getContext('2d').drawImage(c.canvas, 0, 0); } }
-      insertLayer(app, copy, i + 1);
-    }));
-    if (it.type === 'raster' && i > 0 && d.items[i - 1].type === 'raster') g.append(btn('Merge down', () => mergeDown(app, i)));
-    const target = () => (it.type === 'raster' ? it.canvas : (it.celAt(d.playhead) || {}).canvas);
-    g.append(btn('Clear', () => { const c = target(); if (!c) return; withUndo(app.history, c, 'Clear', (x) => {
-      if (app.selection.active) { x.save(); x.globalCompositeOperation = 'destination-out'; x.drawImage(app.selection.mask, 0, 0); x.restore(); } else x.clearRect(0, 0, c.width, c.height);
-    }, () => app.requestRender()); app.changed(); }));
-    g.append(btn('Fill with color', () => { const c = target(); if (!c) return; withUndo(app.history, c, 'Fill layer', (x) => {
-      x.save(); x.fillStyle = app.color; x.globalCompositeOperation = it.alphaLock ? 'source-atop' : 'source-over';
-      if (app.selection.active) { const t = makeCanvas(c.width, c.height), tx = t.getContext('2d'); tx.fillStyle = app.color; tx.fillRect(0, 0, c.width, c.height); tx.globalCompositeOperation = 'destination-in'; tx.drawImage(app.selection.mask, 0, 0); x.drawImage(t, 0, 0); }
-      else x.fillRect(0, 0, c.width, c.height);
-      x.restore();
-    }, () => app.requestRender()); app.changed(); }));
-    if (it.type === 'raster') g.append(btn('Select (alpha)', () => { app.selection.fromAlpha(it.canvas); app.selectionChanged(); app.setTool('select'); }));
-    if (it.type === 'raster') g.append(btn('Invert pixels', () => withUndo(app.history, it.canvas, 'Invert', (x) => {
-      const id = x.getImageData(0, 0, it.canvas.width, it.canvas.height);
-      for (let k = 0; k < id.data.length; k += 4) { id.data[k] = 255 - id.data[k]; id.data[k + 1] = 255 - id.data[k + 1]; id.data[k + 2] = 255 - id.data[k + 2]; }
-      x.putImageData(id, 0, 0);
-    }, () => app.changed())));
-  }
-  g.append(btn('Delete', () => {
-    structCmd(app, 'Delete layer', () => { d.items.splice(i, 1); d.active = clamp(d.active >= i ? d.active - 1 : d.active, 0, Math.max(0, d.items.length - 1)); });
-  }, 'danger'));
-  box.append(g);
-  return box;
-}
-
-function mergeDown(app, i) {
-  const d = app.doc, up = d.layers[i], low = d.layers[i - 1];
-  const beforePx = cloneCanvas(low.canvas);
-  const before = captureStruct(d);
-  const x = low.canvas.getContext('2d');
-  x.save(); x.globalAlpha = up.opacity; x.globalCompositeOperation = up.clip ? 'source-atop' : up.blend; x.drawImage(up.canvas, 0, 0); x.restore();
-  const afterPx = cloneCanvas(low.canvas);
-  d.layers.splice(i, 1); d.active = i - 1;
-  const after = captureStruct(d);
-  touch(low.canvas);
-  const put = (c) => { x.save(); x.globalCompositeOperation = 'copy'; x.drawImage(c, 0, 0); x.restore(); touch(low.canvas); };
-  app.history.push({ label: 'Merge', bytes: d.pixelBytes * 2, undo() { put(beforePx); restoreStruct(d, before); app.changed(); }, redo() { put(afterPx); restoreStruct(d, after); app.changed(); } });
-  app.changed();
-}
-
 // ───────── actions ─────────
 const menuItem = (icon, label, fn, extra) => h('button', { class: 'menu-item', onclick: () => { closePopover(); fn(); } }, h('span', { html: ICONS[icon] || '' }), label, extra ? h('small', {}, extra) : null);
 
+let actionsTab = 'add';
 export function openActions(app, anchor) {
   app.finishTransient();
   const d = app.doc;
-  const body = h('div');
-  const sec = (t) => body.append(h('div', { class: 'menu-section' }, t));
-  sec('Add');
-  body.append(menuItem('image', 'Insert a photo / image', async () => { const [f] = await pickFile('image/*'); if (f) app.insertImage(f); }));
-  body.append(menuItem('brushImport', 'Import brushes (.sut · .brush · .brushset · .png)', () => importBrushesFlow(app)));
-  sec('Canvas');
-  body.append(menuItem('canvas', 'Canvas size…', () => resizeDialog(app), `${d.width}×${d.height}`));
-  body.append(menuItem('sym', 'Flip view horizontally', () => { app.view.flip *= -1; app.fitView(); }, app.view.flip < 0 ? 'on' : ''));
-  body.append(menuItem('sym', 'Symmetry guide…', () => symmetryDialog(app), app.symmetry.mode));
-  body.append(menuItem('canvas', 'Rename document', async () => { const n = await promptDialog('Name', d.name); if (n) { d.name = n; $('#doc-title').textContent = n; app.changed(); } }));
-  if (d.mode === 'webtoon') {
-    sec('Webtoon');
-    body.append(menuItem('panel', 'Auto panel layout…', () => Toon.autoPanelsDialog(app)));
-    body.append(menuItem('canvas', 'Extend canvas height…', () => Toon.extendDialog(app)));
-    body.append(menuItem('video', 'Phone scroll preview', () => Toon.phonePreview(app)));
-    body.append(menuItem('share', 'Export episode slices (.zip)', () => Toon.exportSlicesDialog(app)));
-  }
-  if (d.mode === 'animate') {
-    sec('Animation');
-    body.append(menuItem('share', 'Export animated GIF', () => app.timeline.exportGif()));
-    body.append(menuItem('video', 'Export video (MP4/WebM)', () => app.timeline.exportVideo()));
-    body.append(menuItem('share', 'Export PNG frames (.zip)', () => app.timeline.exportFrames()));
-  }
-  sec('Share');
-  body.append(menuItem('share', 'Export PNG', () => exportImage(app, 'png')));
-  body.append(menuItem('share', 'Export JPEG', () => exportImage(app, 'jpeg')));
-  body.append(menuItem('share', 'Export layers as PNGs (.zip)', () => exportLayers(app)));
-  body.append(menuItem('copy', 'Export project (.inkwell)', async () => download(await d.toFile(), safeName(d.name) + '.inkwell')));
-  sec('Preferences');
-  body.append(menuItem('settings', 'Settings', () => openSettings(app)));
-  body.append(menuItem('help', 'Gestures & shortcuts', () => helpDialog()));
-  openPopover(anchor, { title: 'Actions', body, width: 330 });
+  const tabs = [['add', 'Add', 'plus'], ['canvas', 'Canvas', 'canvas'], ['share', 'Share', 'share']];
+  if (d.mode === 'animate') tabs.push(['anim', 'Animation', 'video']);
+  if (d.mode === 'webtoon') tabs.push(['toon', 'Webtoon', 'panel']);
+  tabs.push(['prefs', 'Prefs', 'settings'], ['help', 'Help', 'help']);
+  if (!tabs.some((t) => t[0] === actionsTab)) actionsTab = 'add';
+  const bar = h('div', { class: 'action-tabs' }), list = h('div');
+  const pages = {
+    add: () => [
+      menuItem('image', 'Insert a photo', async () => { const [f] = await pickFile('image/*'); if (f) app.insertImage(f); }),
+      d.mode !== 'animate' && menuItem('cube', 'Add 3D layer (model / figure)', () => app.add3DLayer()),
+      menuItem('brushImport', 'Import brushes', () => importBrushesFlow(app), '.sut · .brush'),
+      d.mode === 'webtoon' && menuItem('balloon', 'Add balloon / text', () => app.setTool('balloon')),
+    ],
+    canvas: () => [
+      menuItem('canvas', 'Canvas size', () => resizeDialog(app), `${d.width}×${d.height}`),
+      menuItem('sym', 'Flip view horizontally', () => { app.view.flip *= -1; app.fitView(); }, app.view.flip < 0 ? 'On' : ''),
+      menuItem('sym', 'Drawing guide · Symmetry', () => symmetryDialog(app), app.symmetry.mode === 'off' ? '' : app.symmetry.mode),
+      menuItem('pencil', 'Rename', async () => { const n = await promptDialog('Name', d.name); if (n) { d.name = n; $('#doc-title').textContent = n; app.changed(); } }),
+    ],
+    share: () => [
+      menuItem('share', 'PNG', () => exportImage(app, 'png')),
+      menuItem('share', 'JPEG', () => exportImage(app, 'jpeg')),
+      menuItem('layers', 'PNG layers (.zip)', () => exportLayers(app)),
+      menuItem('copy', 'Inkwell project', async () => download(await d.toFile(), safeName(d.name) + '.inkwell'), '.inkwell'),
+    ],
+    anim: () => [
+      menuItem('share', 'Animated GIF', () => app.timeline.exportGif()),
+      menuItem('video', 'Video (MP4 / WebM)', () => app.timeline.exportVideo()),
+      menuItem('layers', 'PNG frames (.zip)', () => app.timeline.exportFrames()),
+    ],
+    toon: () => [
+      menuItem('panel', 'Auto panel layout', () => Toon.autoPanelsDialog(app)),
+      menuItem('canvas', 'Extend canvas height', () => Toon.extendDialog(app)),
+      menuItem('video', 'Phone scroll preview', () => Toon.phonePreview(app)),
+      menuItem('share', 'Export episode slices (.zip)', () => Toon.exportSlicesDialog(app)),
+    ],
+    prefs: () => [
+      h('div', {}, switchRow('Right-hand interface', app.settings.rightHanded, (v) => { app.settings.rightHanded = v; app.applySettings(); })),
+      h('div', {}, switchRow('Reduce transparency', app.settings.solidUI, (v) => { app.settings.solidUI = v; app.applySettings(); })),
+      h('div', {}, switchRow('Brush cursor', app.settings.cursor, (v) => { app.settings.cursor = v; app.applySettings(); })),
+      menuItem('settings', 'All settings…', () => openSettings(app)),
+    ],
+    help: () => [menuItem('help', 'Gestures & shortcuts', () => helpDialog())],
+  };
+  const render = () => {
+    bar.innerHTML = '';
+    for (const [k, label, ic] of tabs) bar.append(h('button', { class: actionsTab === k ? 'on' : '', onclick: () => { actionsTab = k; render(); } }, h('span', { html: ICONS[ic] }), label));
+    list.innerHTML = '';
+    list.append(...pages[actionsTab]().filter(Boolean));
+  };
+  render();
+  openPopover(anchor, { title: 'Actions', body: h('div', {}, bar, list), width: 380 });
 }
 
 const safeName = (n) => (n || 'untitled').replace(/[^\w\- ]+/g, '').trim() || 'untitled';
@@ -839,7 +667,7 @@ export function resizeDoc(app, W, H, ox = 0, oy = 0) {
   const d = app.doc;
   const move = (c) => { const n = makeCanvas(W, H); n.getContext('2d').drawImage(c, ox, oy); return n; };
   for (const l of d.layers) {
-    if (l.type === 'raster') l.canvas = move(l.canvas);
+    if (l.type === 'raster' || l.type === '3d') l.canvas = move(l.canvas);
     if (l.type === 'frames') for (const p of l.panels) { p.x += ox; p.y += oy; }
     if (l.type === 'balloons') for (const b of l.balloons) { b.x += ox; b.y += oy; if (b.tail) { b.tail.x += ox; b.tail.y += oy; } }
   }
@@ -865,6 +693,7 @@ export function openSettings(app) {
   const body = h('div', {},
     h('div', { class: 'menu-section' }, 'Interface'),
     switchRow('Right-hand sidebar', s.rightHanded, (v) => { s.rightHanded = v; save(); }),
+    switchRow('Reduce transparency (solid panels)', s.solidUI, (v) => { s.solidUI = v; save(); }),
     switchRow('Brush cursor (hover)', s.cursor, (v) => { s.cursor = v; save(); }),
     switchRow('Gestures (pinch / rotate / pan)', s.gestures, (v) => { s.gestures = v; save(); }),
     h('div', { class: 'menu-section' }, 'Apple Pencil'),
@@ -873,8 +702,8 @@ export function openSettings(app) {
     switchRow('QuickShape (hold at end of a stroke)', s.quickShape, (v) => { s.quickShape = v; save(); }),
     field('QuickShape delay', { min: 250, max: 1500, step: 50, value: s.quickShapeDelay, fmt: (v) => v + ' ms', onInput: (v) => { s.quickShapeDelay = v; save(); } }),
     h('div', { class: 'menu-section' }, 'Performance'),
-    field('Memory budget for layers', { min: 200, max: 3000, step: 50, value: s.memoryMB, fmt: (v) => v + ' MB', onInput: (v) => { s.memoryMB = v; save(); } }),
-    h('p', { class: 'hint' }, 'iPads give Safari a limited amount of canvas memory. Raise this on newer iPads (M-series); lower it if the app reloads unexpectedly.'),
+    field('Memory budget for layers', { min: 300, max: 4000, step: 50, value: s.memoryMB, fmt: (v) => v + ' MB', onInput: (v) => { s.memoryMB = v; save(); } }),
+    h('p', { class: 'hint' }, 'Sets how many layers you can add. M-series iPads start at 2000 MB (≈115 layers at 2048×2048). Drawing speed does not depend on layer count. If the app ever reloads by itself, lower this.'),
     switchRow('Autosave', s.autosave, (v) => { s.autosave = v; save(); }),
   );
   dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });
