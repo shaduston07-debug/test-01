@@ -23,7 +23,9 @@ A notes app in the style of Apple Notes, with a few extras:
 
 **On a tablet or phone:** open the published version at https://claude.ai/artifact/BJ7rWPs8uzsiPmKZ5s4N4D (sign in to claude.ai). There, notes and your personal dictionary are saved to your claude.ai account, so they're on every device. claude.ai pages can't reach outside websites, so Claude writes the definitions and the extra Old Norse translations instead. The first time, the page asks your permission.
 
-**As a full-screen iPad app** (needed for audio recording): the folder must be on a website. With GitHub Pages:
+**As an installed iPad/iPhone app (.ipa):** every push builds an unsigned `Inkwell.ipa` on GitHub's Macs (`.github/workflows/ios.yml`) and attaches it to the [**ipa-latest** release](https://github.com/shaduston07-debug/test-01/releases/tag/ipa-latest). Download it on the iPad and open it with your sideloader (AltStore, SideStore, Sideloadly, ESign …), which signs it for your device. The app runs full screen and works offline, and recording, the camera, photos and the share sheet all work. Notes are kept in the app; use **Back up all notes** / **Restore a backup** to move them in. The native wrapper is in `ios/`: a small SwiftUI app that serves the bundled web app from `inkwell://app`.
+
+**As a full-screen home-screen web app** (no sideloader needed): the folder must be on a website. With GitHub Pages:
 
 1. On github.com, open the repository's **Settings › General**. At the bottom, choose **Change visibility › Public**. Free GitHub accounts can only publish public repositories. Only the code becomes public; your notes stay on your iPad.
 2. Open **Settings › Pages**. Under *Build and deployment* choose **Deploy from a branch**, pick the branch `claude/notes-spell-check-definitions-q0ppqf` and the folder **/ (root)**, then **Save**.
@@ -62,6 +64,7 @@ python3 -m http.server 8000
 | Typed-sum calculator | `js/calc.js` |
 | claude.ai sync and Claude lookups | `js/cloud.js` |
 | Home-screen app: manifest, icons, offline cache | `manifest.webmanifest`, `icons/`, `sw.js` |
+| Native iPad/iPhone app and its .ipa build | `ios/`, `.github/workflows/ios.yml` |
 | Pencil / stylus sketching | `js/sketch.js` |
 | Pictures, recordings, moving blocks | `js/blocks.js`, `js/media.js` (files kept in IndexedDB) |
 | Export: PDF, Word, text, Markdown, web page, backup | `js/export.js`, `js/docx.js` |
