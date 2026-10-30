@@ -10,6 +10,7 @@ import { snapshot, pixelCmd, withUndo, touch } from './history.js';
 import { StrokeEngine } from './engine.js';
 import { DEFAULT_BRUSHES, GRAINS, getTipMask, preloadBrush, newBrushFrom, strokePreviewPoints, rawImageToMaskCanvas } from './brushes.js';
 import { importBrushFiles } from './importers.js';
+import * as Ibis from './ibis.js';
 import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask } from './tools.js';
 import * as store from './storage.js';
 import * as Toon from './webtoon.js';
@@ -418,9 +419,18 @@ export function openBrushLibrary(app, anchor) {
   const head = [
     h('button', { class: 'small-btn', title: 'Import .sut (Clip Studio), .brush/.brushset (Procreate) or PNG tips', onclick: () => importBrushesFlow(app, () => { cat = 'Imported'; render(); }) }, 'Import'),
     h('button', { class: 'small-btn', onclick: () => { closePopover(); openBrushStudio(app, app.brushFor(toolName), true); } }, '＋ New'),
+    h('button', { class: 'small-btn ibis', title: 'Import an ibis Paint brush QR code, or create an ibis-style brush', onclick: () => ibisMenu(app, () => { cat = 'ibis Paint'; render(); }) }, 'ibis Paint'),
   ];
   const title = { brush: 'Brush Library', smudge: 'Smudge — brush', eraser: 'Eraser — brush' }[toolName];
   openPopover(anchor, { title, body: h('div', {}, h('div', { class: 'brush-lib' }, catsEl, listEl), h('p', { class: 'hint', style: { margin: '8px 4px 0' } }, 'Tap a selected brush again to edit it in Brush Studio.')), head, width: 420, key: 'brushes', float: true });
+}
+
+function ibisMenu(app, after) {
+  dialog({ title: 'ibis Paint brushes', body: h('p', {}, 'In ibis Paint: open the Brush window › choose your custom brush › menu › Export Brush QR Code. Then pick that QR image here (a screenshot of a QR code works too).'), actions: [
+    { label: 'Scan QR image…', primary: true, onClick: () => { closePopover(); Ibis.importIbisQR(app, after); } },
+    { label: 'Create ibis-style brush', onClick: () => { closePopover(); Ibis.ibisEditor(app, {}, null, after); } },
+    { label: 'Cancel' },
+  ] });
 }
 
 export async function importBrushesFlow(app, after) {
@@ -484,7 +494,8 @@ export function openBrushStudio(app, base, asNew = false) {
     section('Stroke path', num('spacing', 'Spacing', 0.01, 2, 0.01), num('streamline', 'StreamLine (stabilizer)', 0, 0.95, 0.01), num('scatter', 'Scatter', 0, 3, 0.01), num('taper', 'Taper (finger/mouse)', 0, 1, 0.01)),
     section('Shape', h('div', { class: 'field' }, h('label', {}, 'Tip source'), h('span'), tipSel), num('hardness', 'Hardness (round tip)', 0, 1, 0.01), num('roundness', 'Roundness', 0.05, 1, 0.01), num('rotation', 'Rotation°', -180, 180, 1, (v) => Math.round(v) + '°'), num('angleJitter', 'Rotation jitter', 0, 1, 0.01), num('sizeJitter', 'Size jitter', 0, 1, 0.01), sw('follow', 'Follow stroke direction'), sw('invertTip', 'Invert shape')),
     section('Grain', h('div', { class: 'field' }, h('label', {}, 'Texture'), h('span'), grainSel), num('grainScale', 'Scale', 0.2, 5, 0.05), num('grainDepth', 'Depth', 0, 1, 0.01)),
-    section('Dynamics (Apple Pencil)', num('sizePressure', 'Pressure → size', 0, 1, 0.01), num('minSize', 'Minimum size', 0, 1, 0.01), num('opacityPressure', 'Pressure → opacity', 0, 1, 0.01), num('flowPressure', 'Pressure → flow', 0, 1, 0.01), num('tiltSize', 'Tilt → size (shading)', 0, 4, 0.05), num('tiltOpacity', 'Tilt → opacity', 0, 1, 0.01)),
+    section('Dynamics (Apple Pencil)', num('sizePressure', 'Pressure → size', 0, 1, 0.01), num('minSize', 'Minimum size', 0, 1, 0.01), num('opacityPressure', 'Pressure → opacity', 0, 1, 0.01), num('flowPressure', 'Pressure → flow', 0, 1, 0.01), num('tiltSize', 'Tilt → size (shading)', 0, 4, 0.05), num('tiltOpacity', 'Tilt → opacity', 0, 1, 0.01),
+      num('speedSize', 'Speed → thinner', 0, 1, 0.01), num('speedOpacity', 'Speed → lighter', 0, 1, 0.01), sw('taperAlways', 'Taper also with Apple Pencil')),
     section('Properties', h('div', { class: 'field' }, h('label', {}, 'Name'), h('span'), name), h('div', { class: 'field' }, h('label', {}, 'Category'), h('span'), catIn), num('flow', 'Flow (build-up)', 0.01, 1, 0.01), num('opacity', 'Default opacity', 0.01, 1, 0.01), num('maxSize', 'Max size (px)', 2, 1000, 1, (v) => Math.round(v)), num('size', 'Default size (px)', 1, 1000, 1, (v) => Math.round(v)), num('smudgeStrength', 'Smudge strength', 0, 1, 0.01)),
   );
   // drawing pad
@@ -531,7 +542,7 @@ export function openBrushStudio(app, base, asNew = false) {
 
   const actions = [{ label: 'Cancel' }];
   if (b.override) actions.unshift({ label: 'Reset to default', onClick: async () => {
-    const def = DEFAULT_BRUSHES.find((x) => x.id === b.id);
+    const def = DEFAULT_BRUSHES.find((x) => x.id === b.id) || Ibis.IBIS_PRESETS.find((x) => x.id === b.id);
     await store.deleteBrush(b.id);
     const i = app.brushes.findIndex((x) => x.id === b.id);
     if (def && i >= 0) app.brushes[i] = { ...def, _v: Date.now() };
@@ -579,6 +590,7 @@ export function openActions(app, anchor) {
       menuItem('image', 'Insert a photo', async () => { const [f] = await pickFile('image/*'); if (f) app.insertImage(f); }),
       d.mode !== 'animate' && menuItem('cube', 'Add 3D layer (model / figure)', () => app.add3DLayer()),
       menuItem('brushImport', 'Import brushes', () => importBrushesFlow(app), '.sut · .brush'),
+      menuItem('brushImport', 'Import ibis Paint brush', () => Ibis.importIbisQR(app), 'QR code'),
       d.mode === 'webtoon' && menuItem('balloon', 'Add balloon / text', () => app.setTool('balloon')),
     ],
     canvas: () => [

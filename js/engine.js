@@ -52,6 +52,7 @@ export class StrokeEngine {
     }
     this.bounds = emptyRect(); this.dirty = emptyRect();
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
+    this.speed = 0; this.lastTime = null;
     this.sym = this.symTransforms(o.symmetry);
     if (this.kind !== 'smudge' && !this.fast) {
       const p = this.preview.getContext('2d');
@@ -92,7 +93,15 @@ export class StrokeEngine {
   add(p) {
     if (!this.active) return;
     const l = this.target.toLocal(p.x, p.y);
-    const pt = { x: l.x, y: l.y, p: clamp(p.pressure, 0, 1), t: p.tilt || 0 };
+    const pt = { x: l.x, y: l.y, p: clamp(p.pressure, 0, 1), t: p.tilt || 0, v: 0 };
+    // pointer speed in screen px per ms, smoothed (drives speed dynamics)
+    if (this.lastRaw && p.time != null && this.lastTime != null) {
+      const dt = Math.max(1, p.time - this.lastTime);
+      const inst = Math.hypot(pt.x - this.lastRaw.x, pt.y - this.lastRaw.y) * this.scale * (this.o.viewZoom || 1) / dt;
+      this.speed = this.speed * 0.75 + Math.min(inst, 8) * 0.25;
+    }
+    if (p.time != null) this.lastTime = p.time;
+    pt.v = this.speed || 0;
     this.lastRaw = pt;
     if (!this.s) {
       this.s = { ...pt };
@@ -106,7 +115,7 @@ export class StrokeEngine {
       x: this.s.x + (pt.x - this.s.x) * k,
       y: this.s.y + (pt.y - this.s.y) * k,
       p: this.s.p + (pt.p - this.s.p) * Math.min(1, k * 1.6),
-      t: pt.t,
+      t: pt.t, v: pt.v,
     };
     if (Math.hypot(s.x - this.s.x, s.y - this.s.y) < 0.35 / this.scale && Math.abs(s.p - this.s.p) < 0.02) return;
     this.s = s;
@@ -116,7 +125,7 @@ export class StrokeEngine {
   pushPoint(s) {
     const q = this.q; q.push(s);
     const n = q.length;
-    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, p: (a.p + b.p) / 2, t: (a.t + b.t) / 2 });
+    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, p: (a.p + b.p) / 2, t: (a.t + b.t) / 2, v: ((a.v || 0) + (b.v || 0)) / 2 });
     if (n === 2) { this.walk(q[0], mid(q[0], q[1])); return; }
     const a = mid(q[n - 3], q[n - 2]), c = q[n - 2], b = mid(q[n - 2], q[n - 1]);
     this.curve(a, c, b);
@@ -130,7 +139,7 @@ export class StrokeEngine {
     for (let i = 1; i <= steps; i++) {
       const t = i / steps, u = 1 - t;
       const q = (k) => u * u * a[k] + 2 * u * t * c[k] + t * t * b[k];
-      const cur = { x: q('x'), y: q('y'), p: q('p'), t: q('t') };
+      const cur = { x: q('x'), y: q('y'), p: q('p'), t: q('t'), v: (a.v || 0) * u + (b.v || 0) * t };
       this.walk(prev, cur);
       prev = cur;
     }
@@ -144,7 +153,7 @@ export class StrokeEngine {
     while (pos + this.carry <= len) {
       pos += this.carry;
       const t = pos / len;
-      const pt = { x: a.x + dx * t, y: a.y + dy * t, p: a.p + (b.p - a.p) * t, t: a.t + (b.t - a.t) * t };
+      const pt = { x: a.x + dx * t, y: a.y + dy * t, p: a.p + (b.p - a.p) * t, t: a.t + (b.t - a.t) * t, v: (a.v || 0) + ((b.v || 0) - (a.v || 0)) * t };
       this.travelNow = this.travel + pos;
       this.stampAt(pt);
       this.carry = this.spacingAt(pt);
@@ -158,7 +167,8 @@ export class StrokeEngine {
     let s = this.size * (1 - b.sizePressure * (1 - pt.p));
     s = Math.max(s, this.size * (b.minSize || 0));
     s *= 1 + (b.tiltSize || 0) * pt.t;
-    if (this.o.simTaper && b.taper > 0) {
+    if (b.speedSize) s *= 1 - b.speedSize * 0.85 * Math.min(1, (pt.v || 0) / 3);
+    if ((this.o.simTaper || b.taperAlways) && b.taper > 0) {
       const L = b.taper * this.size * 4 + 1;
       s *= 0.15 + 0.85 * Math.min(1, (this.travelNow ?? this.travel) * this.scale / L);
     }
@@ -171,7 +181,7 @@ export class StrokeEngine {
     let size = this.sizeAt(pt);
     if (b.sizeJitter) size *= 1 - b.sizeJitter * Math.random();
     // "opacity" dynamics are converted to per-stamp alpha so their steady state matches
-    const o = (1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t);
+    const o = (1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - (b.speedOpacity || 0) * 0.85 * Math.min(1, (pt.v || 0) / 3));
     const ao = o >= 0.999 ? 1 : 1 - Math.pow(1 - clamp(o, 0, 0.999), Math.max(0.02, b.spacing));
     let alpha = b.flow * (1 - (b.flowPressure || 0) * (1 - pt.p)) * ao;
     let x = pt.x, y = pt.y;

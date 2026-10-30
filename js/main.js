@@ -5,6 +5,7 @@ import { Doc, Layer } from './doc.js';
 import { History, snapshot, pixelCmd, withUndo } from './history.js';
 import { StrokeEngine, detectShape, shapePoints } from './engine.js';
 import { DEFAULT_BRUSHES, preloadBrush } from './brushes.js';
+import { IBIS_PRESETS } from './ibis.js';
 import { Selection, FloatingTransform, computeFill, tracePath } from './tools.js';
 import * as store from './storage.js';
 import * as UI from './ui.js';
@@ -50,7 +51,7 @@ class App {
     this.toolBrush = store.prefs.get('toolBrush', { brush: 'studio-pen', smudge: 'blender', eraser: 'soft-air' });
     this.sizes = store.prefs.get('sizes', {});
     this.symmetry = { mode: 'off', count: 6 };
-    this.brushes = [...DEFAULT_BRUSHES];
+    this.brushes = [...DEFAULT_BRUSHES, ...IBIS_PRESETS];
     this.penSeen = store.prefs.get('penSeen', false);
     this.doc = null;
     this.tools = this.makeTools();
@@ -791,7 +792,7 @@ class App {
         const toolName = kind === 'paint' ? 'brush' : kind === 'erase' ? 'eraser' : 'smudge';
         app.engine.begin(target, app.brushFor(toolName), {
           kind, color: app.color, size: app.getSize(), opacity: app.getOpacity(), symmetry: app.symmetry,
-          selection: app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen',
+          selection: app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen', viewZoom: app.view.zoom,
           onChange: () => app.changed(),
         });
         this.target = target; this.raw = [p]; this.shape = null; this.anchor = p;

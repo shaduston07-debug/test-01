@@ -3,7 +3,7 @@ import { loadScript, loadImage, clamp } from './util.js';
 import { BRUSH_DEFAULTS, rawImageToMaskCanvas, newBrushFrom } from './brushes.js';
 
 let SQLp = null;
-async function getSql() {
+export async function getSql() {
   if (!SQLp) {
     SQLp = loadScript('vendor/sql-wasm.js').then(() => window.initSqlJs({ locateFile: (f) => 'vendor/' + f }));
   }

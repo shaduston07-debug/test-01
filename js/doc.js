@@ -191,6 +191,8 @@ export class Doc {
       if (!cel) return null;
       const t = it.transformAt(frame);
       c = cel.canvas; matrix = isIdentity(t) ? null : trackMatrix(t, this.width, this.height); alpha = t.o ?? 1;
+    } else if (it.type === '3d' && it._live) {
+      return { canvas: it._live, matrix: null, alpha: 1, overlay: null, size: [this.width, this.height] };
     } else if (it.type === 'raster' || it.type === '3d') c = it.canvas;
     else return null;
     return { canvas: (preview && preview(c)) || c, matrix, alpha, overlay: overlay ? overlay(c) : null };
@@ -198,7 +200,8 @@ export class Doc {
 
   drawSource(ctx, src) {
     if (src.matrix) { ctx.save(); const m = src.matrix; ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f); }
-    ctx.drawImage(src.canvas, 0, 0);
+    if (src.size) ctx.drawImage(src.canvas, 0, 0, src.size[0], src.size[1]);
+    else ctx.drawImage(src.canvas, 0, 0);
     if (src.overlay) {
       const a = ctx.globalAlpha;
       ctx.globalAlpha = a * src.overlay.alpha;

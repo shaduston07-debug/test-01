@@ -9,6 +9,8 @@ export const BRUSH_DEFAULTS = {
   sizePressure: 0.8, opacityPressure: 0, flowPressure: 0, sizeJitter: 0, scatter: 0, count: 1,
   tiltSize: 0, tiltOpacity: 0, taper: 0.25, grain: null, grainImage: null, grainScale: 1, grainDepth: 0.7,
   hueJitter: 0, smudgeStrength: 0.7, category: 'Inking',
+  // speed dynamics (ibis Paint style): faster strokes get thinner / lighter
+  speedSize: 0, speedOpacity: 0, taperAlways: false,
 };
 
 const B = (o) => ({ ...BRUSH_DEFAULTS, builtin: true, ...o });

@@ -62,6 +62,11 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - **Procreate `.brush` / `.brushset`**: unzips Shape/Grain PNGs and reads `Brush.archive` (binary plist / NSKeyedArchiver) for name, spacing, jitter, StreamLine and pressure settings
 - **PNG / JPG**: any image as a tip
 
+**ibis Paint brushes**
+- Brush Library › **ibis Paint** › *Scan QR image*: pick the QR code exported from ibis Paint (Brush window › menu › Export Brush QR Code), or a screenshot of one
+- The QR is decoded in the app (jsQR). ibis Paint's brush-code format isn't public, so every recognisable setting is read and the rest are filled in from an editor that uses ibis Paint's own setting names (Thickness, Opacity, Interval, Start thickness, pressure / speed / random, Angle, Stabilizer, Anti-aliasing, brush image). The raw code is kept with the brush
+- ibis-style starter brushes (Dip Pen, Felt Tip, Fude, Pencil, Airbrush, Watercolor, Glow) and **speed dynamics** in the engine: faster strokes get thinner and/or lighter
+
 **Layers** (Procreate-style, plus CSP extras): hold and drag to reorder, **groups** (collapse, hide, opacity, flatten; drop a layer onto a group to put it inside), and options in a scrollable side sheet next to the panel
 - 17 blend modes, opacity, alpha lock, clipping masks, merge, duplicate, reorder, fill, clear, select-from-alpha
 - **Reference layer** (from CSP): the fill tool reads boundaries from it, so you can fill colors on a separate layer under your line art
@@ -74,7 +79,7 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - Transform: uniform or freeform, flip, rotate, fit
 - Adjustments with live preview: HSB, color balance, levels, blur, sharpen, noise, posterize, threshold, gradient map, *brightness → opacity* (clean up scanned line art), *change line color*
 
-**3D layers**: a posable drawing figure (tap a body part in *Pose* and drag to bend it, plus presets), imported **glTF/GLB/VRM, FBX and OBJ** models (the open formats Clip Studio Paint imports; CSP's own `.cmo` files are a closed format), primitive shapes, orbit / pan / zoom camera, move / rotate / scale, lighting and outlines, then *Rasterize* to draw over it. three.js loads only when a 3D layer is used.
+**3D layers**: a posable drawing figure (tap a body part in *Pose* and drag to bend it, plus presets), imported **glTF/GLB/VRM, FBX and OBJ** models (the open formats Clip Studio Paint imports). Clip Studio files (`.cs3c`, `.cs3o`, `.cs3s`, `.cmo`, …) are searched for an embedded FBX / glTF / OBJ (including inside zip or SQLite containers) and loaded when one is found; CSP's own formats are closed, so this works only for some files, primitive shapes, orbit / pan / zoom camera, move / rotate / scale, lighting and outlines, then *Rasterize* to draw over it. three.js loads only when a 3D layer is used.
 
 **Animation (Dreams-style)**
 - Tracks of flipbook drawings. Retime by dragging blocks; hold ±, duplicate, delete

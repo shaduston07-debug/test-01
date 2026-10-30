@@ -157,7 +157,10 @@ async function buildObject(layer, rt, o) {
   if (!node) return;
   node.userData.objId = o.id;
   node.traverse((c) => { c.userData.objId = o.id; });
-  if (o.kind !== 'prim' || o.prim !== 'floor') addOutlines(node, rt.outlineW);
+  // outlines double the geometry drawn: skip them on very heavy models
+  const heavy = (node.userData.tris || 0) > 250000;
+  if ((o.kind !== 'prim' || o.prim !== 'floor') && !heavy) addOutlines(node, rt.outlineW);
+  if (heavy) toast(`Large model (${Math.round(node.userData.tris / 1000)}k triangles): outlines are off for it to keep things smooth`, 3500);
   rt.scene.add(node);
   const entry = { node, joints, figMat, data: o };
   rt.objs.set(o.id, entry);
@@ -172,6 +175,86 @@ function syncObject(e) {
   if (e.joints) applyPose({ joints: e.joints }, o);
 }
 
+// Big textures cost memory and upload time on every layer; 2048 px is plenty for drawing.
+function capTexture(tex, maxPx = 2048) {
+  const img = tex && tex.image;
+  if (!img || !img.width || Math.max(img.width, img.height) <= maxPx) return;
+  const k = maxPx / Math.max(img.width, img.height);
+  const c = makeCanvas(img.width * k, img.height * k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  tex.image = c; tex.needsUpdate = true;
+}
+
+// ───────── finding standard models inside other files (Clip Studio workaround) ─────────
+const enc = (str) => new TextEncoder().encode(str);
+function indexOf(u8, pat, from = 0) {
+  outer: for (let i = from; i <= u8.length - pat.length; i++) {
+    for (let k = 0; k < pat.length; k++) if (u8[i + k] !== pat[k]) continue outer;
+    return i;
+  }
+  return -1;
+}
+export async function extractEmbeddedModel(u8, depth = 0) {
+  if (depth > 2 || !u8 || u8.length < 16) return null;
+  const head = new TextDecoder().decode(u8.slice(0, 16));
+  // zip container
+  if (u8[0] === 0x50 && u8[1] === 0x4b) {
+    try {
+      const { loadScript } = await import('./util.js');
+      await loadScript('vendor/jszip.min.js');
+      const zip = await window.JSZip.loadAsync(u8);
+      const files = Object.values(zip.files).filter((e) => !e.dir).sort((a, b) => (b._data?.uncompressedSize || 0) - (a._data?.uncompressedSize || 0));
+      for (const e of files) {
+        const ext = e.name.split('.').pop().toLowerCase();
+        if (['glb', 'gltf', 'vrm', 'fbx', 'obj'].includes(ext)) return { ext, bytes: await e.async('uint8array') };
+      }
+      for (const e of files) { const r = await extractEmbeddedModel(await e.async('uint8array'), depth + 1); if (r) return r; }
+    } catch { /* not a readable zip */ }
+  }
+  // SQLite container: check every blob
+  if (head.startsWith('SQLite format 3')) {
+    try {
+      const { getSql } = await import('./importers.js');
+      const SQL = await getSql();
+      const db = new SQL.Database(u8);
+      const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'")[0];
+      for (const [t] of tables ? tables.values : []) {
+        const res = db.exec(`SELECT * FROM "${t}"`)[0];
+        for (const row of res ? res.values : []) for (const v of row) {
+          if (v instanceof Uint8Array && v.length > 64) { const r = await extractEmbeddedModel(v, depth + 1); if (r) { db.close(); return r; } }
+        }
+      }
+      db.close();
+    } catch { /* not readable */ }
+  }
+  // binary glTF / VRM
+  let i = indexOf(u8, enc('glTF'));
+  while (i >= 0) {
+    const dv = new DataView(u8.buffer, u8.byteOffset + i);
+    if (u8.length - i >= 12 && dv.getUint32(4, true) === 2) {
+      const len = dv.getUint32(8, true);
+      if (len > 20 && i + len <= u8.length) return { ext: 'glb', bytes: u8.slice(i, i + len) };
+    }
+    i = indexOf(u8, enc('glTF'), i + 4);
+  }
+  // binary or ASCII FBX
+  i = indexOf(u8, enc('Kaydara FBX Binary'));
+  if (i >= 0) return { ext: 'fbx', bytes: u8.slice(i) };
+  i = indexOf(u8, enc('; FBX '));
+  if (i >= 0) return { ext: 'fbx', bytes: u8.slice(i) };
+  // plain OBJ text
+  if (depth > 0 || /^(#|v |o |g |mtllib)/.test(head) || indexOf(u8.slice(0, 4096), enc('\nv ')) >= 0) {
+    const txt = new TextDecoder().decode(u8.slice(0, 200000));
+    const m = txt.match(/v\s+-?[\d.]+\s+-?[\d.]+\s+-?[\d.]+/);
+    if (m && /^f\s+\d/m.test(txt)) {
+      // start at the first vertex record so leading container bytes don't confuse the parser
+      const start = new TextEncoder().encode(txt.slice(0, m.index)).length;
+      return { ext: 'obj', bytes: u8.slice(start) };
+    }
+  }
+  return null;
+}
+
 async function loadModel(m) {
   if (!m) return null;
   const buf = await m.blob.arrayBuffer();
@@ -182,7 +265,13 @@ async function loadModel(m) {
   } else if (m.ext === 'fbx') root = new T.FBXLoader().parse(buf, '');
   else if (m.ext === 'obj') root = new T.OBJLoader().parse(new TextDecoder().decode(buf));
   if (!root) return null;
+  let tris = 0;
   root.traverse((c) => {
+    if (c.isMesh && c.geometry) {
+      const g = c.geometry;
+      tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+      for (const m of [].concat(c.material || [])) for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) capTexture(m[key]);
+    }
     if (c.isMesh && c.geometry && !c.geometry.attributes.normal) c.geometry.computeVertexNormals();
     // tolerate models with inconsistent face winding
     if (c.isMesh) for (const m of [].concat(c.material || [])) m.side = T.DoubleSide;
@@ -196,6 +285,7 @@ async function loadModel(m) {
   const c = box.getCenter(new T.Vector3());
   root.position.set(-c.x * k, -box.min.y * k, -c.z * k);
   wrap.add(root);
+  wrap.userData.tris = tris;
   return wrap;
 }
 
@@ -214,25 +304,35 @@ function applySceneSettings(layer, rt, doc) {
 // Renders the layer's 3D scene into its canvas. scale < 1 = quick preview while dragging.
 export async function render3D(layer, doc, scale = 1) {
   const rt = await runtimeFor(layer);
+  renderNow(layer, doc, rt, scale);
+  return rt;
+}
+
+// Synchronous render once the scene exists (used for live dragging).
+function renderNow(layer, doc, rt, scale = 1, live = false) {
   applySceneSettings(layer, rt, doc);
-  const w = Math.max(1, Math.round(doc.width * scale)), hh = Math.max(1, Math.round(doc.height * scale));
   if (!renderer) {
     renderer = new T.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
     renderer.outputColorSpace = T.SRGBColorSpace;
     renderer.toneMapping = T.NoToneMapping;
+    renderer.setPixelRatio(1);
+    renderer.setClearColor(0x000000, 0);
   }
   const max = renderer.capabilities.maxRenderbufferSize || 8192;
+  let w = Math.max(1, Math.round(doc.width * scale)), hh = Math.max(1, Math.round(doc.height * scale));
   const k = Math.min(1, max / Math.max(w, hh));
-  renderer.setPixelRatio(1);
-  renderer.setSize(Math.round(w * k), Math.round(hh * k), false);
-  renderer.setClearColor(0x000000, 0);
+  w = Math.round(w * k); hh = Math.round(hh * k);
+  const el = renderer.domElement;
+  if (el.width !== w || el.height !== hh) renderer.setSize(w, hh, false); // resize only when the size really changes
   renderer.render(rt.scene, rt.camera);
+  // while dragging, the compositor draws the WebGL canvas directly (no full-size copy)
+  if (live) { layer._live = el; return; }
+  layer._live = null;
   const x = layer.canvas.getContext('2d');
   x.clearRect(0, 0, doc.width, doc.height);
-  x.imageSmoothingQuality = 'high';
-  x.drawImage(renderer.domElement, 0, 0, doc.width, doc.height);
+  x.imageSmoothingQuality = scale < 1 ? 'low' : 'high';
+  x.drawImage(el, 0, 0, doc.width, doc.height);
   touch(layer.canvas);
-  return rt;
 }
 
 // ───────── tool ─────────
@@ -248,11 +348,21 @@ export function tool3d(app) {
     exit() { this.joint = null; const L = this.layer(); if (L && runtimes.get(L)) { this.highlight(null); this.redraw(1); } },
     async redraw(scale = 1) {
       const L = this.layer(); if (!L) return;
-      if (this.busy) { this.again = scale; return; }
-      this.busy = true;
-      try { await render3D(L, app.doc, scale); } finally { this.busy = false; }
-      app.requestRender('active');
-      if (this.again != null) { const s = this.again; this.again = null; this.redraw(s); }
+      if (!runtimes.get(L)) { await render3D(L, app.doc, scale); app.requestRender('active'); return; }
+      this.schedule(scale);
+    },
+    // live preview: one render per display frame, at about the on-screen resolution
+    previewScale() { return clamp(app.view.zoom * app.dpr * 0.8, 0.2, 0.65); },
+    schedule(scale) {
+      this.pending = this.pending == null ? scale : Math.max(this.pending, scale);
+      if (this.raf) return;
+      this.raf = requestAnimationFrame(() => {
+        this.raf = 0;
+        const L = this.layer(), rt = L && runtimes.get(L), sc = this.pending; this.pending = null;
+        if (!rt) return;
+        renderNow(L, app.doc, rt, sc, sc < 1 && (this.dragging || this.live));
+        app.requestRender('active');
+      });
     },
     snapshot() { return JSON.stringify(this.layer().scene3d); },
     commit(label, before) {
@@ -332,7 +442,7 @@ export function tool3d(app) {
         }
         syncObject(e);
       }
-      this.redraw(0.5);
+      this.redraw(this.previewScale());
     },
     up() {
       if (!this.dragging) return;
@@ -385,16 +495,24 @@ export function tool3d(app) {
       ] });
     },
     async importModel() {
-      const [f] = await pickFile('.glb,.gltf,.vrm,.fbx,.obj');
+      const [f] = await pickFile('.glb,.gltf,.vrm,.fbx,.obj,.cs3c,.cs3o,.cs3s,.cmo,.csmf,.c2fc');
       if (!f) return;
-      const ext = f.name.split('.').pop().toLowerCase();
-      if (['cmo', 'c2fc', 'csfpose'].includes(ext)) { toast("Clip Studio's own 3D files (.cmo) use a closed format — export or download the model as FBX, OBJ or glTF/VRM instead.", 5000); return; }
-      if (!['glb', 'gltf', 'vrm', 'fbx', 'obj'].includes(ext)) { toast('Use a .glb / .gltf / .vrm, .fbx or .obj model'); return; }
+      let ext = f.name.split('.').pop().toLowerCase(), blob = f, note = '';
+      if (!['glb', 'gltf', 'vrm', 'fbx', 'obj'].includes(ext)) {
+        // Clip Studio (or unknown) file: look for a standard model embedded inside it
+        toast('Looking inside ' + f.name + '…', 6000);
+        const found = await extractEmbeddedModel(new Uint8Array(await f.arrayBuffer()));
+        if (!found) {
+          toast("No standard 3D data inside this Clip Studio file (its format is closed). Get the model as FBX / OBJ / glTF / VRM — most CSP Assets creators also publish those — or pose it in CSP and import a render as an image.", 8000);
+          return;
+        }
+        ext = found.ext; blob = new Blob([found.bytes]); note = ` (${found.ext.toUpperCase()} found inside ${f.name})`;
+      }
       const L = this.layer();
       const id = uid();
-      L.models.set(id, { id, ext, name: f.name, blob: f });
+      L.models.set(id, { id, ext, name: f.name, blob });
       toast('Loading ' + f.name + '…', 6000);
-      try { await this.addObject({ id: uid(), kind: 'model', modelId: id, name: f.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Import model'); toast('Model added — use Move / Rotate / Scale'); }
+      try { await this.addObject({ id: uid(), kind: 'model', modelId: id, name: f.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Import model'); toast('Model added' + note + ' — use Move / Rotate / Scale', 4000); }
       catch (e) { console.error(e); L.models.delete(id); toast('Could not read that model: ' + e.message, 4500); }
     },
     deleteSel() {
@@ -410,7 +528,7 @@ export function tool3d(app) {
       this.redraw(1); app.updateCtxBar();
     },
     lightDialog() {
-      const L = this.layer(), s = L.scene3d, b = this.snapshot(), r = () => this.redraw(0.6);
+      const L = this.layer(), s = L.scene3d, b = this.snapshot(), r = () => { this.live = true; this.redraw(this.previewScale()); };
       const e = this.sel && runtimes.get(L).objs.get(this.sel);
       const color = h('input', { type: 'color', value: (e && e.data.color) || '#d8d2c8' });
       color.oninput = () => { if (!e) return; e.data.color = color.value; e.node.traverse((m) => { if (m.isMesh && !m.userData.outline && m.material.color) m.material.color.set(color.value); }); r(); };
@@ -423,7 +541,7 @@ export function tool3d(app) {
         switchRow('Outlines', s.outline, (v) => { s.outline = v; r(); }),
         field('Outline width', { min: 0.002, max: 0.03, step: 0.001, value: s.outlineWidth, fmt: (v) => v.toFixed(3), onInput: (v) => { s.outlineWidth = v; r(); } }),
         e ? h('div', { class: 'toggle-row' }, h('span', {}, 'Selected object colour'), color) : h('p', { class: 'hint' }, 'Select an object (Move / Rotate / Scale, then tap it) to change its colour.')),
-        actions: [{ label: 'Done', primary: true }], onClose: () => { if (e) { const o = s.objects.find((x) => x.id === e.data.id); if (o) o.color = e.data.color; } this.commit('3D style', b); this.redraw(1); } });
+        actions: [{ label: 'Done', primary: true }], onClose: () => { this.live = false; if (e) { const o = s.objects.find((x) => x.id === e.data.id); if (o) o.color = e.data.color; } this.commit('3D style', b); this.redraw(1); } });
     },
     async rasterize() {
       const L = this.layer();
