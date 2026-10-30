@@ -49,12 +49,16 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="7" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="17" r="1"/><path d="M9 7h11M9 12h11M9 17h11"/></svg>
           </button>
           <button class="fmt-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+          <span class="divider"></span>
+          <button class="fmt-btn" id="insert-sketch" title="Sketch with a pencil, pen or finger" aria-label="Insert sketch">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3-6 5-9 7-9 3 0-1 9 2 9 2 0 3-4 5-4 1.5 0 2 1.5 4 1.5"/></svg>
+          </button>
         </div>
         <div class="toolbar-right">
-          <label class="toggle" title="Show a book-style definition when you click a word">
+          <label class="toggle" title="Show the definition and Old Norse translations when you click a word">
             <input type="checkbox" id="define-toggle" checked>
             <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            <span class="toggle-label">Define on click</span>
+            <span class="toggle-label">Look up on click</span>
           </label>
           <button class="icon-btn" id="delete-note" title="Delete note" aria-label="Delete note">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
@@ -92,10 +96,44 @@
     </div>
   </div>
 
+  <!-- Sketch editor (pencil / stylus / finger) -->
+  <div class="sketch-overlay" id="sketch-overlay" hidden>
+    <div class="sketch-sheet" role="dialog" aria-label="Sketch">
+      <header class="sketch-bar">
+        <button class="text-btn" data-do="cancel">Cancel</button>
+        <div class="sketch-history">
+          <button class="icon-btn" data-do="undo" title="Undo" aria-label="Undo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+          <button class="icon-btn" data-do="redo" title="Redo" aria-label="Redo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
+          <button class="icon-btn" data-do="clear" title="Clear" aria-label="Clear sketch"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+        </div>
+        <button class="text-btn strong" data-do="done">Done</button>
+      </header>
+      <div class="sketch-canvas-wrap">
+        <canvas></canvas>
+        <p class="sketch-hint">Draw with your pencil, pen, mouse or finger.<br>Once you use a pencil, your palm and fingers are ignored.</p>
+      </div>
+      <footer class="sketch-tools">
+        <div class="tool-group">
+          <button class="tool" data-tool="pen" title="Pen" aria-label="Pen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19l-4 1z"/></svg></button>
+          <button class="tool" data-tool="marker" title="Highlighter" aria-label="Highlighter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15l-3 3h5l1.5-1.5M9 15l7.5-10.5 3.5 3.5L12.5 16.5 9 15z"/></svg></button>
+          <button class="tool" data-tool="eraser" title="Eraser (erases whole strokes)" aria-label="Eraser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20h12M5.5 14.5l9-9 5 5-8 8H9l-3.5-3.5a1 1 0 0 1 0-1.5z"/></svg></button>
+        </div>
+        <div class="tool-group sizes">
+          <button class="size" data-size="0" aria-label="Thin"><span style="--d:4px"></span></button>
+          <button class="size" data-size="1" aria-label="Medium"><span style="--d:7px"></span></button>
+          <button class="size" data-size="2" aria-label="Thick"><span style="--d:11px"></span></button>
+        </div>
+        <div class="tool-group swatches"></div>
+      </footer>
+    </div>
+  </div>
+
   <script src="vendor/typo/typo.js"></script>
   <script src="vendor/typo/en_US.js"></script>
   <script src="js/spellcheck.js"></script>
   <script src="js/definitions.js"></script>
+  <script src="js/norse.js"></script>
+  <script src="js/sketch.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

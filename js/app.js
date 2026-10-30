@@ -5,6 +5,8 @@
 (() => {
   const NOTES_KEY = 'inkwell.notes';
   const DEFINE_KEY = 'inkwell.defineOnClick';
+  const TAB_KEY = 'inkwell.cardTab';
+  const LETTERS_KEY = 'inkwell.norseLetters';
   // A word: letters, optionally joined by apostrophes (don't, o'clock, Kevin's).
   const WORD_RE = /\p{L}+(?:['’]\p{L}+)*/gu;
   const supportsHighlights = typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined';
@@ -65,9 +67,11 @@
     renderDate(note);
   }
 
+  const isBlank = note => !note.text.trim() && !note.html.includes('class="sketch"');
+
   // Drop the open note if the user left it blank.
   function discardIfEmpty(note) {
-    if (note && !note.text.trim()) {
+    if (note && isBlank(note)) {
       notes = notes.filter(n => n !== note);
       persist();
     }
@@ -170,6 +174,7 @@
     const ranges = [];
     const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.parentElement.closest('.norse')) continue; // Old Norse words aren't English
       for (const m of node.data.matchAll(WORD_RE)) {
         const end = m.index + m[0].length;
         // Don't nag about the word that's still being typed.
@@ -207,6 +212,12 @@
   function wordAtPoint(x, y) {
     const caret = caretFromPoint(x, y);
     if (!caret || caret.node.nodeType !== Node.TEXT_NODE || !editor.contains(caret.node)) return null;
+    const norse = caret.node.parentElement.closest('.norse');
+    if (norse) {
+      const range = document.createRange();
+      range.selectNodeContents(norse);
+      return { word: norse.textContent, range, norse };
+    }
     for (const m of caret.node.data.matchAll(WORD_RE)) {
       const end = m.index + m[0].length;
       if (caret.offset < m.index || caret.offset > end) continue;
@@ -223,15 +234,30 @@
 
   /* ---------- Word card ---------- */
 
-  let active = null;     // { word, range, misspelled }
+  let active = null;     // { word, range, misspelled, norse?, norseFor?, wiki? }
   let cardToken = 0;     // guards against out-of-order async lookups
+  const esc = Definitions.escape;
+
+  const pref = (key, fallback) => {
+    try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+  };
+  const setPref = (key, value) => {
+    try { localStorage.setItem(key, value); } catch { /* keep the default */ }
+  };
+  // "a–z" keeps your everyday alphabet; "ð þ ǫ" uses the Old Norse letters.
+  const plainLetters = () => pref(LETTERS_KEY, 'plain') === 'plain';
 
   function openCard(hit, misspelled) {
     active = { ...hit, misspelled };
     const token = ++cardToken;
     setLookupHighlight(hit.range);
 
-    if (misspelled) {
+    if (hit.norse) {
+      // A word that was already translated: offer the alternatives again.
+      card.innerHTML = '<div class="norse-panel"></div>';
+      showCard();
+      showNorse(hit.norse.dataset.original, token);
+    } else if (misspelled) {
       card.innerHTML = `
         <div class="spelling">
           <p class="card-label">Spelling</p>
@@ -244,6 +270,7 @@
             <button class="action subtle" data-action="ignore">Ignore</button>
             <button class="action subtle" data-action="define">Look up anyway</button>
           </div>
+          <div class="norse-guess" hidden></div>
         </div>
         <div class="definition" hidden></div>`;
       card.querySelector('.misspelled-word').textContent = hit.word;
@@ -254,15 +281,41 @@
         const suggestions = SpellCheck.suggest(hit.word);
         const box = card.querySelector('.suggestions');
         box.innerHTML = suggestions.length
-          ? suggestions.map(s => `<button class="suggestion" data-replace="${Definitions.escape(s)}">${Definitions.escape(s)}</button>`).join('')
+          ? suggestions.map(s => `<button class="suggestion" data-replace="${esc(s)}">${esc(s)}</button>`).join('')
           : '<span class="muted">No suggestions found.</span>';
+        // Maybe it's an Old Norse word typed from memory ("vordr" → vǫrðr).
+        const guesses = Norse.similar(hit.word);
+        if (guesses.length) {
+          const guess = card.querySelector('.norse-guess');
+          guess.hidden = false;
+          guess.innerHTML = '<p class="card-label">Did you mean the Old Norse</p>' +
+            guesses.map(e => norseOption(e, false)).join('');
+        }
         positionCard();
       }, 0);
     } else {
-      card.innerHTML = '<div class="definition"></div>';
+      card.innerHTML = `
+        <div class="card-tabs" role="tablist">
+          <button role="tab" data-tab="define">Definition</button>
+          <button role="tab" data-tab="norse">Old Norse</button>
+        </div>
+        <div class="definition"></div>
+        <div class="norse-panel"></div>`;
       showCard();
-      showDefinition(hit.word, token);
+      switchTab(pref(TAB_KEY, 'define'));
     }
+  }
+
+  function switchTab(tab) {
+    setPref(TAB_KEY, tab);
+    card.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab));
+    const definition = card.querySelector('.definition');
+    const norse = card.querySelector('.norse-panel');
+    definition.hidden = tab !== 'define';
+    norse.hidden = tab !== 'norse';
+    if (tab === 'define' && !definition.childElementCount) showDefinition(active.word);
+    if (tab === 'norse' && !norse.childElementCount) showNorse(active.word);
+    positionCard();
   }
 
   function showDefinition(word, token = cardToken) {
@@ -270,7 +323,7 @@
     box.hidden = false;
     box.innerHTML = `
       <div class="entry loading">
-        <div class="headword">${Definitions.escape(word)}</div>
+        <div class="headword">${esc(word)}</div>
         <p class="muted serif">Consulting the lexicon…</p>
       </div>`;
     positionCard();
@@ -279,7 +332,7 @@
       if (token !== cardToken) return;
       box.innerHTML = entry ? Definitions.render(entry) : `
         <div class="entry not-found">
-          <p class="serif">No entry for <em>${Definitions.escape(word)}</em> was found in the lexicon.</p>
+          <p class="serif">No entry for <em>${esc(word)}</em> was found in the lexicon.</p>
         </div>`;
       positionCard();
     }).catch(() => {
@@ -287,11 +340,153 @@
       box.innerHTML = `
         <div class="entry not-found">
           <p class="serif">The lexicon is out of reach — check your internet connection.</p>
-          <button class="action subtle" data-lookup="${Definitions.escape(word)}">Try again</button>
+          <button class="action subtle" data-lookup="${esc(word)}">Try again</button>
         </div>`;
       positionCard();
     });
   }
+
+  /* ---------- Old Norse ---------- */
+
+  function norseOption(entry, chosen) {
+    const shown = plainLetters() ? Norse.plain(entry.word) : entry.word;
+    const other = plainLetters() ? entry.word : Norse.plain(entry.word);
+    return `
+      <button class="norse-option${chosen ? ' chosen' : ''}" data-norse="${esc(entry.word)}" data-gloss="${esc(entry.gloss)}">
+        <span class="norse-word">${esc(shown)}</span>
+        ${other !== shown ? `<span class="norse-alt">${esc(other)}</span>` : ''}
+        ${entry.pos ? `<span class="norse-pos">${esc(entry.pos)}</span>` : ''}
+        ${entry.gloss ? `<span class="norse-gloss">${esc(entry.gloss)}</span>` : ''}
+      </button>`;
+  }
+
+  function norseGroup(label, entries, chosen) {
+    if (!entries.length) return '';
+    return `<section class="norse-group"><p class="norse-group-label">${label}</p>` +
+      entries.map(e => norseOption(e, e.word === chosen)).join('') + '</section>';
+  }
+
+  function showNorse(original, token = cardToken) {
+    active.norseFor = original;
+    active.wiki = undefined;
+    // Words the glossary doesn't know are looked up on Wiktionary straight away.
+    if (!Norse.english(original).length) loadWiktionary(token);
+    else renderNorse();
+  }
+
+  function loadWiktionary(token = cardToken) {
+    active.wiki = 'loading';
+    renderNorse();
+    Norse.wiktionary(active.norseFor).then(list => {
+      if (token !== cardToken) return;
+      active.wiki = list;
+      renderNorse();
+    }).catch(() => {
+      if (token !== cardToken) return;
+      active.wiki = 'error';
+      renderNorse();
+    });
+  }
+
+  function renderNorse() {
+    const box = card.querySelector('.norse-panel');
+    if (!box || !active) return;
+    const original = active.norseFor;
+    const chosen = active.norse ? active.norse.dataset.norse : null;
+    const found = Norse.english(original);
+    const lookalikes = found.length ? [] : Norse.similar(original);
+    const known = new Set([...found, ...lookalikes].map(e => e.word));
+    const wiki = Array.isArray(active.wiki) ? active.wiki.filter(e => !known.has(e.word)) : [];
+
+    let wikiSection;
+    if (active.wiki === undefined) {
+      wikiSection = '<button class="action subtle" data-action="wiki">More from Wiktionary</button>';
+    } else if (active.wiki === 'loading') {
+      wikiSection = '<p class="muted serif">Searching Wiktionary…</p>';
+    } else if (active.wiki === 'error') {
+      wikiSection = '<p class="muted serif">Wiktionary is out of reach — check your internet connection.</p>' +
+        '<button class="action subtle" data-action="wiki">Try again</button>';
+    } else if (wiki.length) {
+      wikiSection = norseGroup('From Wiktionary', wiki, chosen);
+    } else {
+      wikiSection = `<p class="muted serif">${known.size ? 'Wiktionary has nothing more.' : `No Old Norse word for “${esc(original)}” was found.`}</p>`;
+    }
+
+    const scroll = card.scrollTop;
+    box.innerHTML = `
+      <div class="norse-card">
+        <header class="norse-head">
+          <div>
+            <h3>Old Norse</h3>
+            <p class="norse-for">for “${esc(original)}”</p>
+          </div>
+          <div class="letters" role="group" aria-label="Letters to write with">
+            <button data-letters="plain" aria-pressed="${plainLetters()}" title="Write it with everyday letters (d, th, o)">a–z</button>
+            <button data-letters="old" aria-pressed="${!plainLetters()}" title="Write it with Old Norse letters (ð, þ, ǫ)">ð þ ǫ</button>
+          </div>
+        </header>
+        ${active.norse ? `<button class="action subtle restore" data-action="restore">↩ Put back “${esc(original)}”</button>` : ''}
+        ${Object.entries(Norse.KIND_LABEL).map(([kind, label]) => norseGroup(label, found.filter(e => e.kind === kind), chosen)).join('')}
+        ${norseGroup('Looks like', lookalikes, chosen)}
+        <section class="norse-wiki">${wikiSection}</section>
+        <p class="norse-note">Dictionary forms in normalized Old Norse spelling. Choosing one only swaps the word; it keeps your note’s font.</p>
+      </div>`;
+    card.scrollTop = scroll;
+    positionCard();
+  }
+
+  function matchCase(original, word) {
+    if (original.length > 1 && original === original.toUpperCase()) return word.toUpperCase();
+    if (original[0] !== original[0].toLowerCase()) return word[0].toUpperCase() + word.slice(1);
+    return word;
+  }
+
+  function insertNorse(word, gloss) {
+    const original = active.norse ? active.norse.dataset.original : active.word;
+    const text = matchCase(active.word, plainLetters() ? Norse.plain(word) : word);
+    replaceActive(
+      `<span class="norse" lang="non" data-norse="${esc(word)}" data-original="${esc(original)}" data-text="${esc(text)}"` +
+      ` title="Old Norse ${esc(word)}${gloss ? ' — ' + esc(gloss) : ''} (for “${esc(original)}”)">${esc(text)}</span>`,
+      true);
+  }
+
+  // Typing at the edge of a translated word must not grow the Old Norse word itself.
+  function fixNorseSpans() {
+    for (const span of editor.querySelectorAll('span.norse')) {
+      const want = span.dataset.text;
+      const have = span.textContent;
+      if (have === want) continue;
+      const sel = getSelection();
+      let caret = null;
+      if (sel.rangeCount && span.contains(sel.anchorNode)) {
+        const before = document.createRange();
+        before.setStart(span, 0);
+        before.setEnd(sel.anchorNode, sel.anchorOffset);
+        caret = before.toString().length;
+      }
+      let node;
+      if (have.length > want.length && have.startsWith(want)) {
+        span.textContent = want;
+        node = document.createTextNode(have.slice(want.length));
+        span.after(node);
+        if (caret !== null) caret -= want.length;
+      } else if (have.length > want.length && have.endsWith(want)) {
+        span.textContent = want;
+        node = document.createTextNode(have.slice(0, have.length - want.length));
+        span.before(node);
+      } else {
+        // The translated word itself was edited: it's ordinary text again.
+        node = document.createTextNode(have);
+        span.replaceWith(node);
+      }
+      if (caret !== null) {
+        const offset = Math.min(Math.max(caret, 0), node.length);
+        sel.collapse(node, offset);
+      }
+    }
+  }
+
+  /* ---------- Card placement ---------- */
 
   function showCard() {
     card.hidden = false;
@@ -332,17 +527,21 @@
     setLookupHighlight(null);
   }
 
-  function replaceActiveWord(replacement) {
-    const { range, word } = active;
-    if (range.toString() !== word) return closeCard(); // the text changed underneath us
+  // Swap the clicked word (or translated word) for new text or markup.
+  function replaceActive(content, asHTML = false) {
+    const { range, word, norse } = active;
+    if (norse ? !editor.contains(norse) : range.toString() !== word) return closeCard(); // text changed underneath us
     editor.focus();
+    const target = document.createRange();
+    if (norse) target.selectNode(norse);
+    else target.setStart(range.startContainer, range.startOffset), target.setEnd(range.endContainer, range.endOffset);
     const sel = getSelection();
     sel.removeAllRanges();
-    sel.addRange(range);
+    sel.addRange(target);
     // execCommand keeps the change on the undo stack (Ctrl/⌘ Z works).
-    if (!document.execCommand('insertText', false, replacement)) {
-      range.deleteContents();
-      range.insertNode(document.createTextNode(replacement));
+    if (!document.execCommand(asHTML ? 'insertHTML' : 'insertText', false, content)) {
+      target.deleteContents();
+      target.insertNode(asHTML ? target.createContextualFragment(content) : document.createTextNode(content));
       saveCurrent();
     }
     closeCard();
@@ -357,8 +556,14 @@
   card.addEventListener('click', e => {
     const btn = e.target.closest('button');
     if (!btn || !active) return;
-    if (btn.dataset.replace) return replaceActiveWord(btn.dataset.replace);
+    if (btn.dataset.replace) return replaceActive(btn.dataset.replace);
+    if (btn.dataset.norse) return insertNorse(btn.dataset.norse, btn.dataset.gloss);
+    if (btn.dataset.tab) return switchTab(btn.dataset.tab);
     if (btn.dataset.lookup) return showDefinition(btn.dataset.lookup);
+    if (btn.dataset.letters) {
+      setPref(LETTERS_KEY, btn.dataset.letters);
+      return renderNorse();
+    }
     if (btn.dataset.audio) {
       new Audio(btn.dataset.audio).play().catch(() => flash('Couldn’t play the pronunciation.'));
       return;
@@ -378,6 +583,12 @@
         btn.remove();
         showDefinition(active.word);
         break;
+      case 'wiki':
+        loadWiktionary();
+        break;
+      case 'restore':
+        replaceActive(active.norse.dataset.original);
+        break;
     }
   });
 
@@ -387,6 +598,7 @@
 
   editor.addEventListener('input', () => {
     typing = true;
+    fixNorseSpans();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCurrent, 300);
     scheduleScan();
@@ -400,10 +612,12 @@
   editor.addEventListener('click', e => {
     typing = false;
     scheduleScan();
+    const sketch = e.target.closest('.sketch');
+    if (sketch) return editSketch(sketch);
     if (!SpellCheck.ready || e.detail > 1 || !getSelection().isCollapsed) return;
     const hit = wordAtPoint(e.clientX, e.clientY);
     if (!hit) return closeCard();
-    const misspelled = !SpellCheck.isCorrect(hit.word);
+    const misspelled = !hit.norse && !SpellCheck.isCorrect(hit.word);
     if (!misspelled && !defineToggle.checked) return closeCard();
     if (active && active.range.startContainer === hit.range.startContainer &&
         active.range.startOffset === hit.range.startOffset) return; // same word, already open
@@ -436,7 +650,7 @@
 
   /* ---------- Toolbar ---------- */
 
-  document.querySelectorAll('.fmt-btn').forEach(btn => {
+  document.querySelectorAll('.fmt-btn[data-cmd]').forEach(btn => {
     btn.addEventListener('mousedown', e => e.preventDefault());
     btn.addEventListener('click', () => {
       editor.focus();
@@ -450,6 +664,39 @@
     });
   });
 
+  /* ---------- Sketches (Apple Pencil, stylus, mouse or finger) ---------- */
+
+  let sketchSpot = null;   // where the caret was when "Sketch" was pressed
+
+  const sketchButton = $('#insert-sketch');
+  sketchButton.addEventListener('mousedown', e => e.preventDefault());
+  sketchButton.addEventListener('click', async () => {
+    const sel = getSelection();
+    sketchSpot = sel.rangeCount && editor.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
+    closeCard();
+    const strokes = await Sketch.open();
+    if (!strokes || !strokes.length) return;
+    editor.focus();
+    if (!sketchSpot) {
+      placeCaretAtEnd();
+    } else {
+      sel.removeAllRanges();
+      sel.addRange(sketchSpot);
+    }
+    const markup = Sketch.html(strokes) + '<div><br></div>';
+    if (!document.execCommand('insertHTML', false, markup)) editor.insertAdjacentHTML('beforeend', markup);
+    saveCurrent();
+  });
+
+  async function editSketch(el) {
+    closeCard();
+    const strokes = await Sketch.open(Sketch.read(el));
+    if (!strokes) return;
+    if (strokes.length) el.outerHTML = Sketch.html(strokes);
+    else el.remove();
+    saveCurrent();
+  }
+
   try {
     defineToggle.checked = localStorage.getItem(DEFINE_KEY) !== 'off';
   } catch { /* default on */ }
@@ -459,14 +706,14 @@
   });
 
   $('#new-note').addEventListener('click', () => {
-    const blank = notes.find(n => !n.text.trim());
+    const blank = notes.find(isBlank);
     openNote((blank || createNote()).id, { focus: true });
   });
 
   $('#delete-note').addEventListener('click', () => {
     const note = current();
     if (!note) return;
-    if (note.text.trim() && !confirm('Delete this note?')) return;
+    if (!isBlank(note) && !confirm('Delete this note?')) return;
     notes = notes.filter(n => n !== note);
     persist();
     currentId = null;
@@ -560,7 +807,11 @@
     <div><br></div>
     <div>Words with a wavy red underline are mispelled. Click one to see suggestions, then click a suggestion to fix it. If a word is actualy right (like your name, or slang), choose “Add to Personal Dictionary” and it will never be flagged again.</div>
     <div><br></div>
-    <div>Click any other word — try <b>serendipity</b>, <b>luminous</b> or <b>wander</b> — and you’ll get a definition set like a page from an old dictionary. Turn that off with the “Define on click” switch above.</div>`;
+    <div>Click any other word — try <b>serendipity</b>, <b>luminous</b> or <b>wander</b> — and you’ll get a definition set like a page from an old dictionary. Turn that off with the “Look up on click” switch above.</div>
+    <div><br></div>
+    <div>Switch the card to <b>Old Norse</b> to swap a word for the tongue of the sagas: the warrior raised his sword against the wolf.</div>
+    <div><br></div>
+    <div>Tap the squiggle in the toolbar to sketch with an Apple Pencil, stylus, mouse or finger.</div>`;
 
   if (!notes.length) {
     const tmp = document.createElement('div');

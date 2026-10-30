@@ -12,7 +12,7 @@ const SpellCheck = (() => {
     google googled hashtag hashtags homepage hotspot inbox internet laptop laptops livestream login
     logins logout meme memes multitasking offline online passcode podcast podcasts screenshot
     screenshots selfie selfies smartphone smartphones smartwatch spreadsheet startup startups
-    streaming subreddit tablet texting timeline touchscreen tweet tweeted tweets unfollow unfriend
+    streaming subreddit tablet texting timeline toolbar touchscreen trackpad tweet tweeted tweets unfollow unfriend
     upload uploaded uploading uploads username usernames vlog webcam webinar website websites wifi
     wiki workflow youtube
   `.trim().split(/\s+/));
