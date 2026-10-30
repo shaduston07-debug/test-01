@@ -1,6 +1,16 @@
 // Document model: raster layers, vector layers (comic frames, balloons), animation tracks.
 import { makeCanvas, uid, canvasToBlob, blobToCanvas, dataURLToBlob, blobToDataURL } from './util.js';
 
+// PNG-encode a layer only if it changed since the last save (canvas._ver is bumped by history).
+async function blobFor(c) {
+  const v = c._ver || 0;
+  if (c._blob && c._blobVer === v) return c._blob;
+  const b = await canvasToBlob(c);
+  c._blob = b; c._blobVer = v;
+  return b;
+}
+function seedBlob(c, blob) { if (blob instanceof Blob) { c._blob = blob; c._blobVer = c._ver || 0; } }
+
 export const BLEND_MODES = [
   ['source-over', 'Normal', 'N'], ['multiply', 'Multiply', 'M'], ['screen', 'Screen', 'S'],
   ['overlay', 'Overlay', 'O'], ['darken', 'Darken', 'D'], ['lighten', 'Lighten', 'L'],
@@ -184,14 +194,16 @@ export class Doc {
     for (const p of this.panels()) ctx.rect(p.x, p.y, p.w, p.h);
   }
 
-  // Draws the full stack into ctx (whose transform maps doc px → target px).
+  // Draws the stack into ctx (whose transform maps doc px → target px).
+  // o.from / o.to restrict it to a slice of the items (used for render caches).
   composite(ctx, o = {}) {
     const frame = o.frame ?? this.playhead;
     const preview = o.preview || null;
     const items = this.items;
+    const from = o.from ?? 0, to = o.to ?? items.length;
     if (o.bg !== false && this.bgVisible) { ctx.fillStyle = this.bg; ctx.fillRect(0, 0, this.width, this.height); }
     if (o.underlay) o.underlay(ctx);
-    for (let i = 0; i < items.length; i++) {
+    for (let i = from; i < to; i++) {
       const it = items[i];
       if (it.clip && this.clipBase(i) >= 0) continue;
       const clips = [];
@@ -204,13 +216,15 @@ export class Doc {
       const visClips = clips.filter((c) => c.visible);
       const masked = it.panelMask && this.panels().length;
       ctx.save();
-      if (!visClips.length && !masked) {
-        ctx.globalAlpha = it.opacity * src.alpha; ctx.globalCompositeOperation = it.blend;
+      // panel masks are a clip path on the destination — no off-screen passes
+      if (masked) { this.panelPath(ctx); ctx.clip(); }
+      ctx.globalAlpha = it.opacity * src.alpha; ctx.globalCompositeOperation = it.blend;
+      if (!visClips.length) {
         this.drawSource(ctx, src);
         ctx.restore();
         continue;
       }
-      // Group: base + clipping masks (+ optional panel mask) rendered off-screen.
+      // Group: base + clipping masks rendered off-screen.
       const G = this.tmp(0), g = G.getContext('2d');
       this.drawSource(g, src);
       for (const c of visClips) {
@@ -222,15 +236,29 @@ export class Doc {
         g.drawImage(T, 0, 0);
         g.globalCompositeOperation = 'source-over';
       }
-      if (masked) {
-        g.globalCompositeOperation = 'destination-in'; g.fillStyle = '#000';
-        this.panelPath(g); g.fill();
-        g.globalCompositeOperation = 'source-over';
-      }
-      ctx.globalAlpha = it.opacity * src.alpha; ctx.globalCompositeOperation = it.blend;
       ctx.drawImage(G, 0, 0);
       ctx.restore();
     }
+  }
+
+  // [start, end) of the active item's clipping group.
+  activeGroup() {
+    const items = this.items, a = this.active;
+    if (!items[a]) return [0, 0];
+    let s = a;
+    if (items[a].clip) { const b = this.clipBase(a); if (b >= 0) s = b; }
+    let e = s + 1;
+    if (items[s].isRaster) while (e < items.length && items[e].clip) e++;
+    return [s, Math.max(e, a + 1)];
+  }
+  // Items above can be pre-flattened only if they all blend normally.
+  canFlattenRange(from, to) {
+    const items = this.items;
+    for (let i = from; i < to; i++) {
+      const it = items[i];
+      if (it.visible && !it.clip && (it.type === 'raster' || it.type === 'track') && it.blend !== 'source-over') return false;
+    }
+    return true;
   }
 
   clipBase(i) {
@@ -270,14 +298,14 @@ export class Doc {
     };
     for (const l of this.layers) {
       const o = {}; for (const k of LAYER_PROPS) o[k] = l[k];
-      if (l.type === 'raster') o.png = await canvasToBlob(l.canvas);
+      if (l.type === 'raster') o.png = await blobFor(l.canvas);
       if (l.type === 'frames') Object.assign(o, { panels: l.panels, border: l.border, borderColor: l.borderColor });
       if (l.type === 'balloons') o.balloons = l.balloons;
       out.layers.push(o);
     }
     for (const t of this.tracks) {
       const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, keys: t.keys, cels: [] };
-      for (const c of t.cels) o.cels.push({ start: c.start, dur: c.dur, png: await canvasToBlob(c.canvas) });
+      for (const c of t.cels) o.cels.push({ start: c.start, dur: c.dur, png: await blobFor(c.canvas) });
       out.tracks.push(o);
     }
     return out;
@@ -287,14 +315,14 @@ export class Doc {
     const d = new Doc(o);
     for (const lo of o.layers || []) {
       const l = new Layer(d.width, d.height, lo);
-      if (l.type === 'raster' && lo.png) l.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(lo.png)), 0, 0);
+      if (l.type === 'raster' && lo.png) { l.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(lo.png)), 0, 0); seedBlob(l.canvas, lo.png); }
       d.layers.push(l);
     }
     for (const to of o.tracks || []) {
       const t = new Track(to);
       for (const co of to.cels) {
         const cel = d.addCel(t, co.start, co.dur);
-        if (co.png) cel.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(co.png)), 0, 0);
+        if (co.png) { cel.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(co.png)), 0, 0); seedBlob(cel.canvas, co.png); }
       }
       d.tracks.push(t);
     }

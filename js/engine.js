@@ -51,7 +51,7 @@ export class StrokeEngine {
     if (this.kind !== 'smudge') {
       const p = this.preview.getContext('2d');
       p.setTransform(1, 0, 0, 1, 0, 0); p.globalAlpha = 1; p.globalCompositeOperation = 'source-over';
-      p.clearRect(0, 0, W, H); p.drawImage(target.canvas, 0, 0);
+      p.globalCompositeOperation = 'copy'; p.drawImage(target.canvas, 0, 0); p.globalCompositeOperation = 'source-over';
     } else {
       const S = clamp(Math.ceil(this.size / this.scale), 2, 512);
       this.smS = S;
@@ -261,21 +261,26 @@ export class StrokeEngine {
     this.dirty = emptyRect();
     if (r.w <= 0 || r.h <= 0) return;
     const sel = this.o.selection;
+    const { x, y, w, h } = r;
     if (sel) {
       const b = this.bctx;
-      b.save(); b.beginPath(); b.rect(r.x, r.y, r.w, r.h); b.clip();
+      b.save();
       b.globalCompositeOperation = 'destination-in'; b.globalAlpha = 1;
-      if (this.target.matrix) { const m = this.target.matrix.inverse(); b.setTransform(m.a, m.b, m.c, m.d, m.e, m.f); }
-      b.drawImage(sel, 0, 0);
+      if (this.target.matrix) {
+        b.beginPath(); b.rect(x, y, w, h); b.clip();
+        const m = this.target.matrix.inverse(); b.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+        b.drawImage(sel, 0, 0);
+      } else b.drawImage(sel, x, y, w, h, x, y, w, h);
       b.restore();
     }
+    // only the changed rectangle is recomposited (source-rect copies, no full-canvas clip draws)
     const p = this.preview.getContext('2d');
-    p.save(); p.beginPath(); p.rect(r.x, r.y, r.w, r.h); p.clip();
-    p.clearRect(r.x, r.y, r.w, r.h);
-    p.drawImage(this.target.canvas, 0, 0);
+    p.globalAlpha = 1; p.globalCompositeOperation = 'source-over';
+    p.clearRect(x, y, w, h);
+    p.drawImage(this.target.canvas, x, y, w, h, x, y, w, h);
     p.globalAlpha = this.opacity; p.globalCompositeOperation = this.op;
-    p.drawImage(this.buffer, 0, 0);
-    p.restore();
+    p.drawImage(this.buffer, x, y, w, h, x, y, w, h);
+    p.globalAlpha = 1; p.globalCompositeOperation = 'source-over';
   }
 
   previewFor(canvas) {
@@ -289,9 +294,19 @@ export class StrokeEngine {
       const q = this.q, n = q.length;
       this.walk({ x: (q[n - 2].x + q[n - 1].x) / 2, y: (q[n - 2].y + q[n - 1].y) / 2, p: (q[n - 2].p + q[n - 1].p) / 2, t: q[n - 1].t }, q[n - 1]);
     }
-    this.dirty = { ...this.bounds };
-    this.updatePreview();
     const rect = clampRect(this.bounds, this.W, this.H);
+    // the preview is discarded now; only the selection mask still has to be applied
+    if (this.kind !== 'smudge' && this.o.selection && rect.w > 0 && rect.h > 0) {
+      this.dirty = { ...this.bounds };
+      const b = this.bctx;
+      b.save(); b.globalCompositeOperation = 'destination-in';
+      if (this.target.matrix) {
+        b.beginPath(); b.rect(rect.x, rect.y, rect.w, rect.h); b.clip();
+        const m = this.target.matrix.inverse(); b.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+        b.drawImage(this.o.selection, 0, 0);
+      } else b.drawImage(this.o.selection, rect.x, rect.y, rect.w, rect.h, rect.x, rect.y, rect.w, rect.h);
+      b.restore();
+    }
     if (this.kind !== 'smudge' && rect.w > 0 && rect.h > 0) {
       const t = this.tctx;
       t.save();

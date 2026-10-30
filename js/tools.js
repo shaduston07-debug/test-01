@@ -88,51 +88,111 @@ export function computeFill(refCanvas, x, y, color, { tolerance = 0.1, gap = 0, 
 }
 
 // ───────── selection ─────────
+// The selection is an alpha mask. Vector shapes also keep their outlines for crisp
+// marching ants; mask-only results (magic wand, feather, intersect) show computed edges.
 export class Selection {
-  constructor(w, h) { this.w = w; this.h = h; this.mask = null; this.paths = []; this.inverted = false; }
+  constructor(w, h) { this.w = w; this.h = h; this.mask = null; this.paths = []; this.vector = true; this.ver = 0; }
   get active() { return !!this.mask; }
-  clear() { this.mask = null; this.paths = []; this.inverted = false; }
-  ensure() {
-    if (!this.mask || this.mask.width !== this.w || this.mask.height !== this.h) this.mask = makeCanvas(this.w, this.h);
-    return this.mask.getContext('2d');
-  }
-  // shape: {type:'poly', pts} | {type:'rect', x,y,w,h} | {type:'ellipse', cx,cy,rx,ry}
-  apply(shape, op = 'replace') {
-    const wasActive = this.active;
-    const x = this.ensure();
-    if (op === 'replace' || !wasActive) { x.clearRect(0, 0, this.w, this.h); this.paths = []; this.inverted = false; }
-    x.globalCompositeOperation = op === 'subtract' ? 'destination-out' : 'source-over';
-    x.fillStyle = '#000';
-    x.beginPath(); tracePath(x, shape); x.fill();
+  clear() { this.mask = null; this.paths = []; this.vector = true; this.ver++; }
+  newMask() { return makeCanvas(this.w, this.h); }
+  // op: replace | add | subtract | intersect  (src = full-size mask canvas)
+  combine(src, op = 'replace') {
+    if (!this.mask || op === 'replace') {
+      if (op === 'subtract' || op === 'intersect') { if (!this.mask) return; }
+      else { this.mask = src; this.ver++; if (this.isEmpty()) this.clear(); return; }
+    }
+    const x = this.mask.getContext('2d');
+    x.globalCompositeOperation = op === 'add' ? 'source-over' : op === 'subtract' ? 'destination-out' : 'destination-in';
+    x.drawImage(src, 0, 0);
     x.globalCompositeOperation = 'source-over';
-    this.paths.push({ shape, op });
+    this.ver++;
     if (this.isEmpty()) this.clear();
   }
+  apply(shape, op = 'replace') {
+    const m = this.newMask(), x = m.getContext('2d');
+    x.fillStyle = '#000'; x.beginPath(); tracePath(x, shape); x.fill();
+    if (op === 'replace' || !this.mask) { this.paths = []; this.vector = true; }
+    if (op === 'intersect') this.vector = false;
+    this.combine(m, op);
+    if (this.mask && this.vector) this.paths.push({ shape, op });
+  }
+  applyMask(m, op = 'replace') {
+    this.vector = false; this.paths = [];
+    this.combine(m, op);
+  }
   isEmpty() {
-    const d = this.mask.getContext('2d').getImageData(0, 0, this.w, this.h).data;
-    for (let i = 3; i < d.length; i += 64) if (d[i]) return false;
+    const d = this.mask.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, this.w, this.h).data;
+    for (let i = 3; i < d.length; i += 32) if (d[i]) return false;
+    for (let i = 3; i < d.length; i += 4) if (d[i]) return false;
     return true;
   }
   invert() {
-    const x = this.ensure();
-    const tmp = makeCanvas(this.w, this.h), t = tmp.getContext('2d');
+    if (!this.mask) { this.selectAll(); return; }
+    const m = this.newMask(), t = m.getContext('2d');
     t.fillRect(0, 0, this.w, this.h);
     t.globalCompositeOperation = 'destination-out'; t.drawImage(this.mask, 0, 0);
-    x.clearRect(0, 0, this.w, this.h); x.drawImage(tmp, 0, 0);
-    this.inverted = !this.inverted;
+    this.mask = m; this.vector = false; this.paths = []; this.ver++;
   }
   selectAll() { this.clear(); this.apply({ type: 'rect', x: 0, y: 0, w: this.w, h: this.h }); }
-  fromAlpha(canvas) {
-    const x = this.ensure(); x.clearRect(0, 0, this.w, this.h); x.drawImage(canvas, 0, 0);
-    this.paths = []; this.inverted = false;
-    this.paths.push({ shape: { type: 'rect', x: 0, y: 0, w: this.w, h: this.h }, op: 'alpha' });
+  fromAlpha(canvas) { const m = this.newMask(); m.getContext('2d').drawImage(canvas, 0, 0); this.mask = null; this.applyMask(m, 'replace'); }
+  feather(r) {
+    if (!this.mask || r <= 0) return;
+    const x = this.mask.getContext('2d', { willReadFrequently: true });
+    const id = x.getImageData(0, 0, this.w, this.h);
+    gaussian(id.data, this.w, this.h, r);
+    x.putImageData(id, 0, 0);
+    this.vector = false; this.paths = []; this.ver++;
   }
-  snapshot() { return { mask: this.mask ? (() => { const c = makeCanvas(this.w, this.h); c.getContext('2d').drawImage(this.mask, 0, 0); return c; })() : null, paths: [...this.paths], inverted: this.inverted }; }
-  restore(s) { this.mask = s.mask; this.paths = s.paths; this.inverted = s.inverted; }
-  bounds() {
-    if (!this.mask) return null;
-    return alphaBounds(this.mask);
+  snapshot() {
+    const c = this.mask ? this.newMask() : null;
+    if (c) c.getContext('2d').drawImage(this.mask, 0, 0);
+    return { mask: c, paths: [...this.paths], vector: this.vector };
   }
+  restore(s) {
+    if (s.mask) { const c = this.newMask(); c.getContext('2d').drawImage(s.mask, 0, 0); this.mask = c; } else this.mask = null;
+    this.paths = [...s.paths]; this.vector = s.vector; this.ver++;
+  }
+  bounds() { return this.mask ? alphaBounds(this.mask) : null; }
+  // 1-px dashed edge image for non-vector selections (computed once per change)
+  edges() {
+    if (this._edgeVer === this.ver && this._edges) return this._edges;
+    const w = this.w, h = this.h;
+    const src = this.mask.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+    const out = this._edges && this._edges.width === w && this._edges.height === h ? this._edges : makeCanvas(w, h);
+    const ox = out.getContext('2d'), id = ox.createImageData(w, h), d = id.data;
+    const on = (i) => src[i * 4 + 3] >= 128;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!on(i)) continue;
+      if (x > 0 && x < w - 1 && y > 0 && y < h - 1 && on(i - 1) && on(i + 1) && on(i - w) && on(i + w)) continue;
+      const v = ((x + y) >> 2) & 1 ? 255 : 0;
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
+    }
+    ox.putImageData(id, 0, 0);
+    this._edges = out; this._edgeVer = this.ver;
+    return out;
+  }
+}
+
+// Magic-wand region (Automatic selection). ref: ImageData of what is sampled.
+export function wandMask(ref, x, y, tolerance) {
+  const w = ref.width, h = ref.height, src = ref.data;
+  x = Math.floor(x); y = Math.floor(y);
+  const out = makeCanvas(w, h);
+  if (x < 0 || y < 0 || x >= w || y >= h) return out;
+  const k = (y * w + x) * 4, sr = src[k], sg = src[k + 1], sb = src[k + 2], sa = src[k + 3];
+  const tol = tolerance * 255, n = w * h;
+  const open = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    const a = src[j + 3];
+    const dd = Math.max(Math.abs(a - sa), Math.abs(src[j] * a - sr * sa) / 255, Math.abs(src[j + 1] * a - sg * sa) / 255, Math.abs(src[j + 2] * a - sb * sa) / 255);
+    open[i] = dd <= tol ? 1 : 0;
+  }
+  const region = scanFill(open, w, h, x, y);
+  const ox = out.getContext('2d'), id = ox.createImageData(w, h), d = id.data;
+  for (let i = 0; i < n; i++) if (region[i]) d[i * 4 + 3] = 255;
+  ox.putImageData(id, 0, 0);
+  return out;
 }
 
 export function tracePath(x, s) {

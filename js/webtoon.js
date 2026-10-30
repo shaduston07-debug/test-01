@@ -16,6 +16,8 @@ function ensureLayer(app, type, name) {
   if (act && act.type === type) return act;
   let l = d.layers.find((x) => x.type === type);
   if (!l) { l = new Layer(d.width, d.height, { type, name }); UI.insertLayer(app, l, d.layers.length); }
+  // make it the active layer so dragging only redraws this layer (the rest stays cached)
+  d.active = d.layers.indexOf(l);
   return l;
 }
 
@@ -69,7 +71,7 @@ export function panelTool(app) {
         if (g.ci === 0 || g.ci === 1) y0 += dy; else y1 += dy;
         Object.assign(P[this.sel], { x: Math.round(Math.min(x0, x1)), y: Math.round(Math.min(y0, y1)), w: Math.round(Math.abs(x1 - x0)), h: Math.round(Math.abs(y1 - y0)) });
       }
-      app.requestRender();
+      app.requestRender('active');
     },
     up() {
       const g = this.drag; this.drag = null;
@@ -293,7 +295,7 @@ export function balloonTool(app) {
       else if (g.type === 'move' && s) { s.x = g.orig.x + dx; s.y = g.orig.y + dy; if (s.tail) { s.tail.x = g.orig.tail.x + dx; s.tail.y = g.orig.tail.y + dy; } }
       else if (g.type === 'resize' && s) { s.w = Math.max(40, g.orig.w + dx); s.h = Math.max(30, g.orig.h + dy); }
       else if (g.type === 'tail' && s) { s.tail.x = g.orig.x + dx; s.tail.y = g.orig.y + dy; }
-      app.requestRender();
+      app.requestRender('active');
     },
     up(p) {
       const g = this.drag; this.drag = null;

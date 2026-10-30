@@ -70,7 +70,7 @@ python3 -m http.server 8000      # then open http://localhost:8000
 **Tools**
 - Fill with tolerance, **gap closing** and **expand** (CSP-style), reading from this layer / all layers / reference layers
 - **ColorDrop**: drag the color dot onto the canvas
-- Selection: freehand, rectangle, ellipse; add / subtract / invert; copy or cut to a new layer
+- Selection: **Automatic** (magic wand; slide left/right to change the threshold), **Freehand** lasso (drag, or tap to place polygon points and tap the start dot to close), Rectangle, Ellipse; New / Add / Subtract / Intersect; feather, save & load, invert, copy & paste, cut & paste, color fill, clear
 - Transform: uniform or freeform, flip, rotate, fit
 - Adjustments with live preview: HSB, color balance, levels, blur, sharpen, noise, posterize, threshold, gradient map, *brightness → opacity* (clean up scanned line art), *change line color*
 
@@ -86,6 +86,12 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - Raster layers can be **masked to panels**, so art never spills into the gutters
 - Balloon tool: speech, thought, shout, box, text/SFX; draggable tails; fonts, colors, sizes
 - Extend the canvas downward; slice guides; **smart slicing** export that avoids cutting through panels; phone scroll preview
+
+**Color**: hue ring with an SV triangle, classic square, RGB/hex values, palettes and history, plus Hue / Saturation / Brightness bars under every mode
+
+**Floating windows**: pin the Color, Layers or Brush panels to keep them open while painting; drag them by the title bar
+
+**Performance**: layers below and above the one being painted are cached, so a frame is about 3 image draws. Undo uses GPU canvas copies (no pixel readbacks), the paper shadow has no per-frame blur, webtoon panel masks use clip paths, and autosave only re-encodes changed layers
 
 **Tablet ergonomics**
 - Two-finger tap = undo (hold the undo button to rewind fast), three-finger tap = redo, four-finger tap = hide UI

@@ -6,23 +6,30 @@ import {
 } from './util.js';
 import { ICONS } from './icons.js';
 import { Doc, Layer, Track, BLEND_MODES, blendShort } from './doc.js';
-import { snapshot, pixelCmd, withUndo } from './history.js';
+import { snapshot, pixelCmd, withUndo, touch } from './history.js';
 import { StrokeEngine } from './engine.js';
 import { DEFAULT_BRUSHES, GRAINS, getTipMask, preloadBrush, newBrushFrom, strokePreviewPoints, rawImageToMaskCanvas } from './brushes.js';
 import { importBrushFiles } from './importers.js';
-import { ADJUSTMENTS, FloatingTransform, alphaBounds } from './tools.js';
+import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask } from './tools.js';
 import * as store from './storage.js';
 import * as Toon from './webtoon.js';
 
-// ───────── popover ─────────
+// ───────── popover / floating windows ─────────
+// Any panel opened with `float: true` gets a pin button that turns it into a floating
+// window: draggable by its title bar, stays open while you paint, remembers its position.
 let pop = null;
-export function openPopover(anchor, { title, body, width = 340, head = [], onClose, key }) {
-  if (pop && pop.key === (key || title)) { closePopover(); return null; }
+const floats = new Map();
+export function openPopover(anchor, { title, body, width = 340, head = [], onClose, key, float = false }) {
+  const k = key || title;
+  if (floats.has(k)) { const f = floats.get(k).el; f.classList.remove('flash'); void f.offsetWidth; f.classList.add('flash'); return null; }
+  if (pop && pop.key === k) { closePopover(); return null; }
   closePopover();
   const el = $('#popover');
   el.innerHTML = '';
   el.style.width = width + 'px';
-  el.append(h('div', { class: 'pop-head' }, h('h3', {}, title), h('div', { style: { display: 'flex', gap: '6px' } }, ...head)));
+  const headBox = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } }, ...head);
+  if (float) headBox.append(h('button', { class: 'icon-btn', title: 'Float this panel (keeps it open while you draw)', html: PIN_ICON, onclick: () => floatify() }));
+  el.append(h('div', { class: 'pop-head' }, h('h3', {}, title), headBox));
   const bodyEl = h('div', { class: 'pop-body' });
   if (body) bodyEl.append(body);
   el.append(bodyEl);
@@ -31,9 +38,51 @@ export function openPopover(anchor, { title, body, width = 340, head = [], onClo
   const W = Math.min(width, innerWidth - 16);
   el.style.left = clamp(r.left + r.width / 2 - W / 2, 8, innerWidth - W - 8) + 'px';
   el.style.top = (r.bottom + 8) + 'px';
-  pop = { el, anchor, onClose, key: key || title, body: bodyEl };
+  pop = { el, anchor, onClose, key: k, body: bodyEl };
+  const floatify = () => {
+    const rect = el.getBoundingClientRect();
+    pop = null; el.hidden = true;
+    makeFloat(k, title, width, headBox, bodyEl, onClose, rect);
+  };
   return pop;
 }
+const PIN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="13" rx="2"/><path d="M4 10h16M8 3h8"/></svg>';
+
+function makeFloat(key, title, width, headBox, bodyEl, onClose, rect) {
+  const saved = store.prefs.get('float:' + key, null);
+  for (const b of headBox.querySelectorAll('[title^="Float"]')) b.remove();
+  const close = h('button', { class: 'float-close', title: 'Close', onclick: () => closeFloat(key) }, '×');
+  const bar = h('div', { class: 'float-head' }, h('span', { class: 'float-grip' }), h('h3', {}, title), headBox, close);
+  const win = h('div', { class: 'float-win' }, bar, bodyEl);
+  win.style.width = Math.min(width, innerWidth - 16) + 'px';
+  const place = (x, y) => {
+    const w = win.offsetWidth || width, hh = win.offsetHeight || 200;
+    win.style.left = clamp(x, 4, innerWidth - w - 4) + 'px';
+    win.style.top = clamp(y, 4, innerHeight - Math.min(hh, 120)) + 'px';
+  };
+  $('#overlay-ui').append(win);
+  place(saved ? saved.x : rect.left, saved ? saved.y : rect.top);
+  let st = null;
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, input, select')) return;
+    e.preventDefault(); bar.setPointerCapture(e.pointerId);
+    st = { x: e.clientX, y: e.clientY, l: win.offsetLeft, t: win.offsetTop };
+    bringToFront(win);
+  });
+  bar.addEventListener('pointermove', (e) => { if (st) place(st.l + e.clientX - st.x, st.t + e.clientY - st.y); });
+  const end = () => { if (!st) return; st = null; store.prefs.set('float:' + key, { x: win.offsetLeft, y: win.offsetTop }); };
+  bar.addEventListener('pointerup', end); bar.addEventListener('pointercancel', end);
+  win.addEventListener('pointerdown', () => bringToFront(win));
+  floats.set(key, { el: win, onClose });
+  bringToFront(win);
+}
+let zTop = 15;
+const bringToFront = (w) => { w.style.zIndex = ++zTop; };
+export function closeFloat(key) {
+  const f = floats.get(key); if (!f) return;
+  floats.delete(key); f.el.remove(); f.onClose && f.onClose();
+}
+export function closeAllFloats() { for (const k of [...floats.keys()]) closeFloat(k); }
 export function closePopover() {
   if (!pop) return;
   const p = pop; pop = null;
@@ -122,66 +171,202 @@ export function bindColorButton(app, btn) {
   btn.addEventListener('pointercancel', () => { st = null; dot.remove(); });
 }
 
+// Color panel: Triangle (hue ring + SV triangle), Classic square, Values, Palettes —
+// with Hue / Saturation / Brightness bars underneath that work in every mode.
 export function openColor(app, anchor) {
   let [hh, s, v] = rgbToHsv(...hexToRgb(app.color));
-  const sv = makeCanvas(300, 230);
-  const svDot = h('div', { class: 'color-dot' }), hueDot = h('div', { class: 'color-dot' });
-  const svBox = h('div', { class: 'color-sv' }, sv, svDot);
-  const hue = h('div', { class: 'hue-bar' }, hueDot);
-  const hex = h('input', { class: 'text-in', value: app.color, maxLength: 7 });
-  const cur = h('div', { class: 'swatch-cur' });
-  const histRow = h('div', { class: 'swatches' });
-  const palRow = h('div', { class: 'swatches' });
-  const drawSV = () => {
-    const x = sv.getContext('2d');
-    const [r, g, b] = hsvToRgb(hh, 1, 1);
-    x.fillStyle = `rgb(${r},${g},${b})`; x.fillRect(0, 0, 300, 230);
-    let gr = x.createLinearGradient(0, 0, 300, 0); gr.addColorStop(0, '#fff'); gr.addColorStop(1, 'rgba(255,255,255,0)');
-    x.fillStyle = gr; x.fillRect(0, 0, 300, 230);
-    gr = x.createLinearGradient(0, 0, 0, 230); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, '#000');
-    x.fillStyle = gr; x.fillRect(0, 0, 300, 230);
-  };
-  const sync = (fromHex) => {
-    const hexv = rgbToHex(...hsvToRgb(hh, s, v));
-    svDot.style.left = s * 100 + '%'; svDot.style.top = (1 - v) * 100 + '%'; svDot.style.background = hexv;
-    hueDot.style.left = (hh / 360) * 100 + '%'; hueDot.style.background = rgbToHex(...hsvToRgb(hh, 1, 1));
-    cur.style.background = hexv;
-    if (!fromHex) hex.value = hexv;
-    app.setColor(hexv, false);
-  };
-  const commit = () => { app.setColor(app.color, true); renderSw(); };
+  const prev = app.color;
+  let tab = store.prefs.get('colorTab', 'triangle');
+  let selfSet = false;
+  const body = h('div', { class: 'color-panel' });
+  const head = h('div', { class: 'color-chips' });
+  const chipCur = h('div', { class: 'chip-cur' }), chipPrev = h('button', { class: 'chip-prev', title: 'Previous color', onclick: () => setFromHex(prev) });
+  head.append(chipPrev, chipCur);
+  const tabsEl = h('div', { class: 'pop-tabs' });
+  const view = h('div', { class: 'color-view' });
+  const bars = h('div', { class: 'hsb-bars' });
+  const chipRow = h('div', { class: 'chip-row' }, h('span', { class: 'hint' }, 'Previous'), head, h('span', { class: 'hint' }, 'Current'));
+  body.append(tabsEl, view, chipRow, bars);
+
+  const hex = () => rgbToHex(...hsvToRgb(hh, s, v));
+  const commit = () => { app.setColor(hex(), true); };
+  const apply = () => { selfSet = true; app.setColor(hex(), false); selfSet = false; refresh(); };
+  const setFromHex = (c) => { [hh, s, v] = rgbToHsv(...hexToRgb(c)); apply(); commit(); renderTab(); };
   const drag = (el, fn) => {
     let on = false;
-    el.addEventListener('pointerdown', (e) => { on = true; el.setPointerCapture(e.pointerId); fn(e); });
-    el.addEventListener('pointermove', (e) => on && fn(e));
-    el.addEventListener('pointerup', () => { on = false; commit(); });
+    el.addEventListener('pointerdown', (e) => { e.preventDefault(); on = true; el.setPointerCapture(e.pointerId); fn(e, true); });
+    el.addEventListener('pointermove', (e) => on && fn(e, false));
+    const end = () => { if (on) { on = false; commit(); renderSw && renderSw(); } };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
   };
-  drag(svBox, (e) => { const r = svBox.getBoundingClientRect(); s = clamp((e.clientX - r.left) / r.width, 0, 1); v = clamp(1 - (e.clientY - r.top) / r.height, 0, 1); sync(); });
-  drag(hue, (e) => { const r = hue.getBoundingClientRect(); hh = clamp((e.clientX - r.left) / r.width, 0, 0.9999) * 360; drawSV(); sync(); });
-  hex.addEventListener('change', () => {
-    const val = hex.value.startsWith('#') ? hex.value : '#' + hex.value;
-    if (!/^#[0-9a-f]{6}$/i.test(val)) return;
-    [hh, s, v] = rgbToHsv(...hexToRgb(val)); drawSV(); sync(true); commit();
-  });
-  const pick = (c) => { [hh, s, v] = rgbToHsv(...hexToRgb(c)); drawSV(); sync(); commit(); };
-  const renderSw = () => {
-    histRow.innerHTML = '';
-    for (const c of app.colorHistory) histRow.append(h('button', { style: { background: c }, onclick: () => pick(c) }));
-    palRow.innerHTML = '';
-    const pal = app.palette || DEFAULT_PALETTE;
-    pal.forEach((c, i) => {
-      const b = h('button', { style: { background: c } });
-      let t;
-      b.addEventListener('pointerdown', () => { t = setTimeout(async () => { t = null; if (await confirmDialog('Remove this swatch?', 'Remove', true)) { pal.splice(i, 1); app.palette = pal; store.prefs.set('palette', pal); renderSw(); } }, 600); });
-      b.addEventListener('pointerup', () => { if (t) { clearTimeout(t); pick(c); } });
-      palRow.append(b);
+
+  // ── HSB bars (hue left/right, saturation, dark ↔ bright) ──
+  const mkBar = (label, get, set, grad) => {
+    const track = h('div', { class: 'hsb-track' }), knob = h('div', { class: 'hsb-knob' }), val = h('span', { class: 'hsb-val' });
+    track.append(knob);
+    drag(track, (e) => { const r = track.getBoundingClientRect(); set(clamp((e.clientX - r.left) / r.width, 0, 1)); apply(); });
+    const row = h('div', { class: 'hsb-row' }, h('span', { class: 'hsb-label' }, label), track, val);
+    row.sync = () => { const t = get(); knob.style.left = t * 100 + '%'; track.style.background = grad(); val.textContent = Math.round(t * (label === 'H' ? 360 : 100)) + (label === 'H' ? '°' : '%'); };
+    return row;
+  };
+  const barH = mkBar('H', () => hh / 360, (t) => { hh = Math.min(t, 0.9999) * 360; }, () => 'linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)');
+  const barS = mkBar('S', () => s, (t) => { s = t; }, () => `linear-gradient(90deg,${rgbToHex(...hsvToRgb(hh, 0, v))},${rgbToHex(...hsvToRgb(hh, 1, v))})`);
+  const barV = mkBar('B', () => v, (t) => { v = t; }, () => `linear-gradient(90deg,#000,${rgbToHex(...hsvToRgb(hh, s, 1))})`);
+  bars.append(barH, barS, barV);
+
+  // ── triangle ──
+  const TS = 280, R = TS / 2 - 2, RI = R - 24, RT = RI - 5;
+  let tri = null;
+  const buildTriangle = () => {
+    const c = h('canvas', { class: 'color-tri', width: TS * 2, height: TS * 2 });
+    const ring = makeCanvas(TS * 2, TS * 2), rx = ring.getContext('2d'), rid = rx.createImageData(TS * 2, TS * 2);
+    for (let y = 0; y < TS * 2; y++) for (let x = 0; x < TS * 2; x++) {
+      const dx = x / 2 - TS / 2, dy = y / 2 - TS / 2, d = Math.hypot(dx, dy);
+      if (d > R + 0.5 || d < RI - 0.5) continue;
+      const hue = ((Math.atan2(dy, dx) * 180 / Math.PI + 90) % 360 + 360) % 360;
+      const [r, g, b] = hsvToRgb(hue, 1, 1), k = (y * TS * 2 + x) * 4;
+      rid.data[k] = r; rid.data[k + 1] = g; rid.data[k + 2] = b;
+      rid.data[k + 3] = 255 * clamp(Math.min(R + 0.5 - d, d - RI + 0.5), 0, 1);
+    }
+    rx.putImageData(rid, 0, 0);
+    const verts = () => {
+      const a = (hh - 90) * Math.PI / 180;
+      const P = (o) => ({ x: TS / 2 + Math.cos(a + o) * RT, y: TS / 2 + Math.sin(a + o) * RT });
+      return { H: P(0), W: P(2 * Math.PI / 3), B: P(4 * Math.PI / 3) };
+    };
+    const bary = (p, V) => {
+      const { H, W, B } = V, det = (W.y - B.y) * (H.x - B.x) + (B.x - W.x) * (H.y - B.y);
+      const l1 = ((W.y - B.y) * (p.x - B.x) + (B.x - W.x) * (p.y - B.y)) / det;
+      const l2 = ((B.y - H.y) * (p.x - B.x) + (H.x - B.x) * (p.y - B.y)) / det;
+      return [l1, l2, 1 - l1 - l2]; // weights of H, W, B
+    };
+    let triHue = -1, triImg = null;
+    const triCanvas = makeCanvas(TS * 2, TS * 2);
+    const draw = () => {
+      const x = c.getContext('2d');
+      x.clearRect(0, 0, TS * 2, TS * 2);
+      x.drawImage(ring, 0, 0);
+      const V = verts();
+      if (triHue !== hh) {
+        // re-shade the triangle only when the hue changes
+        triImg = x.createImageData(TS * 2, TS * 2);
+        const [hr, hg, hb] = hsvToRgb(hh, 1, 1), d = triImg.data;
+        const x0 = Math.floor(Math.min(V.H.x, V.W.x, V.B.x) * 2), x1 = Math.ceil(Math.max(V.H.x, V.W.x, V.B.x) * 2);
+        const y0 = Math.floor(Math.min(V.H.y, V.W.y, V.B.y) * 2), y1 = Math.ceil(Math.max(V.H.y, V.W.y, V.B.y) * 2);
+        for (let py = y0; py < y1; py++) for (let px = x0; px < x1; px++) {
+          const [wh, ww, wb] = bary({ x: px / 2 + 0.25, y: py / 2 + 0.25 }, V);
+          const edge = Math.min(wh, ww, wb);
+          if (edge < -0.006) continue;
+          const k = (py * TS * 2 + px) * 4;
+          d[k] = hr * wh + 255 * ww; d[k + 1] = hg * wh + 255 * ww; d[k + 2] = hb * wh + 255 * ww;
+          d[k + 3] = 255 * clamp(1 + edge / 0.006, 0, 1);
+        }
+        triHue = hh;
+        triCanvas.getContext('2d').putImageData(triImg, 0, 0);
+      }
+      x.drawImage(triCanvas, 0, 0);
+      // markers
+      const a = (hh - 90) * Math.PI / 180, mr = (R + RI) / 2;
+      const ring2 = (px, py, col) => { x.beginPath(); x.arc(px * 2, py * 2, 22, 0, Math.PI * 2); x.lineWidth = 6; x.strokeStyle = '#fff'; x.stroke(); x.lineWidth = 2; x.strokeStyle = 'rgba(0,0,0,.5)'; x.stroke(); };
+      ring2(TS / 2 + Math.cos(a) * mr, TS / 2 + Math.sin(a) * mr);
+      const wh = s * v, ww = v * (1 - s), wb = 1 - v;
+      ring2(V.H.x * wh + V.W.x * ww + V.B.x * wb, V.H.y * wh + V.W.y * ww + V.B.y * wb);
+    };
+    let mode = null;
+    drag(c, (e, first) => {
+      const r = c.getBoundingClientRect(), p = { x: (e.clientX - r.left) * TS / r.width, y: (e.clientY - r.top) * TS / r.height };
+      const d = Math.hypot(p.x - TS / 2, p.y - TS / 2);
+      if (first) mode = d > RI - 3 ? 'ring' : 'tri';
+      if (mode === 'ring') hh = ((Math.atan2(p.y - TS / 2, p.x - TS / 2) * 180 / Math.PI + 90) % 360 + 360) % 360;
+      else {
+        let [wh, ww, wb] = bary(p, verts());
+        wh = Math.max(0, wh); ww = Math.max(0, ww); wb = Math.max(0, wb);
+        const sum = wh + ww + wb || 1; wh /= sum; ww /= sum;
+        v = clamp(wh + ww, 0, 1); s = v > 0 ? clamp(wh / v, 0, 1) : 0;
+      }
+      apply();
     });
-    palRow.append(h('button', { class: 'add', title: 'Add current color', onclick: () => { const p = [...(app.palette || DEFAULT_PALETTE), app.color]; app.palette = p; store.prefs.set('palette', p); renderSw(); } }, '+'));
+    return { el: c, draw };
   };
-  drawSV(); sync(); renderSw();
-  const body = h('div', {}, svBox, hue, h('div', { class: 'color-row' }, cur, hex, h('span', { class: 'hint' }, 'Drag the color dot onto the canvas to fill (ColorDrop)')),
-    h('div', { class: 'menu-section' }, 'History'), histRow, h('div', { class: 'menu-section' }, 'Palette  ·  hold a swatch to remove'), palRow);
-  openPopover(anchor, { title: 'Color', body, width: 340 });
+
+  // ── classic square ──
+  const buildSquare = () => {
+    const sv = makeCanvas(600, 460), svDot = h('div', { class: 'color-dot' });
+    const box = h('div', { class: 'color-sv' }, sv, svDot);
+    const draw = () => {
+      const x = sv.getContext('2d');
+      x.fillStyle = rgbToHex(...hsvToRgb(hh, 1, 1)); x.fillRect(0, 0, 600, 460);
+      let gr = x.createLinearGradient(0, 0, 600, 0); gr.addColorStop(0, '#fff'); gr.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = gr; x.fillRect(0, 0, 600, 460);
+      gr = x.createLinearGradient(0, 0, 0, 460); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, '#000'); x.fillStyle = gr; x.fillRect(0, 0, 600, 460);
+      svDot.style.left = s * 100 + '%'; svDot.style.top = (1 - v) * 100 + '%'; svDot.style.background = hex();
+    };
+    drag(box, (e) => { const r = box.getBoundingClientRect(); s = clamp((e.clientX - r.left) / r.width, 0, 1); v = clamp(1 - (e.clientY - r.top) / r.height, 0, 1); apply(); });
+    return { el: box, draw };
+  };
+
+  // ── values ──
+  const buildValues = () => {
+    const box = h('div', { class: 'color-values' });
+    const hexIn = h('input', { class: 'text-in', maxLength: 7 });
+    hexIn.addEventListener('change', () => { const val = hexIn.value.startsWith('#') ? hexIn.value : '#' + hexIn.value; if (/^#[0-9a-f]{6}$/i.test(val)) setFromHex(val); });
+    const rows = ['R', 'G', 'B'].map((ch, i) => {
+      const inp = h('input', { type: 'range', min: 0, max: 255, step: 1 }), out = h('output');
+      inp.addEventListener('input', () => { const rgb = hexToRgb(hex()); rgb[i] = +inp.value; [hh, s, v] = rgbToHsv(...rgb); apply(); });
+      inp.addEventListener('change', commit);
+      return { el: h('div', { class: 'field' }, h('label', {}, ch), out, inp), inp, out, i };
+    });
+    box.append(...rows.map((r) => r.el), h('div', { class: 'field' }, h('label', {}, 'Hex'), h('span'), hexIn));
+    const draw = () => { const rgb = hexToRgb(hex()); for (const r of rows) { r.inp.value = rgb[r.i]; r.out.textContent = rgb[r.i]; } if (document.activeElement !== hexIn) hexIn.value = hex().toUpperCase(); };
+    return { el: box, draw };
+  };
+
+  // ── palettes ──
+  let renderSw = null;
+  const buildPalettes = () => {
+    const box = h('div');
+    const histRow = h('div', { class: 'swatches' }), palRow = h('div', { class: 'swatches' });
+    renderSw = () => {
+      histRow.innerHTML = '';
+      for (const c of app.colorHistory) histRow.append(h('button', { style: { background: c }, onclick: () => setFromHex(c) }));
+      palRow.innerHTML = '';
+      const pal = app.palette || DEFAULT_PALETTE;
+      pal.forEach((c, i) => {
+        const b = h('button', { style: { background: c } });
+        let t;
+        b.addEventListener('pointerdown', () => { t = setTimeout(async () => { t = null; if (await confirmDialog('Remove this swatch?', 'Remove', true)) { pal.splice(i, 1); app.palette = pal; store.prefs.set('palette', pal); renderSw(); } }, 600); });
+        b.addEventListener('pointerup', () => { if (t) { clearTimeout(t); setFromHex(c); } });
+        palRow.append(b);
+      });
+      palRow.append(h('button', { class: 'add', title: 'Add current color', onclick: () => { const p2 = [...(app.palette || DEFAULT_PALETTE), app.color]; app.palette = p2; store.prefs.set('palette', p2); renderSw(); } }, '+'));
+    };
+    box.append(h('div', { class: 'menu-section' }, 'History'), histRow, h('div', { class: 'menu-section' }, 'Palette · hold a swatch to remove'), palRow);
+    renderSw();
+    return { el: box, draw: () => {} };
+  };
+
+  const builders = { triangle: buildTriangle, square: buildSquare, values: buildValues, palettes: buildPalettes };
+  let cur = null;
+  const renderTab = () => {
+    tabsEl.innerHTML = '';
+    for (const [k, l] of [['triangle', 'Triangle'], ['square', 'Classic'], ['values', 'Values'], ['palettes', 'Palettes']]) {
+      tabsEl.append(h('button', { class: tab === k ? 'on' : '', onclick: () => { tab = k; store.prefs.set('colorTab', k); renderTab(); } }, l));
+    }
+    cur = builders[tab]();
+    view.innerHTML = ''; view.append(cur.el);
+    refresh();
+  };
+  let raf = 0;
+  const refresh = () => {
+    chipCur.style.background = hex(); chipPrev.style.background = prev;
+    for (const b of [barH, barS, barV]) b.sync();
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = 0; cur && cur.draw(); });
+  };
+  // keep in sync when the color changes elsewhere (eyedropper, ColorDrop…)
+  const listener = (c) => { if (selfSet) return; [hh, s, v] = rgbToHsv(...hexToRgb(c)); refresh(); renderSw && renderSw(); };
+  app.colorListeners.add(listener);
+  renderTab();
+  openPopover(anchor, { title: 'Color', body, width: 330, key: 'color', float: true, onClose: () => app.colorListeners.delete(listener) });
 }
 
 // ───────── brush previews ─────────
@@ -232,7 +417,7 @@ export function openBrushLibrary(app, anchor) {
     h('button', { class: 'small-btn', onclick: () => { closePopover(); openBrushStudio(app, app.brushFor(toolName), true); } }, '＋ New'),
   ];
   const title = { brush: 'Brush Library', smudge: 'Smudge — brush', eraser: 'Eraser — brush' }[toolName];
-  openPopover(anchor, { title, body: h('div', {}, h('div', { class: 'brush-lib' }, catsEl, listEl), h('p', { class: 'hint', style: { margin: '8px 4px 0' } }, 'Tap a selected brush again to edit it in Brush Studio.')), head, width: 420, key: 'brushes' });
+  openPopover(anchor, { title, body: h('div', {}, h('div', { class: 'brush-lib' }, catsEl, listEl), h('p', { class: 'hint', style: { margin: '8px 4px 0' } }, 'Tap a selected brush again to edit it in Brush Studio.')), head, width: 420, key: 'brushes', float: true });
 }
 
 export async function importBrushesFlow(app, after) {
@@ -482,7 +667,7 @@ export function openLayers(app, anchor) {
     }
     if (app.canAddRaster()) { insertLayer(app, new Layer(d.width, d.height, { name: 'Layer ' + (d.layers.length + 1) })); render(); }
   };
-  const p = openPopover(anchor, { title: d.mode === 'animate' ? 'Tracks' : 'Layers', body: list, head: [addBtn], width: 340, key: 'layers', onClose: () => { layersOpen = null; } });
+  const p = openPopover(anchor, { title: d.mode === 'animate' ? 'Tracks' : 'Layers', body: list, head: [addBtn], width: 340, key: 'layers', float: true, onClose: () => { layersOpen = null; } });
   if (!p) return;
   layersOpen = { render };
   render();
@@ -563,7 +748,8 @@ function mergeDown(app, i) {
   const afterPx = cloneCanvas(low.canvas);
   d.layers.splice(i, 1); d.active = i - 1;
   const after = captureStruct(d);
-  const put = (c) => { x.save(); x.globalCompositeOperation = 'copy'; x.drawImage(c, 0, 0); x.restore(); };
+  touch(low.canvas);
+  const put = (c) => { x.save(); x.globalCompositeOperation = 'copy'; x.drawImage(c, 0, 0); x.restore(); touch(low.canvas); };
   app.history.push({ label: 'Merge', bytes: d.pixelBytes * 2, undo() { put(beforePx); restoreStruct(d, before); app.changed(); }, redo() { put(afterPx); restoreStruct(d, after); app.changed(); } });
   app.changed();
 }
@@ -782,65 +968,177 @@ export function fillBar(app) {
   return [h('span', { class: 'cb-label' }, 'Reads'), ...refSeg, cbSep(), ...rng('Tolerance', 0, 1, 0.01, 'fillTolerance', pct), ...rng('Close gaps', 0, 16, 1, 'fillGap', (v) => v + 'px'), ...rng('Expand', 0, 8, 1, 'fillExpand', (v) => v + 'px')];
 }
 
+// Selection: Automatic (magic wand, drag sideways to change threshold), Freehand lasso
+// (drag to draw, or tap to place polygon points — mix freely, tap the start dot to close),
+// Rectangle, Ellipse. Modes: New / Add / Subtract / Intersect.
 export function selectTool(app) {
   const selCmd = (label, fn) => {
     const s = app.selection, before = s.snapshot();
     fn();
     const after = s.snapshot();
-    app.history.push({ label, bytes: s.w * s.h * 8, undo() { s.restore(before); app.selectionChanged(); }, redo() { s.restore(after); app.selectionChanged(); } });
-    app.selectionChanged();
+    app.history.push({ label, bytes: s.w * s.h * 8, undo() { s.restore(before); app.selectionChanged(); app.updateCtxBar(); }, redo() { s.restore(after); app.selectionChanged(); app.updateCtxBar(); } });
+    app.selectionChanged(); app.updateCtxBar();
   };
+  const saved = (app.savedSelections ||= []);
   const t = {
-    mode: 'freehand', op: 'replace',
-    down(p) { this.pts = [{ x: p.x, y: p.y }]; this.p0 = p; this.p1 = p; },
+    mode: store.prefs.get('selMode', 'freehand'), op: 'replace', wandRef: 'layer', wandTol: 0.2,
+    poly: null, // lasso in progress: [{x,y}]
+    exit() { this.poly = null; this.drag = null; this.wand = null; },
+    screenDist(a, b) { const p = app.docToScreen(a.x, a.y), q = app.docToScreen(b.x, b.y); return Math.hypot(p.x - q.x, p.y - q.y); },
+    down(p) {
+      this.p0 = p; this.p1 = p; this.moved = false;
+      if (this.mode === 'auto') { this.startWand(p); return; }
+      if (this.mode === 'freehand') {
+        this.fresh = !this.poly;
+        if (!this.poly) this.poly = [{ x: p.x, y: p.y }];
+        this.segStart = this.poly.length;
+        return;
+      }
+      this.drag = true;
+    },
     move(p) {
-      if (!this.pts) return;
       this.p1 = p;
-      const last = this.pts[this.pts.length - 1];
-      if (this.mode === 'freehand' && Math.hypot(p.x - last.x, p.y - last.y) * app.view.zoom > 3) this.pts.push({ x: p.x, y: p.y });
+      if (Math.hypot(p.sx - this.p0.sx, p.sy - this.p0.sy) > 6) this.moved = true;
+      if (this.mode === 'auto') { this.updateWand(p); return; }
+      if (this.mode === 'freehand' && this.moved) {
+        const last = this.poly[this.poly.length - 1];
+        if (this.screenDist(last, p) > 1.5) this.poly.push({ x: p.x, y: p.y });
+      }
+    },
+    up(p) {
+      if (this.mode === 'auto') { this.finishWand(); return; }
+      if (this.mode === 'freehand') {
+        const poly = this.poly;
+        if (this.moved) {
+          // a single drag closes itself (lasso); a drag inside a polygon continues it
+          const nearStart = poly.length > 3 && this.screenDist(poly[0], p) < 28;
+          if (this.fresh || nearStart) this.closeLasso();
+        } else {
+          if (poly.length >= 3 && this.screenDist(poly[0], p) < 26) this.closeLasso();
+          else if (!this.fresh) poly.push({ x: p.x, y: p.y });
+          else app.showHud('Tap to add points · tap the first point to close', 1800);
+        }
+        app.updateCtxBar(); app.requestRender('view');
+        return;
+      }
+      this.drag = false;
+      if (!this.moved) { app.requestRender('view'); return; }
+      const sh = this.shape();
+      selCmd('Select', () => app.selection.apply(sh, this.op));
+    },
+    cancel() { this.drag = false; if (this.mode === 'freehand' && this.fresh) this.poly = null; this.wand = null; },
+    closeLasso() {
+      const pts = this.poly; this.poly = null;
+      if (!pts || pts.length < 3) { app.updateCtxBar(); return; }
+      selCmd('Lasso', () => app.selection.apply({ type: 'poly', pts }, this.op));
     },
     shape() {
       const a = this.p0, b = this.p1;
       if (this.mode === 'rect') return { type: 'rect', x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
-      if (this.mode === 'ellipse') return { type: 'ellipse', cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, rx: Math.abs(b.x - a.x) / 2, ry: Math.abs(b.y - a.y) / 2 };
-      return { type: 'poly', pts: this.pts };
+      return { type: 'ellipse', cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, rx: Math.abs(b.x - a.x) / 2, ry: Math.abs(b.y - a.y) / 2 };
     },
-    up() {
-      if (!this.pts) return;
-      const tiny = Math.hypot(this.p1.sx - this.p0.sx, this.p1.sy - this.p0.sy) < 6 && this.pts.length < 4;
-      if (tiny) { if (app.selection.active && this.op === 'replace') selCmd('Deselect', () => app.selection.clear()); }
-      else { const sh = this.shape(); selCmd('Select', () => app.selection.apply(sh, this.op)); }
-      this.pts = null;
-      app.requestRender(); app.updateCtxBar();
+    // ── automatic ──
+    startWand(p) {
+      const d = app.doc;
+      let ref;
+      if (this.wandRef === 'layer') {
+        const tg = d.getTarget(false);
+        if (tg && !tg.matrix) ref = tg.canvas;
+      }
+      if (!ref) ref = d.flatten({ bg: false });
+      this.wand = { ref: ref.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, ref.width, ref.height), seed: p, tol: this.wandTol, mask: null, pending: false };
+      this.computeWand();
     },
-    cancel() { this.pts = null; },
+    updateWand(p) {
+      const w = this.wand; if (!w) return;
+      w.tol = clamp(this.wandTol + (p.sx - this.p0.sx) / 500, 0, 1);
+      app.showHud('Threshold ' + Math.round(w.tol * 100) + '%  ·  slide left / right', 900);
+      if (!w.pending) { w.pending = true; requestAnimationFrame(() => { w.pending = false; if (this.wand === w) this.computeWand(); }); }
+    },
+    computeWand() {
+      const w = this.wand;
+      w.mask = wandMask(w.ref, w.seed.x, w.seed.y, w.tol);
+      const tint = makeCanvas(w.mask.width, w.mask.height), x = tint.getContext('2d');
+      x.drawImage(w.mask, 0, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = 'rgba(61,139,255,0.45)'; x.fillRect(0, 0, tint.width, tint.height);
+      w.tint = tint;
+      app.requestRender('view');
+    },
+    finishWand() {
+      const w = this.wand; this.wand = null;
+      if (!w || !w.mask) return;
+      this.wandTol = w.tol;
+      selCmd('Automatic select', () => app.selection.applyMask(w.mask, this.op));
+    },
     overlay(ctx, px) {
-      if (!this.pts) return;
-      ctx.save(); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = '#3d8bff'; ctx.setLineDash([6 * px, 4 * px]);
-      ctx.beginPath();
-      const sh = this.shape();
-      if (sh.type === 'poly') { ctx.moveTo(sh.pts[0].x, sh.pts[0].y); for (const q of sh.pts) ctx.lineTo(q.x, q.y); }
-      else if (sh.type === 'rect') ctx.rect(sh.x, sh.y, sh.w, sh.h);
-      else ctx.ellipse(sh.cx, sh.cy, sh.rx, sh.ry, 0, 0, Math.PI * 2);
-      ctx.stroke(); ctx.restore();
+      ctx.save();
+      if (this.wand && this.wand.tint) ctx.drawImage(this.wand.tint, 0, 0);
+      ctx.lineWidth = 1.6 * px; ctx.lineJoin = 'round';
+      if (this.poly) {
+        const pts = this.poly;
+        ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (const q of pts) ctx.lineTo(q.x, q.y);
+        const hover = app.hover && !this.moved ? app.hover : null;
+        if (hover) ctx.lineTo(hover.x, hover.y);
+        ctx.strokeStyle = '#fff'; ctx.setLineDash([]); ctx.lineWidth = 3 * px; ctx.stroke();
+        ctx.strokeStyle = '#3d8bff'; ctx.lineWidth = 1.6 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.stroke();
+        ctx.setLineDash([]);
+        // start point: tap it to close
+        ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, (pts.length >= 3 ? 11 : 7) * px, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#3d8bff'; ctx.lineWidth = 2.5 * px; ctx.stroke();
+        for (const q of pts.length < 200 ? pts.slice(1) : []) { ctx.beginPath(); ctx.arc(q.x, q.y, 2.5 * px, 0, Math.PI * 2); ctx.fillStyle = '#3d8bff'; ctx.fill(); }
+      } else if (this.drag && this.moved) {
+        const sh = this.shape();
+        ctx.strokeStyle = '#3d8bff'; ctx.setLineDash([6 * px, 4 * px]);
+        ctx.beginPath();
+        if (sh.type === 'rect') ctx.rect(sh.x, sh.y, sh.w, sh.h); else ctx.ellipse(sh.cx, sh.cy, sh.rx, sh.ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
     },
     onDelete() { clearSelected(); },
     bar() {
-      const modes = [['freehand', 'Freehand'], ['rect', 'Rectangle'], ['ellipse', 'Ellipse']].map(([v, l]) => cbBtn(l, () => { t.mode = v; app.updateCtxBar(); }, t.mode === v));
-      const ops = [['replace', 'New'], ['add', 'Add'], ['subtract', 'Subtract']].map(([v, l]) => cbBtn(l, () => { t.op = v; app.updateCtxBar(); }, t.op === v));
-      const act = app.selection.active;
-      return [...modes, cbSep(), ...ops, cbSep(),
-        cbBtn('All', () => selCmd('Select all', () => app.selection.selectAll())),
-        act && cbBtn('Invert', () => selCmd('Invert selection', () => app.selection.invert())),
-        act && cbBtn('Deselect', () => selCmd('Deselect', () => app.selection.clear())),
+      const S = app.selection, act = S.active;
+      if (this.poly) {
+        return [h('span', { class: 'cb-label' }, `Lasso · ${this.poly.length} point${this.poly.length === 1 ? '' : 's'} · tap the start dot to close`),
+          cbBtn('Close ✓', () => this.closeLasso(), false, 'primary'),
+          cbBtn('Undo point', () => { this.poly.pop(); if (!this.poly.length) this.poly = null; app.updateCtxBar(); app.requestRender('view'); }),
+          cbBtn('Cancel', () => { this.poly = null; app.updateCtxBar(); app.requestRender('view'); })];
+      }
+      const setMode = (v) => { t.mode = v; store.prefs.set('selMode', v); app.updateCtxBar(); };
+      const items = [
+        ...[['auto', 'Automatic'], ['freehand', 'Freehand'], ['rect', 'Rectangle'], ['ellipse', 'Ellipse']].map(([v, l]) => cbBtn(l, () => setMode(v), t.mode === v)),
+        cbSep(),
+        ...[['replace', 'New'], ['add', 'Add'], ['subtract', 'Subtract'], ['intersect', 'Intersect']].map(([v, l]) => cbBtn(l, () => { t.op = v; app.updateCtxBar(); }, t.op === v)),
+      ];
+      if (t.mode === 'auto') items.push(cbSep(), h('span', { class: 'cb-label' }, 'Reads'),
+        cbBtn('Layer', () => { t.wandRef = 'layer'; app.updateCtxBar(); }, t.wandRef === 'layer'),
+        cbBtn('All layers', () => { t.wandRef = 'all'; app.updateCtxBar(); }, t.wandRef === 'all'));
+      items.push(cbSep(),
+        cbBtn('All', () => selCmd('Select all', () => S.selectAll())),
+        cbBtn('Invert', () => selCmd('Invert selection', () => S.invert())),
+        act && cbBtn('Feather…', () => featherDialog()),
+        act && cbBtn('Save', () => { saved.push(S.snapshot()); toast(`Selection saved (${saved.length})`); app.updateCtxBar(); }),
+        saved.length && cbBtn(`Load (${saved.length})`, () => loadDialog()),
+        act && cbBtn('Deselect', () => selCmd('Deselect', () => S.clear())),
         act && cbSep(),
-        act && cbBtn('Copy → layer', () => copyToLayer(false)),
-        act && cbBtn('Cut → layer', () => copyToLayer(true)),
-        act && cbBtn('Fill', () => fillSelected()),
+        act && cbBtn('Copy & Paste', () => copyToLayer(false)),
+        act && cbBtn('Cut & Paste', () => copyToLayer(true)),
+        act && cbBtn('Color fill', () => fillSelected()),
         act && cbBtn('Clear', () => clearSelected()),
-        act && cbBtn('Transform', () => app.setTool('transform')),
-      ].filter(Boolean);
+        act && cbBtn('Transform', () => app.setTool('transform')));
+      return items.filter(Boolean);
     },
+  };
+  const featherDialog = () => {
+    let r = 8;
+    dialog({ title: 'Feather selection', body: field('Feather', { min: 1, max: 100, step: 1, value: r, fmt: (v) => v + ' px', onInput: (v) => (r = v) }),
+      actions: [{ label: 'Cancel' }, { label: 'Apply', primary: true, onClick: () => selCmd('Feather', () => app.selection.feather(r)) }] });
+  };
+  const loadDialog = () => {
+    dialog({ title: 'Load selection', body: '', actions: [
+      ...saved.map((snap, i) => ({ label: 'Selection ' + (i + 1), onClick: () => selCmd('Load selection', () => app.selection.restore(snap)) })),
+      { label: 'Clear saved', danger: true, onClick: () => { saved.length = 0; app.updateCtxBar(); } },
+      { label: 'Cancel', primary: true },
+    ] });
   };
   const curCanvas = () => { const tg = app.doc.getTarget(false); if (!tg) toast('Select a raster layer'); return tg && tg.canvas; };
   const clearSelected = () => {
@@ -865,7 +1163,7 @@ export function selectTool(app) {
     x.drawImage(c, 0, 0); x.globalCompositeOperation = 'destination-in'; x.drawImage(app.selection.mask, 0, 0);
     if (cut) clearSelected();
     insertLayer(app, l);
-    toast(cut ? 'Cut to new layer' : 'Copied to new layer');
+    toast(cut ? 'Cut to a new layer' : 'Copied to a new layer');
   };
   return t;
 }
@@ -924,7 +1222,7 @@ export function transformTool(app) {
         T.rot = r;
         app.showHud(Math.round(((r % 360) + 360) % 360) + '°');
       }
-      T.update(); app.requestRender();
+      T.update(); app.requestRender('active');
     },
     up() { this.drag = null; },
     commit() {
@@ -996,8 +1294,8 @@ export function moveTool(app) {
     },
     apply() {
       const f = app.doc.playhead, tr = this.track;
-      tr.setKey(f, { ...tr.transformAt(f), ...(app.timeline.recording ? {} : {}), x: this.t0.x + this.last.x - this.p0.x, y: this.t0.y + this.last.y - this.p0.y });
-      app.requestRender();
+      tr.setKey(f, { ...tr.transformAt(f), x: this.t0.x + this.last.x - this.p0.x, y: this.t0.y + this.last.y - this.p0.y });
+      app.requestRender('active');
     },
     tick() { if (this.dragging) this.apply(); },
     move(p) { this.last = p; this.apply(); },

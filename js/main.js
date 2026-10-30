@@ -20,7 +20,8 @@ const DEFAULT_SETTINGS = {
 class App {
   constructor() {
     this.canvas = $('#view');
-    this.ctx = this.canvas.getContext('2d');
+    this.ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
+    this.contentVer = 0;
     this.settings = { ...DEFAULT_SETTINGS, ...store.prefs.get('settings', {}) };
     this.history = new History(() => this.updateUndoButtons());
     this.engine = new StrokeEngine();
@@ -30,6 +31,7 @@ class App {
     this.prevTool = 'brush';
     this.color = store.prefs.get('color', '#1d1d24');
     this.colorHistory = store.prefs.get('colorHistory', []);
+    this.colorListeners = new Set();
     this.palette = store.prefs.get('palette', null);
     this.toolBrush = store.prefs.get('toolBrush', { brush: 'studio-pen', smudge: 'blender', eraser: 'soft-air' });
     this.sizes = store.prefs.get('sizes', {});
@@ -137,15 +139,17 @@ class App {
     this.finishTransient();
     this.timeline.stop();
     UI.closePopover();
+    UI.closeAllFloats();
     await this.saveNow(true);
     this.doc = null;
+    this.dropCaches();
     $('#studio').hidden = true; $('#gallery').hidden = false;
     UI.renderGallery(this);
   }
 
-  changed() {
+  changed(kind) {
     this.dirtySave = true;
-    this.requestRender();
+    this.requestRender(kind === 'active' ? 'active' : undefined);
     UI.onDocChanged(this);
     if (this.doc && this.doc.mode === 'animate') this.timeline.refreshSoon();
     clearTimeout(this.saveTimer);
@@ -216,7 +220,7 @@ class App {
     for (const b of $$('.tool')) b.classList.toggle('active', b.dataset.tool === this.tool);
     this.updateSliders();
     this.updateCtxBar();
-    this.requestRender();
+    this.requestRender('active');
   }
 
   finishTransient() {
@@ -242,7 +246,10 @@ class App {
     }
     this.updateColorChip();
   }
-  updateColorChip() { $('#btn-color span').style.background = this.color; }
+  updateColorChip() {
+    $('#btn-color span').style.background = this.color;
+    for (const f of this.colorListeners) f(this.color);
+  }
 
   // ───────── view ─────────
   resize() {
@@ -251,7 +258,7 @@ class App {
     const r = this.canvas.getBoundingClientRect();
     this.vw = r.width || innerWidth; this.vh = r.height || innerHeight;
     this.canvas.width = Math.round(this.vw * dpr); this.canvas.height = Math.round(this.vh * dpr);
-    this.requestRender();
+    this.requestRender('view');
   }
 
   fitView() {
@@ -265,7 +272,7 @@ class App {
     const cx = this.vw / 2, cy = d.mode === 'webtoon' ? top + (d.width * z * 0.0) : top + ah / 2;
     if (d.mode === 'webtoon') this.setViewAt({ x: d.width / 2, y: 0 }, { x: cx, y: top + 10 });
     else this.setViewAt({ x: d.width / 2, y: d.height / 2 }, { x: cx, y: cy });
-    this.requestRender();
+    this.requestRender('view');
   }
 
   viewMatrix() {
@@ -286,7 +293,7 @@ class App {
     this.view.zoom = clamp(this.view.zoom * f, 0.02, 64);
     this.setViewAt(d, { x: sx, y: sy });
     this.showHud(Math.round(this.view.zoom * 100) + '%');
-    this.requestRender();
+    this.requestRender('view');
   }
   showHud(text, ms = 700) {
     const hud = $('#hud'); hud.textContent = text; hud.hidden = false;
@@ -300,7 +307,7 @@ class App {
     c.addEventListener('pointermove', (e) => this.onMove(e));
     c.addEventListener('pointerup', (e) => this.onUp(e));
     c.addEventListener('pointercancel', (e) => this.onUp(e, true));
-    c.addEventListener('pointerleave', () => { this.hover = null; this.requestRender(); });
+    c.addEventListener('pointerleave', () => { this.hover = null; this.requestRender('view'); });
     c.addEventListener('contextmenu', (e) => e.preventDefault());
     c.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     // stop iOS from turning gestures into page zoom / text selection
@@ -374,7 +381,7 @@ class App {
     if (!tool || !tool.down) return;
     this.active = { id: e.pointerId, tool: toolName, type: e.pointerType, t0: performance.now() };
     if (tool.down(p, e) === false) this.active = null;
-    this.requestRender();
+    this.requestRender('active');
   }
 
   onMove(e) {
@@ -383,7 +390,7 @@ class App {
     const p = this.pt(e);
     if (!rec) {
       // hover (mouse / Apple Pencil hover)
-      if (e.pointerType !== 'touch') { this.hover = p; this.requestRender(); }
+      if (e.pointerType !== 'touch') { this.hover = p; this.requestRender('view'); }
       return;
     }
     rec.sx = p.sx; rec.sy = p.sy;
@@ -395,7 +402,7 @@ class App {
     if (this.pan1 && this.pan1.id === e.pointerId) {
       const v = this.pan1.view;
       this.view.x = v.x + p.sx - this.pan1.sx; this.view.y = v.y + p.sy - this.pan1.sy;
-      this.requestRender();
+      this.requestRender('view');
       return;
     }
     if (this.active && this.active.id === e.pointerId) {
@@ -406,7 +413,7 @@ class App {
         else tool.move(p, e);
       } else tool.move && tool.move(p, e);
       if (e.pointerType !== 'touch') this.hover = p;
-      this.requestRender();
+      this.requestRender('active');
     }
   }
 
@@ -431,7 +438,7 @@ class App {
       const tool = this.tools[this.active.tool];
       this.active = null;
       if (cancelled && tool.cancel) tool.cancel(); else tool.up && tool.up(p, e);
-      this.requestRender();
+      this.requestRender('active');
     }
     if (!rec) return;
   }
@@ -441,7 +448,7 @@ class App {
     e.preventDefault();
     const r = this.canvas.getBoundingClientRect();
     if (e.ctrlKey || e.metaKey) this.zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
-    else { this.view.x -= e.deltaX; this.view.y -= e.deltaY; this.requestRender(); }
+    else { this.view.x -= e.deltaX; this.view.y -= e.deltaY; this.requestRender('view'); }
   }
 
   // ── two+ finger gestures: pinch-zoom, rotate, pan; taps = undo / redo / hide UI ──
@@ -477,10 +484,11 @@ class App {
     }
     this.setViewAt(anchor, { x: cx, y: cy });
     this.showHud(Math.round(this.view.zoom * 100) + '%' + (this.view.rot ? ` · ${Math.round(((this.view.rot * 180 / Math.PI) % 360 + 360) % 360)}°` : ''));
-    this.requestRender();
+    this.requestRender('view');
   }
   endGesture() {
     const g = this.gesture; this.gesture = null;
+    this.requestRender('view');
     const dt = performance.now() - g.t0;
     if (!g.moved && dt < 350) {
       if (g.maxTouches === 2) this.undo();
@@ -506,16 +514,21 @@ class App {
     l.style.background = this.color; l.firstChild.style.background = col;
   }
   endPicker() {
+    this.pickData = null;
     $('#loupe').hidden = true;
     if (this.picked) this.setColor(this.picked);
     this.picked = null;
   }
+  // One flatten + readback per pick session; moving the loupe is then just an array lookup.
   sampleColor(x, y) {
-    const c = makeCanvas(1, 1), cx = c.getContext('2d');
-    cx.translate(-Math.floor(x), -Math.floor(y));
-    this.doc.composite(cx, { preview: (cv) => this.previewFor(cv) });
-    const d = cx.getImageData(0, 0, 1, 1).data;
-    return rgbToHex(d[0], d[1], d[2]);
+    const d = this.doc;
+    if (!this.pickData) {
+      const c = d.flatten({ preview: (cv) => this.previewFor(cv) });
+      this.pickData = c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, c.width, c.height);
+    }
+    const xi = clamp(Math.floor(x), 0, d.width - 1), yi = clamp(Math.floor(y), 0, d.height - 1);
+    const k = (yi * d.width + xi) * 4, a = this.pickData.data;
+    return rgbToHex(a[k], a[k + 1], a[k + 2]);
   }
 
   onKey(e) {
@@ -524,7 +537,7 @@ class App {
     if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
     if (mod && k === 'y') { e.preventDefault(); this.redo(); return; }
     if (mod && k === 's') { e.preventDefault(); this.saveNow(true).then(() => toast('Saved')); return; }
-    if (mod && k === 'd') { e.preventDefault(); this.selection.clear(); this.requestRender(); return; }
+    if (mod && k === 'd') { e.preventDefault(); this.selection.clear(); this.requestRender('view'); return; }
     if (mod) return;
     if (e.code === 'Space') { this.spaceDown = true; e.preventDefault(); return; }
     const map = { b: 'brush', e: 'eraser', s: 'smudge', v: 'transform', g: 'fill', i: 'eyedropper', m: 'move', p: 'panel', t: 'balloon', l: null };
@@ -568,10 +581,40 @@ class App {
   }
 
   // ───────── rendering ─────────
-  requestRender() {
+  // kind: 'view' = only the viewport/overlays changed, 'active' = only the active layer
+  // group changed (it is always drawn live), anything else = layer content changed.
+  requestRender(kind) {
+    if (kind !== 'view' && kind !== 'active') this.contentVer++;
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => { this.raf = 0; this.render(); });
   }
+
+  // Layers below the active group are flattened into one cached image, and so are the
+  // layers above it (when they all blend normally). A frame is then ~3 image draws.
+  cacheCanvas(name) {
+    const d = this.doc;
+    let c = this[name];
+    if (!c || c.width !== d.width || c.height !== d.height) c = this[name] = makeCanvas(d.width, d.height);
+    const x = c.getContext('2d');
+    x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
+    x.clearRect(0, 0, c.width, c.height);
+    return c;
+  }
+  ensureCaches() {
+    const d = this.doc, [gs, ge] = d.activeGroup(), n = d.items.length;
+    const key = [this.contentVer, gs, ge, n, d.playhead, d.width, d.height, d.bgVisible, d.bg, d.anim.onion.on].join('|');
+    if (key === this.cacheKey) return;
+    this.cacheKey = key;
+    const below = this.cacheCanvas('belowCache');
+    d.composite(below.getContext('2d'), { to: gs, bg: d.bgVisible, underlay: d.mode === 'animate' ? (x) => this.timeline.drawOnion(x) : null });
+    this.aboveFlat = d.canFlattenRange(ge, n);
+    if (this.aboveFlat && ge < n) {
+      const above = this.cacheCanvas('aboveCache');
+      d.composite(above.getContext('2d'), { from: ge, bg: false });
+    }
+    this.group = [gs, ge];
+  }
+  dropCaches() { for (const k of ['belowCache', 'aboveCache']) if (this[k]) { this[k].width = this[k].height = 0; this[k] = null; } this.cacheKey = null; }
 
   previewFor(canvas) {
     const e = this.engine.previewFor(canvas);
@@ -588,12 +631,12 @@ class App {
     ctx.fillStyle = '#2a2a2e'; ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     const m = this.viewMatrix();
     ctx.setTransform(dpr * m.a, dpr * m.b, dpr * m.c, dpr * m.d, dpr * m.e, dpr * m.f);
-    // paper + shadow
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 24 * dpr; ctx.shadowOffsetY = 4 * dpr;
+    // paper + cheap shadow (shadowBlur on a big rect is very slow in Safari)
+    const px0 = 1 / v.zoom;
+    ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(-3 * px0, -1 * px0, d.width + 6 * px0, d.height + 7 * px0);
+    ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(-1 * px0, 0, d.width + 2 * px0, d.height + 3 * px0);
     ctx.fillStyle = d.bgVisible ? d.bg : '#ffffff';
     ctx.fillRect(0, 0, d.width, d.height);
-    ctx.restore();
     if (!d.bgVisible) {
       if (!this.checker) {
         const c = makeCanvas(16, 16), x = c.getContext('2d');
@@ -604,15 +647,24 @@ class App {
       ctx.fillStyle = this.checker; ctx.fillRect(0, 0, d.width, d.height);
     }
     ctx.imageSmoothingEnabled = v.zoom < 2.5;
-    ctx.imageSmoothingQuality = 'medium';
+    ctx.imageSmoothingQuality = this.gesture ? 'low' : 'medium';
     if (this.engine.active) this.engine.updatePreview();
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, d.width, d.height); ctx.clip();
-    d.composite(ctx, {
-      preview: (c) => this.previewFor(c),
-      bg: d.bgVisible,
-      underlay: d.mode === 'animate' ? (x) => this.timeline.drawOnion(x) : null,
-    });
+    const preview = (c) => this.previewFor(c);
+    if (this.timeline.playing) {
+      // every frame differs during playback: composite directly
+      d.composite(ctx, { preview, bg: d.bgVisible });
+    } else {
+      this.ensureCaches();
+      const [gs, ge] = this.group;
+      ctx.drawImage(this.belowCache, 0, 0);
+      d.composite(ctx, { from: gs, to: ge, bg: false, preview });
+      if (ge < d.items.length) {
+        if (this.aboveFlat) ctx.drawImage(this.aboveCache, 0, 0);
+        else d.composite(ctx, { from: ge, bg: false });
+      }
+    }
     ctx.restore();
     // doc-space overlays
     const px = 1 / v.zoom;
@@ -650,24 +702,32 @@ class App {
   drawSelection(ctx, px) {
     const s = this.selection;
     ctx.save();
-    // dim the unselected area slightly
-    if (!this.selTint || this.selTintVer !== s.mask) {
-      const c = makeCanvas(s.w, s.h), x = c.getContext('2d');
-      x.fillStyle = 'rgba(40,60,120,0.28)'; x.fillRect(0, 0, s.w, s.h);
+    // dim the unselected area slightly (rebuilt only when the selection changes)
+    if (!this.selTint || this.selTintVer !== s.ver) {
+      const c = this.selTint && this.selTint.width === s.w && this.selTint.height === s.h ? this.selTint : makeCanvas(s.w, s.h);
+      const x = c.getContext('2d');
+      x.globalCompositeOperation = 'copy'; x.fillStyle = 'rgba(40,60,120,0.28)'; x.fillRect(0, 0, s.w, s.h);
       x.globalCompositeOperation = 'destination-out'; x.drawImage(s.mask, 0, 0);
-      this.selTint = c; this.selTintVer = s.mask;
+      x.globalCompositeOperation = 'source-over';
+      this.selTint = c; this.selTintVer = s.ver;
     }
     ctx.drawImage(this.selTint, 0, 0);
-    ctx.lineWidth = 1.2 * px;
-    for (const [col, off] of [['#000', 0], ['#fff', 5]]) {
-      ctx.strokeStyle = col; ctx.setLineDash([5 * px, 5 * px]); ctx.lineDashOffset = off * px;
-      ctx.beginPath();
-      for (const p of s.paths) tracePath(ctx, p.shape);
-      ctx.stroke();
+    if (s.vector && s.paths.length) {
+      ctx.lineWidth = 1.2 * px;
+      for (const [col, off] of [['#000', 0], ['#fff', 5]]) {
+        ctx.strokeStyle = col; ctx.setLineDash([5 * px, 5 * px]); ctx.lineDashOffset = off * px;
+        ctx.beginPath();
+        for (const p of s.paths) tracePath(ctx, p.shape);
+        ctx.stroke();
+      }
+    } else {
+      const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(s.edges(), 0, 0);
+      ctx.imageSmoothingEnabled = sm;
     }
     ctx.restore();
   }
-  selectionChanged() { this.selTint = null; this.requestRender(); }
+  selectionChanged() { this.requestRender('view'); }
 
   // ───────── fill ─────────
   fillAt(x, y, color = this.color) {
@@ -692,7 +752,7 @@ class App {
       c.globalCompositeOperation = target.layer.alphaLock ? 'source-atop' : 'source-over';
       c.drawImage(fill, 0, 0); c.restore();
     }, () => this.requestRender());
-    this.changed();
+    this.changed('active');
   }
 
   // ───────── tools ─────────
@@ -759,16 +819,16 @@ class App {
       redrawShape() {
         const pts = shapePoints(this.shape, this.pressure).map((q) => ({ ...this.target.toLocal(q.x, q.y), p: q.p, t: 0 }));
         app.engine.reshape(pts);
-        app.requestRender();
+        app.requestRender('active');
       },
       up() {
         clearTimeout(this.qs);
         const cmd = app.engine.end(kind === 'paint' ? 'Stroke' : kind === 'erase' ? 'Erase' : 'Smudge');
         if (cmd) app.history.push(cmd);
         this.shape = null;
-        app.changed();
+        app.changed('active');
       },
-      cancel() { clearTimeout(this.qs); app.engine.cancel(); this.shape = null; app.requestRender(); },
+      cancel() { clearTimeout(this.qs); app.engine.cancel(); this.shape = null; app.requestRender('active'); },
       bar() { return app.doc && app.doc.mode === 'animate' ? null : null; },
     });
 
@@ -783,7 +843,7 @@ class App {
           app.endPicker();
           if (app.oneShotReturn) { const t = app.oneShotReturn; app.oneShotReturn = null; app.setTool(t); }
         },
-        cancel() { $('#loupe').hidden = true; },
+        cancel() { app.pickData = null; $('#loupe').hidden = true; },
       },
       fill: {
         down(p) { app.fillAt(p.x, p.y); },
