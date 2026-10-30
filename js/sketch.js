@@ -243,9 +243,16 @@ const Sketch = (() => {
         redraw();
         break;
       case 'done':
-        return close(strokes);
+        return close({ strokes, solution: null });
       case 'cancel':
         return close(null);
+      case 'solve':
+        return solve();
+      case 'use-solution':
+        return close({ strokes, solution });
+      case 'close-solve':
+        solvePanel.hidden = true;
+        return;
     }
     syncToolbar();
   });
@@ -262,10 +269,85 @@ const Sketch = (() => {
     if (!overlay.hidden) resize();
   });
 
+  /* ---------- Solving handwritten maths (with Claude, on claude.ai) ---------- */
+
+  const solveButton = overlay.querySelector('[data-do="solve"]');
+  const solvePanel = overlay.querySelector('.solve-panel');
+  const esc = s => Definitions.escape(s);
+  let solution = null;
+
+  // Only shown where Claude can be asked and can look at pictures.
+  Cloud.sample().then(async sample => {
+    if (!sample) return;
+    const limits = await Promise.resolve().then(() => sample.limits()).catch(() => null);
+    solveButton.hidden = !(limits && limits.images);
+  });
+
+  // The sketch as a picture: dark ink on white, whatever the theme.
+  function snapshot() {
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = H;
+    const x = c.getContext('2d');
+    x.fillStyle = '#ffffff';
+    x.fillRect(0, 0, W, H);
+    for (const s of strokes) {
+      x.globalAlpha = opacity(s);
+      x.fillStyle = s.color === 'ink' ? '#111111' : s.color;
+      x.fill(new Path2D(outline(s)));
+    }
+    return new Promise(r => c.toBlob(r, 'image/png'));
+  }
+
+  async function solve() {
+    solvePanel.hidden = false;
+    if (!strokes.length) {
+      solvePanel.innerHTML = '<p class="solve-status">Write a sum or an equation first, then tap Solve.</p>' +
+        '<div class="solve-actions"><button class="text-btn" data-do="close-solve">OK</button></div>';
+      return;
+    }
+    solution = null;
+    solvePanel.innerHTML = '<p class="solve-status">Reading your handwriting\u2026</p>';
+    const sample = await Cloud.sample();
+    try {
+      const reply = await sample.json(
+        `This picture is a handwritten note drawn with a stylus. If it contains a maths problem (a sum, an equation to solve, algebra, fractions, percentages and so on), read it and solve it.
+Reply with JSON only: {"found": true, "problem": "the problem as typed text, using \u00D7 \u00F7 ^ \u221A and fractions like 3/4", "steps": ["up to 5 short working steps"], "answer": "the final answer, simplified"}
+If there is no maths in it, reply {"found": false, "text": "what the handwriting says, if anything"}.`,
+        { images: [await snapshot()], modelTier: 'default' });
+      if (!reply || !reply.found || !reply.answer) {
+        solvePanel.innerHTML = `<p class="solve-status">I couldn\u2019t find a maths problem in this sketch.${reply && reply.text ? ` It reads: \u201C${esc(reply.text)}\u201D.` : ''}</p>` +
+          '<div class="solve-actions"><button class="text-btn" data-do="close-solve">OK</button></div>';
+        return;
+      }
+      solution = { problem: String(reply.problem || ''), answer: String(reply.answer) };
+      const steps = Array.isArray(reply.steps) ? reply.steps.slice(0, 5) : [];
+      solvePanel.innerHTML = `
+        <p class="solve-problem">${esc(solution.problem)}</p>
+        ${steps.length ? `<ol class="solve-steps">${steps.map(st => `<li>${esc(st)}</li>`).join('')}</ol>` : ''}
+        <p class="solve-answer">${solution.problem.includes('=') || solution.answer.includes('=') ? '' : '= '}${esc(solution.answer)}</p>
+        <div class="solve-actions">
+          <button class="text-btn" data-do="close-solve">Close</button>
+          <button class="text-btn strong" data-do="use-solution">Add answer to note</button>
+        </div>`;
+    } catch (err) {
+      const why = {
+        not_granted: 'Solving needs your permission for this page to ask Claude.',
+        rate_limited: 'Claude is busy for you right now. Try again in a minute.',
+        images_unavailable: 'Claude can\u2019t look at pictures from this page.',
+      }[err && err.code] || 'Couldn\u2019t solve it just now. Try again.';
+      solvePanel.innerHTML = `<p class="solve-status">${why}</p>` +
+        '<div class="solve-actions"><button class="text-btn" data-do="close-solve">OK</button></div>';
+    }
+  }
+
   /* ---------- Open / close ---------- */
 
-  // Resolves with the new list of strokes, or null if cancelled.
+  // Resolves with { strokes, solution } (solution is set when the answer
+  // should go into the note), or null if cancelled.
   function open(existing = []) {
+    solution = null;
+    solvePanel.hidden = true;
     strokes = existing.map(s => ({ ...s, points: s.points.map(p => [...p]) }));
     undone = [];
     current = null;

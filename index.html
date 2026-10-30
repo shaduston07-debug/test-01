@@ -2,8 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Inkwell Notes</title>
+  <!-- Home-screen web app (iPad, iPhone, Android) -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Inkwell">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
@@ -23,11 +33,16 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
         <input id="search" type="search" placeholder="Search" autocomplete="off">
       </div>
+      <nav class="groups" id="groups" aria-label="Groups"></nav>
       <ul class="note-list" id="note-list"></ul>
       <footer class="sidebar-footer">
         <button class="link-btn" id="open-dictionary">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>
           Personal Dictionary
+        </button>
+        <button class="link-btn" id="open-appearance">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-1.2-1-1.5-1-2.5s.9-1.5 2-1.5H17a4 4 0 0 0 4-4c0-4.7-4-8.5-9-8.5z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/></svg>
+          Appearance
         </button>
       </footer>
     </aside>
@@ -38,7 +53,14 @@
         <button class="icon-btn back-btn" id="back" title="All notes" aria-label="All notes">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
         </button>
+        <button class="icon-btn sidebar-btn" id="toggle-sidebar" title="Hide the sidebar (Ctrl/⌘ \)" aria-label="Hide sidebar" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
+        </button>
         <div class="format-group">
+          <button class="fmt-btn" id="insert-sketch" title="Sketch or write with a pencil, pen or finger" aria-label="Insert sketch">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3-6 5-9 7-9 3 0-1 9 2 9 2 0 3-4 5-4 1.5 0 2 1.5 4 1.5"/></svg>
+          </button>
+          <span class="divider"></span>
           <button class="fmt-btn" data-cmd="bold" title="Bold (Ctrl/⌘ B)"><b>B</b></button>
           <button class="fmt-btn" data-cmd="italic" title="Italic (Ctrl/⌘ I)"><i>I</i></button>
           <button class="fmt-btn" data-cmd="underline" title="Underline (Ctrl/⌘ U)"><u>U</u></button>
@@ -49,17 +71,16 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="7" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="17" r="1"/><path d="M9 7h11M9 12h11M9 17h11"/></svg>
           </button>
           <button class="fmt-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
-          <span class="divider"></span>
-          <button class="fmt-btn" id="insert-sketch" title="Sketch with a pencil, pen or finger" aria-label="Insert sketch">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3-6 5-9 7-9 3 0-1 9 2 9 2 0 3-4 5-4 1.5 0 2 1.5 4 1.5"/></svg>
-          </button>
         </div>
         <div class="toolbar-right">
-          <label class="toggle" title="Show the definition and Old Norse translations when you click a word">
+          <label class="toggle" title="Show the definition and translations when you click a word">
             <input type="checkbox" id="define-toggle" checked>
             <span class="toggle-track"><span class="toggle-thumb"></span></span>
             <span class="toggle-label">Look up on click</span>
           </label>
+          <button class="icon-btn" id="move-note" title="Put this note in a group" aria-label="Put in a group" aria-haspopup="menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+          </button>
           <button class="icon-btn" id="delete-note" title="Delete note" aria-label="Delete note">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
           </button>
@@ -77,6 +98,32 @@
 
   <!-- Word card: spelling suggestions + book-like definition -->
   <div class="word-card" id="word-card" role="dialog" aria-label="Word details" hidden></div>
+
+  <!-- "Put in a group" menu -->
+  <div class="menu" id="group-menu" role="menu" hidden></div>
+
+  <!-- Answer for a typed sum such as 12 × 7 = -->
+  <button class="math-chip" id="math-chip" hidden></button>
+
+  <!-- Appearance -->
+  <div class="modal-backdrop" id="appearance-modal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="appearance-title">
+      <header>
+        <h2 id="appearance-title">Appearance</h2>
+        <button class="icon-btn" id="close-appearance" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <p class="setting-label">Theme</p>
+      <div class="segmented" id="theme-choice" role="radiogroup" aria-label="Theme">
+        <button role="radio" data-appearance="system">Automatic</button>
+        <button role="radio" data-appearance="light">Light</button>
+        <button role="radio" data-appearance="dark">Dark</button>
+      </div>
+      <p class="setting-label">Colour</p>
+      <div class="accent-choice" id="accent-choice" role="radiogroup" aria-label="Colour"></div>
+    </div>
+  </div>
 
   <!-- Personal dictionary manager -->
   <div class="modal-backdrop" id="dictionary-modal" hidden>
@@ -110,6 +157,7 @@
       </header>
       <div class="sketch-canvas-wrap">
         <canvas></canvas>
+        <div class="solve-panel" hidden></div>
         <p class="sketch-hint">Draw with your pencil, pen, mouse or finger.<br>Once you use a pencil, your palm and fingers are ignored.</p>
       </div>
       <footer class="sketch-tools">
@@ -124,6 +172,10 @@
           <button class="size" data-size="2" aria-label="Thick"><span style="--d:11px"></span></button>
         </div>
         <div class="tool-group swatches"></div>
+        <button class="solve-btn" data-do="solve" hidden title="Read the handwritten maths and solve it">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h4l3 7 5-15h4"/></svg>
+          Solve
+        </button>
       </footer>
     </div>
   </div>
@@ -133,7 +185,12 @@
   <script src="js/cloud.js"></script>
   <script src="js/spellcheck.js"></script>
   <script src="js/definitions.js"></script>
-  <script src="js/norse.js"></script>
+  <script src="js/lexicon.js"></script>
+  <script src="js/lexicons/norse.js"></script>
+  <script src="js/lexicons/latin.js"></script>
+  <script src="js/lexicons/greek.js"></script>
+  <script src="js/lexicons/argot.js"></script>
+  <script src="js/calc.js"></script>
   <script src="js/sketch.js"></script>
   <script src="js/app.js"></script>
 </body>

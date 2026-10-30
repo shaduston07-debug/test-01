@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#1f2a36"/>
+  <!-- fountain-pen nib -->
+  <path d="M256 92 L356 252 Q356 300 300 352 L280 420 H232 L212 352 Q156 300 156 252 Z" fill="#e9b318"/>
+  <path d="M256 92 L256 300" stroke="#1f2a36" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="256" cy="300" r="20" fill="#1f2a36"/>
+  <rect x="222" y="408" width="68" height="18" rx="6" fill="#f5ead0"/>
+</svg>

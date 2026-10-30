@@ -79,6 +79,211 @@
     }
   }
 
+  /* ---------- Groups ---------- */
+
+  const GROUPS_KEY = 'inkwell.groups';
+  const GROUP_COLORS = ['#d9a300', '#d93a2b', '#2f6fd6', '#2f9e5b', '#8a4fd1', '#e0702b', '#7a8290'];
+  const groupsNav = $('#groups');
+  const groupMenu = $('#group-menu');
+  let groups = loadGroups();   // [{ id, name, color }]
+  let currentGroup = '';       // '' shows every note
+  let editingGroup = null;     // a group id, or 'new'
+  let editingColor = GROUP_COLORS[0];
+  let moveAfterCreate = null;  // note to put in the group being created
+
+  function loadGroups() {
+    try {
+      return JSON.parse(localStorage.getItem(GROUPS_KEY)) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistGroups() {
+    try { localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); } catch { /* kept in memory */ }
+    Cloud.saveGroups(groups);
+  }
+
+  const groupOf = note => groups.find(g => g.id === note.group);
+
+  function renderGroups() {
+    const count = id => notes.filter(n => !isBlank(n) && (!id || n.group === id)).length;
+    const pick = (id, name, color) => `
+      <div class="group-row${currentGroup === id ? ' active' : ''}">
+        <button class="group-pick" data-group="${id}">
+          <span class="group-dot${id ? '' : ' all'}" style="--dot:${color}"></span>
+          <span class="group-name">${esc(name)}</span>
+          <span class="group-count">${count(id)}</span>
+        </button>
+        ${id ? `<button class="icon-btn small group-edit" data-edit-group="${id}" aria-label="Edit ${esc(name)}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>` : ''}
+      </div>`;
+    const form = (id, name) => `
+      <form class="group-form" data-group-form="${id}">
+        <input class="group-input" id="group-name" value="${esc(name)}" placeholder="Group name" maxlength="40" aria-label="Group name" autocomplete="off">
+        <div class="group-colors" role="radiogroup" aria-label="Group colour">
+          ${GROUP_COLORS.map(c => `<button type="button" class="swatch${c === editingColor ? ' selected' : ''}" data-group-color="${c}" style="--swatch:${c}" aria-label="Colour ${c}"></button>`).join('')}
+        </div>
+        <div class="group-form-actions">
+          ${id === 'new' ? '<button type="button" class="action subtle" data-cancel-group>Cancel</button>'
+            : '<button type="button" class="action subtle danger" data-delete-group>Delete group</button>'}
+          <button type="submit" class="action">${id === 'new' ? 'Create' : 'Done'}</button>
+        </div>
+      </form>`;
+
+    // Keep a half-typed group name when the list redraws (e.g. after a sync).
+    const nameInput = $('#group-name');
+    const typed = nameInput ? { value: nameInput.value, focused: document.activeElement === nameInput } : null;
+    groupsNav.innerHTML = `
+      <div class="groups-head">
+        <span>Groups</span>
+        <button class="icon-btn small" data-new-group aria-label="New group" title="New group">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      ${pick('', 'All Notes', 'var(--muted)')}
+      ${groups.map(g => editingGroup === g.id ? form(g.id, g.name) : pick(g.id, g.name, g.color)).join('')}
+      ${editingGroup === 'new' ? form('new', '') : ''}`;
+    const input = $('#group-name');
+    if (input && typed) {
+      input.value = typed.value;
+      if (typed.focused) input.focus();
+    }
+  }
+
+  function startEditingGroup(id) {
+    editingGroup = id;
+    const group = groups.find(g => g.id === id);
+    editingColor = group ? group.color : GROUP_COLORS[groups.length % GROUP_COLORS.length];
+    renderGroups();
+    const input = $('#group-name');
+    input.focus();
+    input.select();
+  }
+
+  function finishEditingGroup() {
+    const input = $('#group-name');
+    const name = input ? input.value.trim() : '';
+    if (editingGroup === 'new') {
+      if (name) {
+        const group = { id: 'g' + Date.now().toString(36), name, color: editingColor };
+        groups.push(group);
+        if (moveAfterCreate) moveNote(moveAfterCreate, group.id);
+      }
+    } else {
+      const group = groups.find(g => g.id === editingGroup);
+      if (group && name) Object.assign(group, { name, color: editingColor });
+    }
+    moveAfterCreate = null;
+    editingGroup = null;
+    persistGroups();
+    renderList();
+  }
+
+  function moveNote(id, groupId) {
+    const note = notes.find(n => n.id === id);
+    if (!note) return;
+    note.group = groupId;
+    persist();
+    Cloud.saveNote(note);
+    const group = groups.find(g => g.id === groupId);
+    flash(group ? `Moved to \u201C${group.name}\u201D` : 'Removed from its group');
+  }
+
+  groupsNav.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.group !== undefined) {
+      currentGroup = btn.dataset.group;
+      return renderList();
+    }
+    if (btn.dataset.editGroup) return startEditingGroup(btn.dataset.editGroup);
+    if (btn.hasAttribute('data-new-group')) return startEditingGroup('new');
+    if (btn.dataset.groupColor) {
+      editingColor = btn.dataset.groupColor;
+      groupsNav.querySelectorAll('[data-group-color]').forEach(b => b.classList.toggle('selected', b === btn));
+      return;
+    }
+    if (btn.hasAttribute('data-cancel-group')) {
+      editingGroup = null;
+      moveAfterCreate = null;
+      return renderGroups();
+    }
+    if (btn.hasAttribute('data-delete-group')) {
+      if (!confirmByTapping(btn, 'Tap Delete again. Its notes stay, just without a group.')) return;
+      const id = editingGroup;
+      groups = groups.filter(g => g.id !== id);
+      for (const note of notes.filter(n => n.group === id)) {
+        note.group = '';
+        Cloud.saveNote(note);
+      }
+      persist();
+      if (currentGroup === id) currentGroup = '';
+      editingGroup = null;
+      persistGroups();
+      renderList();
+    }
+  });
+
+  groupsNav.addEventListener('submit', e => {
+    e.preventDefault();
+    finishEditingGroup();
+  });
+
+  groupsNav.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && editingGroup) {
+      e.stopPropagation();
+      editingGroup = null;
+      moveAfterCreate = null;
+      renderGroups();
+    }
+  });
+
+  // "Put in a group" menu on the toolbar.
+  function openGroupMenu(anchor) {
+    const note = current();
+    if (!note) return;
+    const options = [{ id: '', name: 'No group', color: 'transparent' }, ...groups];
+    groupMenu.innerHTML = '<p class="menu-label">Put this note in</p>' +
+      options.map(g => `
+        <button role="menuitemradio" aria-checked="${(note.group || '') === g.id}" data-move="${g.id}">
+          <span class="group-dot${g.id ? '' : ' none'}" style="--dot:${g.color}"></span>${esc(g.name)}
+        </button>`).join('') +
+      '<button role="menuitem" data-move-new>New group\u2026</button>';
+    groupMenu.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    groupMenu.style.top = (rect.bottom + 6) + 'px';
+    groupMenu.style.left = Math.max(12, Math.min(rect.right - groupMenu.offsetWidth, window.innerWidth - groupMenu.offsetWidth - 12)) + 'px';
+  }
+
+  function closeGroupMenu() {
+    groupMenu.hidden = true;
+  }
+
+  $('#move-note').addEventListener('click', e => {
+    if (!groupMenu.hidden) return closeGroupMenu();
+    closeCard();
+    openGroupMenu(e.currentTarget);
+  });
+
+  groupMenu.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    closeGroupMenu();
+    if (btn.hasAttribute('data-move-new')) {
+      moveAfterCreate = currentId;
+      setSidebarHidden(false);
+      app.classList.remove('show-editor');
+      return startEditingGroup('new');
+    }
+    moveNote(currentId, btn.dataset.move);
+    renderList();
+  });
+
+  document.addEventListener('mousedown', e => {
+    if (!groupMenu.hidden && !groupMenu.contains(e.target) && !e.target.closest('#move-note')) closeGroupMenu();
+  });
+
   /* ---------- Sidebar ---------- */
 
   function titleAndSnippet(note) {
@@ -102,14 +307,16 @@
   function renderList() {
     const q = query.toLowerCase();
     const visible = notes
+      .filter(n => !currentGroup || n.group === currentGroup || n.id === currentId && isBlank(n))
       .filter(n => !q || n.text.toLowerCase().includes(q))
       .sort((a, b) => b.updated - a.updated);
+    renderGroups();
 
     noteList.innerHTML = '';
     if (!visible.length) {
       const li = document.createElement('li');
       li.className = 'empty-list';
-      li.textContent = q ? 'No matching notes' : 'No notes yet';
+      li.textContent = q ? 'No matching notes' : currentGroup ? 'No notes in this group yet' : 'No notes yet';
       noteList.append(li);
       return;
     }
@@ -122,6 +329,14 @@
         <div class="note-title"></div>
         <div class="note-meta"><span class="note-time"></span><span class="note-snippet"></span></div>`;
       li.querySelector('.note-title').textContent = title;
+      const group = groupOf(note);
+      if (group && !currentGroup) {
+        const dot = document.createElement('span');
+        dot.className = 'group-dot';
+        dot.style.setProperty('--dot', group.color);
+        dot.title = group.name;
+        li.querySelector('.note-title').prepend(dot);
+      }
       li.querySelector('.note-time').textContent = formatDate(note.updated);
       li.querySelector('.note-snippet').textContent = snippet;
       noteList.append(li);
@@ -176,7 +391,7 @@
     const ranges = [];
     const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (node.parentElement.closest('.norse')) continue; // Old Norse words aren't English
+      if (node.parentElement.closest(XLAT)) continue; // translated words aren't English
       for (const m of node.data.matchAll(WORD_RE)) {
         const end = m.index + m[0].length;
         // Don't nag about the word that's still being typed.
@@ -214,11 +429,11 @@
   function wordAtPoint(x, y) {
     const caret = caretFromPoint(x, y);
     if (!caret || caret.node.nodeType !== Node.TEXT_NODE || !editor.contains(caret.node)) return null;
-    const norse = caret.node.parentElement.closest('.norse');
-    if (norse) {
+    const xlat = caret.node.parentElement.closest(XLAT);
+    if (xlat) {
       const range = document.createRange();
-      range.selectNodeContents(norse);
-      return { word: norse.textContent, range, norse };
+      range.selectNodeContents(xlat);
+      return { word: xlat.textContent, range, xlat };
     }
     for (const m of caret.node.data.matchAll(WORD_RE)) {
       const end = m.index + m[0].length;
@@ -236,7 +451,7 @@
 
   /* ---------- Word card ---------- */
 
-  let active = null;     // { word, range, misspelled, norse?, norseFor?, wiki? }
+  let active = null;     // { word, range, misspelled, xlat?, lang?, source?, more }
   let cardToken = 0;     // guards against out-of-order async lookups
   const esc = Definitions.escape;
 
@@ -246,19 +461,32 @@
   const setPref = (key, value) => {
     try { localStorage.setItem(key, value); } catch { /* keep the default */ }
   };
-  // "a–z" keeps your everyday alphabet; "ð þ ǫ" uses the Old Norse letters.
-  const plainLetters = () => pref(LETTERS_KEY, 'plain') === 'plain';
+
+  // Translated words in a note. `.norse` spans come from before other languages existed.
+  const XLAT = '.xlat, .norse';
+  const spanLang = span => span.dataset.lang || 'norse';
+  const spanWord = span => span.dataset.word || span.dataset.norse;
+
+  // "a–z" keeps your everyday alphabet; the other choice uses the language's own letters.
+  const plainLetters = lang =>
+    pref('inkwell.letters.' + lang, lang === 'norse' ? pref(LETTERS_KEY, 'plain') : 'plain') === 'plain';
+  const lettersFor = (lang, word) =>
+    Lexicon.get(lang).letters && !plainLetters(lang) ? word : Lexicon.plain(lang, word);
+
+  // Whether Claude can be asked (only when opened on claude.ai).
+  let canAskClaude = false;
+  Cloud.sample().then(s => { canAskClaude = !!s; });
 
   function openCard(hit, misspelled) {
-    active = { ...hit, misspelled };
+    active = { ...hit, misspelled, more: {} };
     const token = ++cardToken;
     setLookupHighlight(hit.range);
 
-    if (hit.norse) {
+    if (hit.xlat) {
       // A word that was already translated: offer the alternatives again.
-      card.innerHTML = '<div class="norse-panel"></div>';
+      card.innerHTML = '<div class="xlat-panel"></div>';
       showCard();
-      showNorse(hit.norse.dataset.original, token);
+      showLang(spanLang(hit.xlat), hit.xlat.dataset.original, token);
     } else if (misspelled) {
       card.innerHTML = `
         <div class="spelling">
@@ -272,7 +500,7 @@
             <button class="action subtle" data-action="ignore">Ignore</button>
             <button class="action subtle" data-action="define">Look up anyway</button>
           </div>
-          <div class="norse-guess" hidden></div>
+          <div class="xlat-guess" hidden></div>
         </div>
         <div class="definition" hidden></div>`;
       card.querySelector('.misspelled-word').textContent = hit.word;
@@ -285,38 +513,44 @@
         box.innerHTML = suggestions.length
           ? suggestions.map(s => `<button class="suggestion" data-replace="${esc(s)}">${esc(s)}</button>`).join('')
           : '<span class="muted">No suggestions found.</span>';
-        // Maybe it's an Old Norse word typed from memory ("vordr" → vǫrðr).
-        const guesses = Norse.similar(hit.word);
+        // Maybe it's an old-language word typed from memory ("vordr" → vǫrðr, "xiphos" → ξίφος).
+        const guesses = Lexicon.list()
+          .map(lang => ({ lang, entries: Lexicon.similar(lang.id, hit.word) }))
+          .filter(g => g.entries.length);
         if (guesses.length) {
-          const guess = card.querySelector('.norse-guess');
+          const guess = card.querySelector('.xlat-guess');
           guess.hidden = false;
-          guess.innerHTML = '<p class="card-label">Did you mean the Old Norse</p>' +
-            guesses.map(e => norseOption(e, false)).join('');
+          guess.innerHTML = guesses.map(g =>
+            `<p class="card-label">Did you mean the ${esc(g.lang.name)}</p>` +
+            g.entries.map(e => xlatOption(e, false)).join('')).join('');
         }
         positionCard();
       }, 0);
     } else {
       card.innerHTML = `
         <div class="card-tabs" role="tablist">
-          <button role="tab" data-tab="define">Definition</button>
-          <button role="tab" data-tab="norse">Old Norse</button>
+          <button role="tab" data-tab="define">Define</button>
+          ${Lexicon.list().map(l => `<button role="tab" data-tab="${l.id}">${esc(l.tab)}</button>`).join('')}
         </div>
         <div class="definition"></div>
-        <div class="norse-panel"></div>`;
+        <div class="xlat-panel"></div>`;
       showCard();
       switchTab(pref(TAB_KEY, 'define'));
     }
   }
 
   function switchTab(tab) {
+    if (tab !== 'define' && !Lexicon.get(tab)) tab = 'define';
     setPref(TAB_KEY, tab);
     card.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab));
     const definition = card.querySelector('.definition');
-    const norse = card.querySelector('.norse-panel');
     definition.hidden = tab !== 'define';
-    norse.hidden = tab !== 'norse';
-    if (tab === 'define' && !definition.childElementCount) showDefinition(active.word);
-    if (tab === 'norse' && !norse.childElementCount) showNorse(active.word);
+    card.querySelector('.xlat-panel').hidden = tab === 'define';
+    if (tab === 'define') {
+      if (!definition.childElementCount) showDefinition(active.word);
+    } else {
+      showLang(tab, active.word);
+    }
     positionCard();
   }
 
@@ -348,92 +582,100 @@
     });
   }
 
-  /* ---------- Old Norse ---------- */
+  /* ---------- Translations (Old Norse, Latin, Greek, argot) ---------- */
 
-  function norseOption(entry, chosen) {
-    const shown = plainLetters() ? Norse.plain(entry.word) : entry.word;
-    const other = plainLetters() ? entry.word : Norse.plain(entry.word);
+  function xlatOption(entry, chosen) {
+    const lang = Lexicon.get(entry.lang);
+    const shown = lettersFor(entry.lang, entry.word);
+    const other = shown === entry.word ? Lexicon.plain(entry.lang, entry.word) : entry.word;
     return `
-      <button class="norse-option${chosen ? ' chosen' : ''}" data-norse="${esc(entry.word)}" data-gloss="${esc(entry.gloss)}">
-        <span class="norse-word">${esc(shown)}</span>
-        ${other !== shown ? `<span class="norse-alt">${esc(other)}</span>` : ''}
-        ${entry.pos ? `<span class="norse-pos">${esc(entry.pos)}</span>` : ''}
-        ${entry.gloss ? `<span class="norse-gloss">${esc(entry.gloss)}</span>` : ''}
+      <button class="xlat-option${chosen ? ' chosen' : ''}" data-xlat="${esc(entry.word)}" data-lang="${entry.lang}" data-gloss="${esc(entry.gloss)}">
+        <span class="xlat-word" lang="${lang.htmlLang}">${esc(shown)}</span>
+        ${other !== shown ? `<span class="xlat-alt">${esc(other)}</span>` : ''}
+        ${entry.pos ? `<span class="xlat-pos">${esc(entry.pos)}</span>` : ''}
+        ${entry.gloss ? `<span class="xlat-gloss">${esc(entry.gloss)}</span>` : ''}
       </button>`;
   }
 
-  function norseGroup(label, entries, chosen) {
+  function xlatGroup(label, entries, chosen) {
     if (!entries.length) return '';
-    return `<section class="norse-group"><p class="norse-group-label">${label}</p>` +
-      entries.map(e => norseOption(e, e.word === chosen)).join('') + '</section>';
+    return `<section class="xlat-group"><p class="xlat-group-label">${esc(label)}</p>` +
+      entries.map(e => xlatOption(e, e.word === chosen)).join('') + '</section>';
   }
 
-  function showNorse(original, token = cardToken) {
-    active.norseFor = original;
-    active.wiki = undefined;
+  function showLang(lang, original, token = cardToken) {
+    active.lang = lang;
+    active.source = original;
     // Words the glossary doesn't know are looked up further straight away.
-    if (!Norse.english(original).length) loadMore(token);
-    else renderNorse();
+    const askable = Lexicon.get(lang).wiki || canAskClaude;
+    if (!Lexicon.translate(lang, original).length && active.more[lang] === undefined && askable) loadMore(lang, token);
+    else renderLang();
   }
 
-  function loadMore(token = cardToken) {
-    active.wiki = 'loading';
-    renderNorse();
-    Norse.more(active.norseFor).then(result => {
+  function loadMore(lang = active.lang, token = cardToken) {
+    active.more[lang] = 'loading';
+    renderLang();
+    Lexicon.more(lang, active.source).then(result => {
       if (token !== cardToken) return;
-      active.wiki = result;
-      renderNorse();
+      active.more[lang] = result;
+      if (active.lang === lang) renderLang();
     }).catch(() => {
       if (token !== cardToken) return;
-      active.wiki = 'error';
-      renderNorse();
+      active.more[lang] = 'error';
+      if (active.lang === lang) renderLang();
     });
   }
 
-  function renderNorse() {
-    const box = card.querySelector('.norse-panel');
-    if (!box || !active) return;
-    const original = active.norseFor;
-    const chosen = active.norse ? active.norse.dataset.norse : null;
-    const found = Norse.english(original);
-    const lookalikes = found.length ? [] : Norse.similar(original);
+  function renderLang() {
+    const box = card.querySelector('.xlat-panel');
+    if (!box || !active || !active.lang) return;
+    const lang = Lexicon.get(active.lang);
+    const original = active.source;
+    const chosen = active.xlat ? spanWord(active.xlat) : null;
+    const found = Lexicon.translate(lang.id, original);
+    const lookalikes = found.length ? [] : Lexicon.similar(lang.id, original);
     const known = new Set([...found, ...lookalikes].map(e => e.word));
-    const result = active.wiki && active.wiki.words ? active.wiki : null;
-    const extra = result ? result.words.filter(e => !known.has(e.word)) : [];
+    const state = active.more[lang.id];
+    const extra = state && state.words ? state.words.filter(e => !known.has(e.word)) : [];
+    const askable = lang.wiki || canAskClaude;
 
-    let wikiSection;
-    if (active.wiki === undefined) {
-      wikiSection = '<button class="action subtle" data-action="wiki">More translations</button>';
-    } else if (active.wiki === 'loading') {
-      wikiSection = '<p class="muted serif">Searching for more translations\u2026</p>';
-    } else if (active.wiki === 'error') {
-      wikiSection = '<p class="muted serif">More translations are out of reach \u2014 check your internet connection.</p>' +
-        '<button class="action subtle" data-action="wiki">Try again</button>';
+    let moreSection = '';
+    if (state === undefined) {
+      moreSection = askable ? '<button class="action subtle" data-action="more">More translations</button>'
+        : known.size ? '' : `<p class="muted serif">No ${esc(lang.name)} word for “${esc(original)}” in the built-in list.</p>`;
+    } else if (state === 'loading') {
+      moreSection = '<p class="muted serif">Searching for more translations…</p>';
+    } else if (state === 'error') {
+      moreSection = '<p class="muted serif">More translations are out of reach — check your internet connection.</p>' +
+        '<button class="action subtle" data-action="more">Try again</button>';
     } else if (extra.length) {
-      wikiSection = norseGroup('From ' + result.source, extra, chosen) +
-        (result.source === 'Claude' ? '<p class="norse-note">Suggested by Claude. Worth checking against a dictionary before you rely on them.</p>' : '');
+      moreSection = xlatGroup('From ' + state.source, extra, chosen) +
+        (state.source === 'Claude' ? '<p class="xlat-note">Suggested by Claude. Worth checking against a dictionary before you rely on them.</p>' : '');
     } else {
-      wikiSection = `<p class="muted serif">${known.size ? 'No further translations found.' : `No Old Norse word for \u201C${esc(original)}\u201D was found.`}</p>`;
+      moreSection = `<p class="muted serif">${known.size ? 'No further translations found.' : `No ${esc(lang.name)} word for “${esc(original)}” was found.`}</p>`;
     }
+
+    const letters = lang.letters ? `
+      <div class="letters" role="group" aria-label="Letters to write with">
+        <button data-letters="plain" aria-pressed="${plainLetters(lang.id)}" title="Write it with ${esc(lang.letters.plainHint)}">${lang.letters.plain}</button>
+        <button data-letters="native" aria-pressed="${!plainLetters(lang.id)}" title="Write it with ${esc(lang.letters.nativeHint)}">${lang.letters.native}</button>
+      </div>` : '';
 
     const scroll = card.scrollTop;
     box.innerHTML = `
-      <div class="norse-card">
-        <header class="norse-head">
+      <div class="xlat-card">
+        <header class="xlat-head">
           <div>
-            <h3>Old Norse</h3>
-            <p class="norse-for">for “${esc(original)}”</p>
+            <h3>${esc(lang.title || lang.name)}</h3>
+            <p class="xlat-for">for “${esc(original)}”</p>
           </div>
-          <div class="letters" role="group" aria-label="Letters to write with">
-            <button data-letters="plain" aria-pressed="${plainLetters()}" title="Write it with everyday letters (d, th, o)">a–z</button>
-            <button data-letters="old" aria-pressed="${!plainLetters()}" title="Write it with Old Norse letters (ð, þ, ǫ)">ð þ ǫ</button>
-          </div>
+          ${letters}
         </header>
-        ${active.norse ? `<button class="action subtle restore" data-action="restore">↩ Put back “${esc(original)}”</button>` : ''}
-        ${Object.entries(Norse.KIND_LABEL).map(([kind, label]) => norseGroup(label, found.filter(e => e.kind === kind), chosen)).join('')}
-        ${norseGroup('Looks like', lookalikes, chosen)}
-        <section class="norse-wiki">${wikiSection}</section>
-        <p class="norse-note">Dictionary forms in normalized Old Norse spelling. Choosing one only swaps the word; it keeps your note’s font.</p>
+        ${active.xlat ? `<button class="action subtle restore" data-action="restore">↩ Put back “${esc(original)}”</button>` : ''}
+        ${Object.entries(lang.kinds).map(([kind, label]) => xlatGroup(label, found.filter(e => e.kind === kind), chosen)).join('')}
+        ${xlatGroup('Looks like', lookalikes, chosen)}
+        <section class="xlat-more">${moreSection}</section>
+        <p class="xlat-note">Dictionary forms. Choosing one only swaps the word; it keeps your note’s font.</p>
       </div>`;
     card.scrollTop = scroll;
     positionCard();
@@ -445,18 +687,19 @@
     return word;
   }
 
-  function insertNorse(word, gloss) {
-    const original = active.norse ? active.norse.dataset.original : active.word;
-    const text = matchCase(active.word, plainLetters() ? Norse.plain(word) : word);
+  function insertTranslation(word, langId, gloss) {
+    const lang = Lexicon.get(langId);
+    const original = active.xlat ? active.xlat.dataset.original : active.word;
+    const text = matchCase(active.word, lettersFor(langId, word));
     replaceActive(
-      `<span class="norse" lang="non" data-norse="${esc(word)}" data-original="${esc(original)}" data-text="${esc(text)}"` +
-      ` title="Old Norse ${esc(word)}${gloss ? ' — ' + esc(gloss) : ''} (for “${esc(original)}”)">${esc(text)}</span>`,
+      `<span class="xlat" lang="${lang.htmlLang}" data-lang="${langId}" data-word="${esc(word)}" data-original="${esc(original)}" data-text="${esc(text)}"` +
+      ` title="${esc(lang.name)} ${esc(word)}${gloss ? ' — ' + esc(gloss) : ''} (for “${esc(original)}”)">${esc(text)}</span>`,
       true);
   }
 
-  // Typing at the edge of a translated word must not grow the Old Norse word itself.
-  function fixNorseSpans() {
-    for (const span of editor.querySelectorAll('span.norse')) {
+  // Typing at the edge of a translated word must not grow the translated word itself.
+  function fixTranslatedSpans() {
+    for (const span of editor.querySelectorAll(XLAT)) {
       const want = span.dataset.text;
       const have = span.textContent;
       if (have === want) continue;
@@ -467,6 +710,15 @@
         before.setStart(span, 0);
         before.setEnd(sel.anchorNode, sel.anchorOffset);
         caret = before.toString().length;
+      }
+      if (!have) {
+        // Enter after a translated word copies an empty one onto the new line: drop it.
+        const parent = span.parentNode;
+        const index = [...parent.childNodes].indexOf(span);
+        span.remove();
+        if (!parent.textContent && !parent.querySelector('br')) parent.append(document.createElement('br'));
+        if (caret !== null) sel.collapse(parent, Math.min(index, parent.childNodes.length));
+        continue;
       }
       let node;
       if (have.length > want.length && have.startsWith(want)) {
@@ -533,11 +785,11 @@
 
   // Swap the clicked word (or translated word) for new text or markup.
   function replaceActive(content, asHTML = false) {
-    const { range, word, norse } = active;
-    if (norse ? !editor.contains(norse) : range.toString() !== word) return closeCard(); // text changed underneath us
+    const { range, word, xlat } = active;
+    if (xlat ? !editor.contains(xlat) : range.toString() !== word) return closeCard(); // text changed underneath us
     editor.focus();
     const target = document.createRange();
-    if (norse) target.selectNode(norse);
+    if (xlat) target.selectNode(xlat);
     else target.setStart(range.startContainer, range.startOffset), target.setEnd(range.endContainer, range.endOffset);
     const sel = getSelection();
     sel.removeAllRanges();
@@ -561,12 +813,12 @@
     const btn = e.target.closest('button');
     if (!btn || !active) return;
     if (btn.dataset.replace) return replaceActive(btn.dataset.replace);
-    if (btn.dataset.norse) return insertNorse(btn.dataset.norse, btn.dataset.gloss);
+    if (btn.dataset.xlat) return insertTranslation(btn.dataset.xlat, btn.dataset.lang, btn.dataset.gloss);
     if (btn.dataset.tab) return switchTab(btn.dataset.tab);
     if (btn.dataset.lookup) return showDefinition(btn.dataset.lookup);
     if (btn.dataset.letters) {
-      setPref(LETTERS_KEY, btn.dataset.letters);
-      return renderNorse();
+      setPref('inkwell.letters.' + active.lang, btn.dataset.letters);
+      return renderLang();
     }
     if (btn.dataset.audio) {
       new Audio(btn.dataset.audio).play().catch(() => flash('Couldn’t play the pronunciation.'));
@@ -587,11 +839,11 @@
         btn.remove();
         showDefinition(active.word);
         break;
-      case 'wiki':
+      case 'more':
         loadMore();
         break;
       case 'restore':
-        replaceActive(active.norse.dataset.original);
+        replaceActive(active.xlat.dataset.original);
         break;
     }
   });
@@ -602,26 +854,35 @@
 
   editor.addEventListener('input', () => {
     typing = true;
-    fixNorseSpans();
+    fixTranslatedSpans();
+    checkMath();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCurrent, 300);
     scheduleScan();
   });
 
   editor.addEventListener('keydown', e => {
-    if (e.key === 'Escape') return closeCard();
+    if (e.key === 'Tab' && mathAnswer) {
+      e.preventDefault();
+      return acceptMath();
+    }
+    if (e.key === 'Escape') {
+      hideMath();
+      return closeCard();
+    }
     if (!e.metaKey && !e.ctrlKey && !card.hidden) closeCard();
   });
 
   editor.addEventListener('click', e => {
     typing = false;
+    hideMath();
     scheduleScan();
     const sketch = e.target.closest('.sketch');
     if (sketch) return editSketch(sketch);
     if (!SpellCheck.ready || e.detail > 1 || !getSelection().isCollapsed) return;
     const hit = wordAtPoint(e.clientX, e.clientY);
     if (!hit) return closeCard();
-    const misspelled = !hit.norse && !SpellCheck.isCorrect(hit.word);
+    const misspelled = !hit.xlat && !SpellCheck.isCorrect(hit.word);
     if (!misspelled && !defineToggle.checked) return closeCard();
     if (active && active.range.startContainer === hit.range.startContainer &&
         active.range.startOffset === hit.range.startOffset) return; // same word, already open
@@ -630,6 +891,7 @@
 
   editor.addEventListener('blur', () => {
     typing = false;
+    hideMath();
     scheduleScan();
   });
 
@@ -647,9 +909,59 @@
     if (e.key === 'Escape') {
       closeCard();
       closeDictionary();
+      closeAppearance();
+      closeGroupMenu();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      e.preventDefault();
+      setSidebarHidden(!app.classList.contains('sidebar-hidden'));
     }
   });
-  editorScroll.addEventListener('scroll', closeCard);
+  editorScroll.addEventListener('scroll', () => {
+    closeCard();
+    hideMath();
+  });
+
+  /* ---------- Typed sums: "12 × 7 =" ---------- */
+
+  const mathChip = $('#math-chip');
+  let mathAnswer = null;   // { answer, node, offset, spaced }
+
+  function checkMath() {
+    const sel = getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed || sel.anchorNode.nodeType !== Node.TEXT_NODE) return hideMath();
+    const before = sel.anchorNode.data.slice(0, sel.anchorOffset);
+    const answer = Calc.answerFor(before);
+    if (answer === null) return hideMath();
+    mathAnswer = { answer, node: sel.anchorNode, offset: sel.anchorOffset, spaced: /=\s$/.test(before) };
+    mathChip.innerHTML = `<span>${esc(answer)}</span><kbd>Tab</kbd>`;
+    mathChip.title = 'Add the answer (Tab)';
+    mathChip.hidden = false;
+    // Place it just after the "=".
+    const r = document.createRange();
+    r.setStart(sel.anchorNode, Math.max(0, sel.anchorOffset - 1));
+    r.setEnd(sel.anchorNode, sel.anchorOffset);
+    const rect = r.getBoundingClientRect();
+    mathChip.style.left = Math.min(rect.right + 6, window.innerWidth - mathChip.offsetWidth - 8) + 'px';
+    mathChip.style.top = (rect.top + rect.height / 2 - mathChip.offsetHeight / 2) + 'px';
+  }
+
+  function hideMath() {
+    mathChip.hidden = true;
+    mathAnswer = null;
+  }
+
+  function acceptMath() {
+    if (!mathAnswer || !editor.contains(mathAnswer.node)) return hideMath();
+    const { answer, node, offset, spaced } = mathAnswer;
+    hideMath();
+    editor.focus();
+    getSelection().collapse(node, offset);
+    document.execCommand('insertText', false, (spaced ? '' : ' ') + answer);
+  }
+
+  mathChip.addEventListener('mousedown', e => e.preventDefault());
+  mathChip.addEventListener('click', acceptMath);
   window.addEventListener('resize', positionCard);
 
   /* ---------- Toolbar ---------- */
@@ -678,8 +990,8 @@
     const sel = getSelection();
     sketchSpot = sel.rangeCount && editor.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
     closeCard();
-    const strokes = await Sketch.open();
-    if (!strokes || !strokes.length) return;
+    const result = await Sketch.open();
+    if (!result || !result.strokes.length) return;
     editor.focus();
     if (!sketchSpot) {
       placeCaretAtEnd();
@@ -687,19 +999,25 @@
       sel.removeAllRanges();
       sel.addRange(sketchSpot);
     }
-    const markup = Sketch.html(strokes) + '<div><br></div>';
+    const markup = Sketch.html(result.strokes) + solutionHTML(result.solution) + '<div><br></div>';
     if (!document.execCommand('insertHTML', false, markup)) editor.insertAdjacentHTML('beforeend', markup);
     saveCurrent();
   });
 
   async function editSketch(el) {
     closeCard();
-    const strokes = await Sketch.open(Sketch.read(el));
-    if (!strokes) return;
-    if (strokes.length) el.outerHTML = Sketch.html(strokes);
+    const result = await Sketch.open(Sketch.read(el));
+    if (!result) return;
+    if (result.solution) el.insertAdjacentHTML('afterend', solutionHTML(result.solution));
+    if (result.strokes.length) el.outerHTML = Sketch.html(result.strokes);
     else el.remove();
     saveCurrent();
   }
+
+  // The worked answer Claude read from a handwritten sum, as a line of the note.
+  // An equation reads "3x + 4 = 19 → x = 5"; a plain sum "12 × 7 = 84".
+  const solutionHTML = sol => !sol ? '' :
+    `<div>${esc(sol.problem)} ${sol.problem.includes('=') ? '\u2192' : '='} <b>${esc(sol.answer)}</b></div>`;
 
   try {
     defineToggle.checked = localStorage.getItem(DEFINE_KEY) !== 'off';
@@ -711,7 +1029,10 @@
 
   $('#new-note').addEventListener('click', () => {
     const blank = notes.find(isBlank);
-    openNote((blank || createNote()).id, { focus: true });
+    const note = blank || createNote();
+    note.group = currentGroup;
+    persist();
+    openNote(note.id, { focus: true });
   });
 
   // Pop-up confirm dialogs don't work everywhere (claude.ai blocks them), so
@@ -815,6 +1136,104 @@
     }
   });
 
+  /* ---------- Hiding the sidebar ---------- */
+
+  const SIDEBAR_KEY = 'inkwell.sidebarHidden';
+  const sidebarButton = $('#toggle-sidebar');
+
+  function setSidebarHidden(hidden) {
+    app.classList.toggle('sidebar-hidden', hidden);
+    sidebarButton.setAttribute('aria-pressed', hidden);
+    sidebarButton.setAttribute('aria-label', hidden ? 'Show sidebar' : 'Hide sidebar');
+    sidebarButton.title = (hidden ? 'Show' : 'Hide') + ' the sidebar (Ctrl/\u2318 \\)';
+    setPref(SIDEBAR_KEY, hidden ? 'yes' : 'no');
+    setTimeout(positionCard, 260);
+  }
+
+  sidebarButton.addEventListener('click', () => setSidebarHidden(!app.classList.contains('sidebar-hidden')));
+  setSidebarHidden(pref(SIDEBAR_KEY, 'no') === 'yes');
+
+  /* ---------- Appearance: theme and colour ---------- */
+
+  const APPEARANCE_KEY = 'inkwell.appearance';
+  const ACCENT_KEY = 'inkwell.accent';
+  const ACCENTS = [
+    { id: 'gold', name: 'Gold', light: '#d9a300', dark: '#f0be1d' },
+    { id: 'ember', name: 'Ember', light: '#d0532c', dark: '#ff8a5c' },
+    { id: 'crimson', name: 'Crimson', light: '#b8323f', dark: '#ff6b78' },
+    { id: 'rose', name: 'Rose', light: '#c8467f', dark: '#ff86b8' },
+    { id: 'violet', name: 'Violet', light: '#7a4bd0', dark: '#ae92ff' },
+    { id: 'ocean', name: 'Ocean', light: '#2366c4', dark: '#64a6ff' },
+    { id: 'teal', name: 'Teal', light: '#13857f', dark: '#3fd0c5' },
+    { id: 'forest', name: 'Forest', light: '#2f8a4f', dark: '#5bcc85' },
+    { id: 'ink', name: 'Ink', light: '#3d4451', dark: '#c9d0da' },
+  ];
+  const appearanceModal = $('#appearance-modal');
+  const root = document.documentElement;
+
+  const hexToRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const mix = (a, b, t) => '#' + hexToRgb(a).map((v, i) => Math.round(v * t + hexToRgb(b)[i] * (1 - t)).toString(16).padStart(2, '0')).join('');
+  const luminance = hex => {
+    const [r, g, b] = hexToRgb(hex).map(v => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  // Text on an accent-coloured button: dark on bright colours, white on deep ones.
+  const onAccent = hex => (luminance(hex) > 0.3 ? '#1d1600' : '#ffffff');
+
+  function applyAppearance() {
+    const mode = pref(APPEARANCE_KEY, 'system');
+    if (mode === 'system') delete root.dataset.appearance;
+    else root.dataset.appearance = mode;
+    const accent = ACCENTS.find(a => a.id === pref(ACCENT_KEY, 'gold')) || ACCENTS[0];
+    root.style.setProperty('--accent-light', accent.light);
+    root.style.setProperty('--accent-soft-light', mix(accent.light, '#ffffff', 0.22));
+    root.style.setProperty('--selected-light', mix(accent.light, '#ffffff', 0.35));
+    root.style.setProperty('--on-accent-light', onAccent(accent.light));
+    root.style.setProperty('--accent-dark', accent.dark);
+    root.style.setProperty('--accent-soft-dark', mix(accent.dark, '#1e1e1e', 0.25));
+    root.style.setProperty('--selected-dark', mix(accent.dark, '#1e1e1e', 0.38));
+    root.style.setProperty('--on-accent-dark', onAccent(accent.dark));
+    // Home-screen app: the status bar follows the sidebar colour.
+    const sidebarColour = getComputedStyle(root).getPropertyValue('--sidebar').trim();
+    document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', sidebarColour));
+    renderAppearance();
+  }
+
+  function renderAppearance() {
+    const mode = pref(APPEARANCE_KEY, 'system');
+    const accentId = pref(ACCENT_KEY, 'gold');
+    document.querySelectorAll('#theme-choice [data-appearance]').forEach(b => b.setAttribute('aria-checked', b.dataset.appearance === mode));
+    $('#accent-choice').innerHTML = ACCENTS.map(a => `
+      <button role="radio" class="accent-option" data-accent="${a.id}" aria-checked="${a.id === accentId}"
+        style="--swatch-light:${a.light};--swatch-dark:${a.dark}">
+        <span class="accent-swatch"></span>${a.name}
+      </button>`).join('');
+  }
+
+  function closeAppearance() {
+    appearanceModal.hidden = true;
+  }
+
+  $('#open-appearance').addEventListener('click', () => {
+    closeCard();
+    renderAppearance();
+    appearanceModal.hidden = false;
+  });
+  $('#close-appearance').addEventListener('click', closeAppearance);
+  appearanceModal.addEventListener('click', e => {
+    if (e.target === appearanceModal) return closeAppearance();
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.appearance) setPref(APPEARANCE_KEY, btn.dataset.appearance);
+    if (btn.dataset.accent) setPref(ACCENT_KEY, btn.dataset.accent);
+    if (btn.dataset.appearance || btn.dataset.accent) applyAppearance();
+  });
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyAppearance);
+  applyAppearance();
+
   /* ---------- Status messages ---------- */
 
   let flashTimer = null;
@@ -835,7 +1254,7 @@
     <div><br></div>
     <div>Click any other word — try <b>serendipity</b>, <b>luminous</b> or <b>wander</b> — and you’ll get a definition set like a page from an old dictionary. Turn that off with the “Look up on click” switch above.</div>
     <div><br></div>
-    <div>Switch the card to <b>Old Norse</b> to swap a word for the tongue of the sagas: the warrior raised his sword against the wolf.</div>
+    <div>Switch the card to <b>Norse</b>, <b>Latin</b>, <b>Greek</b> or <b>Argot</b> to swap a word for the tongue of the sagas, of Rome, of Homer or of the old Paris thieves: the warrior raised his sword against the wolf.</div>
     <div><br></div>
     <div>Tap the squiggle in the toolbar to sketch with an Apple Pencil, stylus, mouse or finger.</div>`;
 
@@ -897,11 +1316,30 @@
     SpellCheck.merge(words);
   }).catch(() => { /* the word list on this device still works */ });
 
+  Cloud.loadGroups().then(remote => {
+    if (!remote) {
+      if (groups.length) Cloud.saveGroups(groups);
+      return;
+    }
+    const ids = new Set(remote.map(g => g.id));
+    const merged = [...remote, ...groups.filter(g => !ids.has(g.id))];
+    if (merged.length !== remote.length) Cloud.saveGroups(merged);
+    groups = merged;
+    try { localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); } catch { /* kept in memory */ }
+    renderList();
+  }).catch(() => { /* groups on this device still work */ });
+
   Cloud.onError(err => {
     if (err && err.code === 'invalid_argument') flash('This note is too big to save to your account. It\u2019s still saved on this device.');
     else if (err && err.code === 'quota_exceeded') flash('Your account storage for this app is full. Delete some notes to make room.');
     else flash('Couldn\u2019t save to your account just now. It\u2019s still saved on this device.');
   });
+
+  // Installed on the home screen (or served from a website): work offline.
+  // Not on claude.ai or from a file, where service workers aren't available.
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol) && window.self === window.top) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* online-only is fine */ });
+  }
 
   // Parse the dictionary after the first paint so the app appears instantly.
   setTimeout(() => {

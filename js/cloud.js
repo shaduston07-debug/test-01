@@ -25,6 +25,7 @@ const Cloud = (() => {
 
   const notesCollection = s => s.db.doc(s.base + '/notes').collection('items');
   const dictionaryDoc = s => s.db.doc(s.base + '/dictionary');
+  const groupsDoc = s => s.db.doc(s.base + '/groups');
 
   // One write at a time per document; a newer value replaces a queued one.
   const queues = new Map();
@@ -64,7 +65,7 @@ const Cloud = (() => {
     timers.set(note.id, setTimeout(async () => {
       const s = await storePromise;
       if (!s) return;
-      const body = { html: note.html, text: note.text, created: note.created, updated: note.updated };
+      const body = { html: note.html, text: note.text, created: note.created, updated: note.updated, group: note.group || '' };
       write('note:' + note.id, () => notesCollection(s).doc(note.id).set(body));
     }, 1200));
   }
@@ -87,6 +88,18 @@ const Cloud = (() => {
     if (s) write('dictionary', () => dictionaryDoc(s).set({ words }));
   }
 
+  async function loadGroups() {
+    const s = await storePromise;
+    if (!s) return null;
+    const snap = await groupsDoc(s).get();
+    return snap.exists ? (snap.data().groups || []) : null;
+  }
+
+  async function saveGroups(groups) {
+    const s = await storePromise;
+    if (s) write('groups', () => groupsDoc(s).set({ groups }));
+  }
+
   return {
     store: () => storePromise,
     sample: () => samplePromise,
@@ -95,6 +108,8 @@ const Cloud = (() => {
     deleteNote,
     loadDictionary,
     saveDictionary,
+    loadGroups,
+    saveGroups,
     onError: fn => errorListeners.add(fn),
   };
 })();

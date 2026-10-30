@@ -1,13 +1,28 @@
 /*
- * English → Old Norse translations.
- *
- * A hand-picked glossary (works offline) covers the epic vocabulary of the
- * sagas and skaldic poetry; Wiktionary's translation tables fill the gaps.
- * Words are given in standard normalized Old Norse spelling, in dictionary form.
+ * Old Norse: the language of the sagas and the Eddas, in standard
+ * normalized spelling (Zoëga-style), dictionary forms.
  */
-const Norse = (() => {
-  // english: 'word|pos|gloss|kind; …'   kind: (blank) saga prose, p = poetic, k = kenning
-  const GLOSSARY = {
+Lexicon.register('norse', {
+  name: 'Old Norse',
+  htmlLang: 'non',
+  tab: 'Norse',
+  wiki: { label: 'Old Norse', code: 'non' },
+  letters: { plain: 'a\u2013z', native: '\u00F0 \u00FE \u01EB', plainHint: 'everyday letters (d, th, o)', nativeHint: 'Old Norse letters (\u00F0, \u00FE, \u01EB)' },
+  kinds: { '': 'Saga prose', p: 'Skaldic verse', k: 'Kennings' },
+  kindNames: { '': 'prose', p: 'poetic', k: 'kenning' },
+  toPlain: word => word
+    .replace(/\u00DE/g, 'Th').replace(/\u00FE/g, 'th')
+    .replace(/\u00D0/g, 'D').replace(/\u00F0/g, 'd')
+    .replace(/\u00C6/g, 'Ae').replace(/\u00E6/g, 'ae')
+    .replace(/\u0152/g, 'Oe').replace(/\u0153/g, 'oe')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\u00D8/g, 'O').replace(/\u00F8/g, 'o'),
+  claude: word => `Give Old Norse translations of the English word "${word}".
+Use standard normalized Old Norse spelling (with \u00F0, \u00FE, \u01EB, \u00E6, \u00F8 and accents) in dictionary form.
+Prefer words attested in the sagas or in Eddic and skaldic poetry; include poetic synonyms (heiti) or kennings when they exist.`,
+
+  // english: 'word|pos|gloss|kind; \u2026'   kind: (blank) saga prose, p = poetic, k = kenning
+  glossary: {
     warrior: 'hermaðr|m.|man of the host; kappi|m.|champion; drengr|m.|valiant man; víkingr|m.|sea-raider; rekkr|m.|warrior|p; seggr|m.|man, warrior|p; einherjar|m. pl.|Odin’s chosen slain|p',
     berserker: 'berserkr|m.|bear-shirt warrior',
     viking: 'víkingr|m.|sea-raider',
@@ -276,174 +291,5 @@ const Norse = (() => {
     go: 'fara|v.|to go',
     speak: 'mæla|v.|to speak',
     say: 'segja|v.|to say',
-  };
-
-  const KIND_LABEL = { '': 'Saga prose', p: 'Skaldic verse', k: 'Kennings' };
-
-  const byEnglish = new Map();
-  const headwords = new Map(); // folded word -> entries
-  for (const [english, list] of Object.entries(GLOSSARY)) {
-    const entries = list.split(';').map(item => {
-      const [word, pos, gloss, kind = ''] = item.trim().split('|');
-      return { word, pos, gloss, kind, english };
-    });
-    byEnglish.set(english, entries);
-    for (const e of entries) {
-      const key = fold(e.word);
-      if (!headwords.has(key)) headwords.set(key, []);
-      if (!headwords.get(key).some(h => h.word === e.word && h.gloss === e.gloss)) headwords.get(key).push(e);
-    }
-  }
-
-  // The same word written with only the everyday a–z alphabet.
-  function plain(word) {
-    return word
-      .replace(/Þ/g, 'Th').replace(/þ/g, 'th')
-      .replace(/Ð/g, 'D').replace(/ð/g, 'd')
-      .replace(/Æ/g, 'Ae').replace(/æ/g, 'ae')
-      .replace(/Œ/g, 'Oe').replace(/œ/g, 'oe')
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')
-      .replace(/Ø/g, 'O').replace(/ø/g, 'o');
-  }
-
-  function fold(word) {
-    return plain(word).toLowerCase();
-  }
-
-  // warriors -> warrior, ravens -> raven, slaying -> slay …
-  function lemmas(word) {
-    const w = word.toLowerCase().replace(/[’]/g, "'").replace(/'s$/, '');
-    const out = [w];
-    if (w.endsWith('ies')) out.push(w.slice(0, -3) + 'y');
-    if (w.endsWith('ves')) out.push(w.slice(0, -3) + 'f');
-    if (w.endsWith('es')) out.push(w.slice(0, -2));
-    if (w.endsWith('s')) out.push(w.slice(0, -1));
-    if (w.endsWith('ed')) out.push(w.slice(0, -2), w.slice(0, -1));
-    if (w.endsWith('ing')) out.push(w.slice(0, -3), w.slice(0, -3) + 'e');
-    if (/(.)\1(ed|ing)$/.test(w)) out.push(w.replace(/(.)\1(ed|ing)$/, '$1'));
-    if (w.endsWith('men')) out.push(w.slice(0, -3) + 'man');
-    return out;
-  }
-
-  // Glossary translations for an English word.
-  function english(word) {
-    for (const lemma of lemmas(word)) {
-      if (byEnglish.has(lemma)) return byEnglish.get(lemma);
-    }
-    return [];
-  }
-
-  // Old Norse words that look like what was typed (e.g. "vordr" or "voror" → vǫrðr).
-  function similar(word) {
-    const typed = fold(word);
-    if (typed.length < 3) return [];
-    const limit = typed.length <= 4 ? 1 : 2;
-    const scored = [];
-    for (const [key, entries] of headwords) {
-      if (key.includes(' ')) continue;
-      const d = editDistance(typed, key);
-      if (d <= limit && d < key.length) scored.push({ d, entries });
-    }
-    // One row per word, with its meanings combined (vǫrðr: warden, watchman …).
-    const merged = new Map();
-    for (const e of scored.sort((a, b) => a.d - b.d).flatMap(s => s.entries)) {
-      const seen = merged.get(e.word);
-      if (!seen) merged.set(e.word, { ...e });
-      else if (!seen.gloss.split(', ').includes(e.gloss)) seen.gloss = [...new Set([...seen.gloss.split(', '), ...e.gloss.split(', ')])].join(', ');
-    }
-    return [...merged.values()].slice(0, 4);
-  }
-
-  function editDistance(a, b) {
-    if (Math.abs(a.length - b.length) > 2) return 3;
-    const row = Array.from({ length: b.length + 1 }, (_, i) => i);
-    for (let i = 1; i <= a.length; i++) {
-      let prev = row[0];
-      row[0] = i;
-      for (let j = 1; j <= b.length; j++) {
-        const tmp = row[j];
-        row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
-        prev = tmp;
-      }
-    }
-    return row[b.length];
-  }
-
-  /* ---------- Wiktionary ---------- */
-
-  const WIKI = 'https://en.wiktionary.org/w/api.php?action=parse&format=json&prop=wikitext&redirects=1&origin=*&page=';
-  const wikiCache = new Map();
-
-  async function wikitext(page) {
-    const res = await fetch(WIKI + encodeURIComponent(page));
-    if (!res.ok) throw new Error(`Wiktionary returned ${res.status}`);
-    const json = await res.json();
-    return (json.parse && json.parse.wikitext && json.parse.wikitext['*']) || '';
-  }
-
-  // Pull Old Norse entries out of Wiktionary's translation tables.
-  function parseTranslations(text) {
-    const found = [];
-    let gloss = '';
-    for (const line of text.split('\n')) {
-      const top = line.match(/\{\{trans-top\|([^}|]*)/);
-      if (top) gloss = top[1].replace(/\[\[(?:[^|\]]*\|)?([^\]]*)\]\]/g, '$1').trim();
-      const norse = line.match(/Old Norse:(.*)$/);
-      if (!norse) continue;
-      for (const t of norse[1].matchAll(/\{\{tt?\+?\|non\|([^|}]+)((?:\|[^}]*)?)\}\}/g)) {
-        const gender = (t[2].match(/\|(m|f|n)(?:-p)?(?=\||$)/) || [])[1];
-        found.push({ word: t[1].trim(), pos: gender ? gender + '.' : '', gloss, kind: 'w' });
-      }
-    }
-    return found;
-  }
-
-  // More translations: Wiktionary when the browser can reach it, otherwise Claude.
-  // Resolves { source, words }.
-  function more(word) {
-    const key = lemmas(word)[0];
-    if (!wikiCache.has(key)) {
-      const request = fromWiktionary(key)
-        .then(words => ({ source: 'Wiktionary', words }))
-        .catch(async err => {
-          const sample = await Cloud.sample();
-          if (!sample) throw err;
-          return { source: 'Claude', words: await fromClaude(sample, key) };
-        })
-        .catch(err => {
-          wikiCache.delete(key);
-          throw err;
-        });
-      wikiCache.set(key, request);
-    }
-    return wikiCache.get(key);
-  }
-
-  async function fromWiktionary(key) {
-    const page = await wikitext(key);
-    const englishSection = (page.split(/^==English==\s*$/m)[1] || '').split(/^==[^=]/m)[0];
-    let results = parseTranslations(englishSection);
-    if (!results.length) {
-      // Big entries keep their tables on a separate "/translations" page.
-      try { results = parseTranslations(await wikitext(key + '/translations')); } catch { /* none */ }
-    }
-    const seen = new Set();
-    return results.filter(r => !seen.has(r.word) && seen.add(r.word));
-  }
-
-  async function fromClaude(sample, word) {
-    const reply = await sample.json(
-      `Give Old Norse translations of the English word "${word}".
-Use standard normalized Old Norse spelling (with ð, þ, ǫ, æ, ø and accents) in dictionary form.
-Prefer words attested in the sagas or in Eddic and skaldic poetry; include poetic synonyms (heiti) or kennings when they exist.
-Reply with JSON only: {"words": [{"word": "...", "pos": "m. | f. | n. | adj. | v. | adv. | empty", "gloss": "short English meaning", "kind": "prose | poetic | kenning"}]}
-At most 8 words. If Old Norse has no good equivalent, reply {"words": []}.`,
-      { modelTier: 'default' });
-    const kinds = { prose: '', poetic: 'p', kenning: 'k' };
-    return ((reply && reply.words) || [])
-      .filter(w => w && typeof w.word === 'string' && w.word.trim())
-      .map(w => ({ word: w.word.trim(), pos: w.pos || '', gloss: w.gloss || '', kind: kinds[w.kind] ?? '' }));
-  }
-
-  return { english, similar, more, plain, fold, KIND_LABEL };
-})();
+  },
+});
