@@ -1,6 +1,6 @@
-# Publishes the web version so it can be added to the iPad Home Screen.
-# Requires Settings → Pages → Source: "GitHub Actions"
-# (Pages on private repos needs a paid GitHub plan — or make the repo public).
+# Publishes the web version (for iPad "Add to Home Screen") by updating the
+# gh-pages branch, which GitHub Pages serves at
+# https://shaduston07-debug.github.io/test-01/
 name: Home Screen web app
 
 on:
@@ -10,26 +10,24 @@ on:
     paths: ['js/**', 'css/**', 'index.html', 'sw.js', 'manifest.webmanifest', 'vendor/**', 'icons/**', '.github/workflows/pages.yml']
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - run: node scripts/build-www.mjs
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: www
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - run: node scripts/build-www.mjs && touch www/.nojekyll
+      - name: Push to gh-pages
+        run: |
+          cd www
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

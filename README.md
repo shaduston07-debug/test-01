@@ -35,7 +35,7 @@ After changing the web code, run `npm run sync` to copy it into the iOS project.
 
 Host the folder over HTTPS, open it in Safari, then *Share → Add to Home Screen*. It launches full-screen, and the service worker caches everything for offline use.
 
-- **GitHub Pages:** `.github/workflows/pages.yml` deploys it automatically. Turn it on in *Settings › Pages › Source: GitHub Actions*. Pages for **private** repos needs a paid GitHub plan, so either make the repo public or use another host.
+- **Live at https://shaduston07-debug.github.io/test-01/**: `.github/workflows/pages.yml` rebuilds the `gh-pages` branch on every push.
 - **Free alternatives:** run `npm run build`, then drag the `www/` folder onto Netlify Drop (app.netlify.com/drop) or Cloudflare Pages.
 
 Artwork is stored on-device (IndexedDB). Export `.inkwell` project files for backups. In Safari the Home Screen version and the browser version keep **separate** storage.
