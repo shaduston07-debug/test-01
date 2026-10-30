@@ -64,7 +64,7 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **ibis Paint brushes**
 - Brush Library › **ibis Paint** › *Scan QR image*: pick the QR code exported from ibis Paint (Brush window › menu › Export Brush QR Code), or a screenshot of one
-- The QR is decoded in the app (jsQR). ibis Paint's brush-code format isn't public, so every recognisable setting is read and the rest are filled in from an editor that uses ibis Paint's own setting names (Thickness, Opacity, Interval, Start thickness, pressure / speed / random, Angle, Stabilizer, Anti-aliasing, brush image). The raw code is kept with the brush
+- The QR is decoded in the app (jsQR). ibis Paint brush codes are binary **IPBZ** records (`IPBZ` · version · raw-deflate): they're decompressed and thickness, opacity, interval, pressure, speed and start-taper are applied. The format isn't published, so the field mapping was worked out from real codes; other codes fall back to reading any recognisable settings, and an editor that uses ibis Paint's own setting names (Thickness, Opacity, Interval, Start thickness, pressure / speed / random, Angle, Stabilizer, Anti-aliasing, brush image). The raw code is kept with the brush
 - ibis-style starter brushes (Dip Pen, Felt Tip, Fude, Pencil, Airbrush, Watercolor, Glow) and **speed dynamics** in the engine: faster strokes get thinner and/or lighter
 
 **Layers** (Procreate-style, plus CSP extras): hold and drag to reorder, **groups** (collapse, hide, opacity, flatten; drop a layer onto a group to put it inside), and options in a scrollable side sheet next to the panel

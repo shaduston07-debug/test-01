@@ -114,7 +114,55 @@ function mapPairs(pairs) {
   return { settings: s, used };
 }
 
+// ───────── ibis Paint's binary brush code ("IPBZ") ─────────
+// Brush QR codes carry binary data:  "IPBZ" · u16 version · 2 bytes · raw-deflate stream.
+// The inflated record is big-endian: 4 bytes (format) · u32 length · fields (floats, ints and
+// length-prefixed 16-byte ids that point at ibis Paint's built-in brush shapes / textures).
+// The format isn't published; the field meanings below were worked out from real brush
+// codes and are applied as a best match (all raw fields are kept with the brush).
+const IPBZ_FIELDS = [
+  // [offset, setting, convert(value) → engine value | undefined if implausible]
+  [24, 'size', (v) => (v >= 0.5 && v <= 2000 ? v : undefined)],
+  [52, 'opacity', (v) => (v > 0 && v <= 1 ? v : undefined)],
+  [48, 'spacing', (v) => (v > 0 && v <= 10 ? v : undefined)],
+  [28, 'sizePressure', (v) => (v > 1 ? clamp(0.55 + (v - 1) * 0.4, 0, 1) : v === 1 ? 0.5 : undefined)],
+  [36, 'opacityPressure', (v) => (v > 1.5 ? clamp((v - 1) * 0.15, 0, 0.5) : undefined)],
+  [120, 'speedSize', (v) => (v < 0 && v >= -1 ? -v : undefined)],
+  [268, 'speedOpacity', (v) => (v < 0 && v >= -1 ? clamp(-v * 0.5, 0, 1) : undefined)],
+  [296, 'taper', (v) => (v > 0 && v <= 1 ? v : undefined)],
+];
+async function inflateRaw(bytes) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot decompress (needs iPadOS 16.4+)');
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+}
+export async function decodeIPBZ(bin) {
+  const b = Uint8Array.from(bin);
+  if (b.length < 12 || String.fromCharCode(...b.slice(0, 4)) !== 'IPBZ') return null;
+  const rec = await inflateRaw(b.slice(8));
+  const dv = new DataView(rec.buffer, rec.byteOffset, rec.byteLength);
+  const declared = rec.length >= 8 ? dv.getUint32(4) : 0;
+  const fields = [];
+  for (let o = 8; o + 4 <= rec.length; o += 4) fields.push([o, dv.getFloat32(o), dv.getUint32(o)]);
+  const settings = {}, used = [];
+  if (declared === rec.length - 12 || declared === rec.length - 8 || rec.length >= 300) {
+    for (const [off, key, conv] of IPBZ_FIELDS) {
+      if (off + 4 > rec.length) continue;
+      const v = conv(dv.getFloat32(off));
+      if (v !== undefined) { settings[key] = v; used.push(key); }
+    }
+  }
+  const hex = [...rec].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return { settings, used, version: (b[4] << 8) | b[5], length: rec.length, raw: 'IPBZ v' + ((b[4] << 8) | b[5]) + ' · ' + rec.length + ' bytes · ' + hex, fields };
+}
+
 export async function analyzePayload(qr) {
+  // ibis Paint's own binary brush code
+  if (qr.binaryData && qr.binaryData.length > 8 && String.fromCharCode(...qr.binaryData.slice(0, 4)) === 'IPBZ') {
+    try {
+      const r = await decodeIPBZ(qr.binaryData);
+      if (r) return { settings: r.settings, used: r.used, pairs: r.fields.length, notes: ['ibis Paint brush code (IPBZ v' + r.version + ')'], raw: r.raw, ipbz: true };
+    } catch (e) { console.warn('IPBZ', e); }
+  }
   const text = qr.data || '';
   const pairs = [];
   const notes = [];
@@ -158,6 +206,10 @@ export const IBIS_PRESETS = [
   P({ id: 'ibis-pencil', name: 'Pencil', ...IBIS_TYPES.pencil.base, size: 7, maxSize: 40 }),
   P({ id: 'ibis-air', name: 'Airbrush (Soft)', ...IBIS_TYPES.air.base, size: 140, maxSize: 600 }),
   P({ id: 'ibis-water', name: 'Watercolor', ...IBIS_TYPES.water.base, size: 70, maxSize: 400 }),
+  // decoded from its ibis Paint QR code (shared publicly by @mtd__art)
+  P({ id: 'ibis-pluma-falcon', name: 'Pluma falcon suave (difuminado)', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'round', hardness: 0.8,
+    size: 13, maxSize: 80, opacity: 1, spacing: 0.05, sizePressure: 0.89, opacityPressure: 0.15, speedSize: 0.62, speedOpacity: 0.3,
+    taper: 0.695, taperAlways: true, streamline: 0.35 }),
   P({ id: 'ibis-glow', name: 'Glow Pen', tip: 'round', hardness: 0.35, size: 24, maxSize: 160, sizePressure: 0.5, flow: 0.55, spacing: 0.05, streamline: 0.3 }),
 ];
 
@@ -194,7 +246,9 @@ export function ibisEditor(app, init = {}, meta = null, onSaved) {
     tipBtn.textContent = 'Brush image ✓';
   } }, 'Brush image…');
   const info = meta ? h('div', { class: 'ibis-info' },
-    meta.used.length
+    meta.ipbz
+      ? h('p', {}, `ibis Paint brush code decoded — ${meta.used.length} settings applied (thickness, opacity, interval, pressure, speed, start taper). ibis Paint's brush shapes and textures are built into ibis Paint itself, so the shape uses the closest Inkwell type below. Give it a name and compare with ibis if you like.`)
+      : meta.used.length
       ? h('p', {}, `Read from the QR code: ${meta.used.length} setting${meta.used.length === 1 ? '' : 's'} (${meta.used.slice(0, 6).join(', ')}${meta.used.length > 6 ? '…' : ''}). Check the rest against the brush in ibis Paint.`)
       : h('p', {}, "QR code scanned. ibis Paint's brush code format isn't public, so its settings couldn't be read automatically — copy them from the brush's settings in ibis Paint (same names below). The code is saved with the brush."),
   ) : h('p', { class: 'hint' }, 'Use the same values you see in ibis Paint’s brush settings.');
