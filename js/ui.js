@@ -1,7 +1,7 @@
 // UI panels: popovers, sliders, color, brushes (+Brush Studio), layers, actions, adjustments,
 // gallery, dialogs, and the selection / transform / move / fill tools' context bars.
 import {
-  $, h, clamp, toast, dialog, confirmDialog, promptDialog, download, pickFile, makeCanvas, cloneCanvas,
+  $, h, uid, clamp, toast, dialog, confirmDialog, promptDialog, download, pickFile, makeCanvas, cloneCanvas,
   hsvToRgb, rgbToHsv, rgbToHex, hexToRgb, field, switchRow, seg, pct, canvasToBlob, loadImage,
 } from './util.js';
 import { ICONS } from './icons.js';
@@ -12,6 +12,7 @@ import { DEFAULT_BRUSHES, GRAINS, getTipMask, preloadBrush, newBrushFrom, stroke
 import { importBrushFiles } from './importers.js';
 import * as Ibis from './ibis.js';
 import * as Media from './media.js';
+import * as Pal from './palettes.js';
 import * as X from './exporters.js';
 import { encodeVideo, hevcSupported } from './video.js';
 import { QUALITIES as TL_QUALITIES } from './timelapse.js';
@@ -338,27 +339,95 @@ export function openColor(app, anchor) {
 
   // ── palettes ──
   let renderSw = null;
+  const swatchBtn = (c, onHold) => {
+    const b = h('button', { style: { background: c }, title: c });
+    let t = null;
+    b.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; onHold && onHold(); }, 550); });
+    b.addEventListener('pointerup', () => { if (t) { clearTimeout(t); t = null; setFromHex(c); } });
+    b.addEventListener('pointerleave', () => { if (t) { clearTimeout(t); t = null; } });
+    return b;
+  };
+  const pals = () => Pal.loadPalettes();
+  const savePals = (list) => { Pal.savePalettes(list); renderSw && renderSw(); quick.render(); };
+  const addPalette = (name, colors) => {
+    const list = pals(); const pal = { id: uid(), name, colors };
+    list.unshift(pal); savePals(list); return pal;
+  };
+  const newPaletteMenu = () => dialog({ title: 'New palette', body: h('p', { class: 'hint' }, 'Import accepts Procreate .swatches, Photoshop .aco / .ase, GIMP .gpl and lists of hex codes.'), actions: [
+    { label: 'Cancel' },
+    { label: 'From photo…', onClick: async () => {
+      const [f] = await pickFile('image/*'); if (!f) return;
+      try { addPalette(f.name.replace(/\.[^.]+$/, '').slice(0, 30) || 'Photo palette', await Pal.paletteFromImage(f, 20)); toast('Palette created from photo'); }
+      catch { toast('Couldn’t read that image'); }
+    } },
+    { label: 'Import file…', onClick: async () => {
+      const files = await pickFile(Pal.PALETTE_ACCEPT, true);
+      for (const f of files) {
+        try { const got = await Pal.importPaletteFile(f); for (const p of got) addPalette(p.name, p.colors); toast(`Imported ${got.length === 1 ? '“' + got[0].name + '”' : got.length + ' palettes'}`); }
+        catch (e) { toast(`${f.name}: ${e.message}`, 3500); }
+      }
+    } },
+    { label: 'From recent colors', onClick: () => { addPalette('Recent colors', [...app.colorHistory]); } },
+    { label: 'Blank', primary: true, onClick: async () => { const n = await promptDialog('Palette name', 'New palette'); if (n != null) addPalette(n || 'New palette', []); } },
+  ] });
+  const paletteMenu = (pal) => {
+    const list = pals(), i = list.findIndex((x) => x.id === pal.id);
+    dialog({ title: pal.name, body: '', actions: [
+      { label: 'Cancel' },
+      { label: 'Delete', onClick: async () => {
+        if (list.length < 2) { toast('Keep at least one palette'); return; }
+        if (await confirmDialog(`Delete the palette “${pal.name}”?`, 'Delete', true)) { list.splice(i, 1); savePals(list); }
+      } },
+      { label: 'Share .swatches', onClick: async () => download(await Pal.exportSwatches(pal), (pal.name || 'palette').replace(/[^\w\- ]+/g, '') + '.swatches') },
+      { label: 'Duplicate', onClick: () => { list.splice(i + 1, 0, { id: uid(), name: pal.name + ' copy', colors: [...pal.colors] }); savePals(list); } },
+      { label: 'Rename', onClick: async () => { const n = await promptDialog('Palette name', pal.name); if (n) { list[i].name = n; savePals(list); } } },
+      { label: 'Set as default', primary: true, onClick: () => { Pal.setDefaultPalette(pal.id); savePals(list); } },
+    ] });
+  };
+  const swatchMenu = (palId, ci) => {
+    const list = pals(), pal = list.find((x) => x.id === palId); if (!pal) return;
+    dialog({ title: 'Swatch', body: h('div', { class: 'swatch-big', style: { background: pal.colors[ci] } }), actions: [
+      { label: 'Cancel' },
+      { label: 'Delete', onClick: () => { pal.colors.splice(ci, 1); savePals(list); } },
+      { label: 'Replace with current', primary: true, onClick: () => { pal.colors[ci] = app.color; savePals(list); } },
+    ] });
+  };
+  const swatchGrid = (pal) => {
+    const row = h('div', { class: 'swatches' });
+    pal.colors.forEach((c, ci) => row.append(swatchBtn(c, () => swatchMenu(pal.id, ci))));
+    row.append(h('button', { class: 'add', title: 'Add current color', onclick: () => { const list = pals(); const p2 = list.find((x) => x.id === pal.id); p2.colors.push(app.color); savePals(list); } }, '+'));
+    return row;
+  };
   const buildPalettes = () => {
-    const box = h('div');
-    const histRow = h('div', { class: 'swatches' }), palRow = h('div', { class: 'swatches' });
+    const box = h('div', { class: 'palettes' });
+    const histRow = h('div', { class: 'swatches' }), palBox = h('div');
     renderSw = () => {
       histRow.innerHTML = '';
-      for (const c of app.colorHistory) histRow.append(h('button', { style: { background: c }, onclick: () => setFromHex(c) }));
-      palRow.innerHTML = '';
-      const pal = app.palette || DEFAULT_PALETTE;
-      pal.forEach((c, i) => {
-        const b = h('button', { style: { background: c } });
-        let t;
-        b.addEventListener('pointerdown', () => { t = setTimeout(async () => { t = null; if (await confirmDialog('Remove this swatch?', 'Remove', true)) { pal.splice(i, 1); app.palette = pal; store.prefs.set('palette', pal); renderSw(); } }, 600); });
-        b.addEventListener('pointerup', () => { if (t) { clearTimeout(t); setFromHex(c); } });
-        palRow.append(b);
-      });
-      palRow.append(h('button', { class: 'add', title: 'Add current color', onclick: () => { const p2 = [...(app.palette || DEFAULT_PALETTE), app.color]; app.palette = p2; store.prefs.set('palette', p2); renderSw(); } }, '+'));
+      for (const c of app.colorHistory) histRow.append(swatchBtn(c));
+      palBox.innerHTML = '';
+      const list = pals(), def = Pal.defaultPaletteId(list);
+      for (const pal of list) {
+        palBox.append(h('div', { class: 'pal-head' },
+          h('span', { class: 'pal-name' }, pal.name),
+          pal.id === def ? h('span', { class: 'pal-default' }, 'Default') : h('button', { class: 'pal-setdef', onclick: () => { Pal.setDefaultPalette(pal.id); savePals(pals()); } }, 'Set default'),
+          h('button', { class: 'pal-more', title: 'Palette options', onclick: () => paletteMenu(pal) }, '⋯')),
+          swatchGrid(pal));
+      }
     };
-    box.append(h('div', { class: 'menu-section' }, 'History'), histRow, h('div', { class: 'menu-section' }, 'Palette · hold a swatch to remove'), palRow);
+    box.append(h('div', { class: 'pal-top' }, h('div', { class: 'menu-section' }, 'History'), h('button', { class: 'pill', onclick: newPaletteMenu }, '＋ New palette')),
+      histRow, h('p', { class: 'hint' }, 'Tap a swatch to use it · hold to replace or delete'), palBox);
     renderSw();
     return { el: box, draw: () => {} };
   };
+  // the default palette, compact, under the other color modes (like Procreate)
+  const quick = h('div', { class: 'pal-quick' });
+  quick.render = () => {
+    quick.innerHTML = '';
+    if (tab === 'palettes') return;
+    const list = pals(), pal = list.find((x) => x.id === Pal.defaultPaletteId(list));
+    if (pal) quick.append(swatchGrid(pal));
+  };
+  body.insertBefore(quick, tabsEl);
 
   const builders = { triangle: buildTriangle, square: buildSquare, values: buildValues, palettes: buildPalettes };
   let cur = null;
@@ -369,6 +438,7 @@ export function openColor(app, anchor) {
     }
     cur = builders[tab]();
     view.innerHTML = ''; view.append(cur.el);
+    quick.render();
     refresh();
   };
   let raf = 0;

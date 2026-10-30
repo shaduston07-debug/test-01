@@ -108,6 +108,8 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **ibis Paint brushes included**: Pluma falcon suave (difuminado), Ink Pen and Rough Layout Pen (Blurring), decoded from their QR codes. Scanning reads thickness, opacity, interval, pressure, speed, start taper, minimum thickness, textured material and blurred edges.
 
+**Color palettes**: as many palettes as you like — create blank, from recent colors, from a photo, or import Procreate .swatches, Photoshop .aco / .ase, GIMP .gpl and hex lists; rename, duplicate, delete, share as .swatches. The default palette also shows under the Triangle, Classic and Value modes.
+
 **Reference window**: Actions › Canvas › Reference toggles a floating, resizable companion window — *Canvas* shows a live overview of the whole artwork, *Image* shows a reference picture you import. Pinch / scroll to zoom, drag to pan, double-tap to reset, touch and hold to pick a colour.
 
 **Brush cursor**: outline of the brush size while the Apple Pencil hovers and while painting (sized by your pressure); both switch on/off in Actions › Prefs.
