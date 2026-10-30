@@ -14,6 +14,7 @@ import { Timeline } from './anim.js';
 import * as Toon from './webtoon.js';
 import * as Three3D from './three3d.js';
 import { Timelapse } from './timelapse.js';
+import { Reference } from './reference.js';
 
 // Apple M-series iPads (M1–M4) report 8+ cores and have 8–16 GB of RAM: give layers a
 // bigger budget there. Older devices keep a conservative one.
@@ -26,7 +27,7 @@ const SETTINGS_VERSION = 2;
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 550,
   fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
-  gestures: true, autosave: true, cursor: true,
+  gestures: true, autosave: true, cursor: true, cursorPaint: true,
 };
 
 class App {
@@ -59,6 +60,7 @@ class App {
     this.tools = this.makeTools();
     this.timeline = new Timeline(this);
     this.tlapse = new Timelapse(this);
+    this.reference = new Reference(this);
     this.add3DLayer = () => Three3D.add3DLayer(this);
     this.addText = (shape) => {
       if (this.doc.mode === 'animate') { toast('Text and bubbles are available in Illustrate and Webtoon canvases'); return; }
@@ -163,6 +165,8 @@ class App {
     this.setTool(this.tool);
     this.timeline.mount(doc.mode === 'animate');
     this.tlapse.attach(doc);
+    this.reference.restore();
+    this.reference.changed();
     this.updateSliders();
     this.requestRender();
   }
@@ -187,6 +191,7 @@ class App {
     UI.onDocChanged(this);
     if (this.doc && this.doc.mode === 'animate') this.timeline.refreshSoon();
     this.tlapse.schedule();
+    this.reference.changed();
     clearTimeout(this.saveTimer);
     if (this.settings.autosave) this.saveTimer = setTimeout(() => this.saveNow(), 9000);
   }
@@ -451,7 +456,7 @@ class App {
         if (list.length) { for (const ce of list) tool.move(this.pt(ce), ce); }
         else tool.move(p, e);
       } else tool.move && tool.move(p, e);
-      if (e.pointerType !== 'touch') this.hover = p;
+      this.hover = p;
       this.requestRender('active');
     }
   }
@@ -476,6 +481,8 @@ class App {
     if (this.active && this.active.id === e.pointerId) {
       const tool = this.tools[this.active.tool];
       this.active = null;
+      if (e.pointerType === 'touch') this.hover = null; // fingers have no hover: drop the cursor
+      else this.hover = p;
       if (cancelled && tool.cancel) tool.cancel(); else tool.up && tool.up(p, e);
       this.requestRender('active');
     }
@@ -737,8 +744,12 @@ class App {
     t && t.overlay && t.overlay(ctx, px);
     // screen-space overlays
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (this.hover && this.settings.cursor && ['brush', 'eraser', 'smudge'].includes(this.tool) && !this.gesture) {
-      const r = (this.getSize() * v.zoom) / 2;
+    const painting = this.active && this.active.id != null;
+    if (this.hover && (painting ? this.settings.cursorPaint : this.settings.cursor) && ['brush', 'eraser', 'smudge'].includes(this.tool) && !this.gesture) {
+      // while painting, show the size the current pressure actually produces
+      const b = painting && this.brushFor(this.paintToolName());
+      const pr = b && b.sizePressure ? 1 - b.sizePressure + b.sizePressure * clamp(this.hover.pressure || 0.5, 0, 1) : 1;
+      const r = (this.getSize() * pr * v.zoom) / 2;
       ctx.beginPath(); ctx.arc(this.hover.sx, this.hover.sy, Math.max(1.5, r), 0, Math.PI * 2);
       ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.stroke();
       ctx.beginPath(); ctx.arc(this.hover.sx, this.hover.sy, Math.max(1.5, r) + 1, 0, Math.PI * 2);

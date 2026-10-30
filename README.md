@@ -106,6 +106,10 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **Photos & video**: Insert a photo, Insert a *private* photo (never shown in the time-lapse — any layer can be marked Private), Insert a video frame (scrub to the frame), Import video as animation drawings (Animate).
 
+**Reference window**: Actions › Canvas › Reference toggles a floating, resizable companion window — *Canvas* shows a live overview of the whole artwork, *Image* shows a reference picture you import. Pinch / scroll to zoom, drag to pan, double-tap to reset, touch and hold to pick a colour.
+
+**Brush cursor**: outline of the brush size while the Apple Pencil hovers and while painting (sized by your pressure); both switch on/off in Actions › Prefs.
+
 **Time-lapse**: every change is captured in the background (720p / 1080p / 2K) and stored per canvas; Actions › Video › Time-lapse Replay, and export Full length or 30 seconds as MP4 (WebCodecs H.264).
 
 **Share** (Procreate's list): Share Image — Inkwell, **PSD** (layers, names, opacity, blend modes, visibility, clipping, alpha lock; RLE), **PDF**, JPEG, PNG, **TIFF**; Share Layers — PDF (page per layer), PNG files, Animated GIF, **Animated PNG**, **Animated MP4**, **Animated HEVC** (where the device supports it); Time-lapse video.

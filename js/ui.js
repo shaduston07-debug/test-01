@@ -92,6 +92,13 @@ export function closeFloat(key) {
   const f = floats.get(key); if (!f) return;
   floats.delete(key); f.el.remove(); f.onClose && f.onClose();
 }
+// open a panel directly as a floating window (e.g. the Reference companion)
+export function openFloating(key, title, { width = 320, head = [], body, onClose }) {
+  if (floats.has(key)) return;
+  const headBox = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } }, ...head);
+  makeFloat(key, title, width, headBox, body, onClose, { left: innerWidth - width - 90, top: 80 });
+}
+export const isFloating = (key) => floats.has(key);
 export function closeAllFloats() { for (const k of [...floats.keys()]) closeFloat(k); }
 export function closePopover() {
   if (!pop) return;
@@ -668,6 +675,7 @@ export function openActions(app, anchor) {
       menuItem('canvas', 'Canvas size', () => resizeDialog(app), `${d.width}×${d.height}`),
       menuItem('sym', 'Flip view horizontally', () => { app.view.flip *= -1; app.fitView(); }, app.view.flip < 0 ? 'On' : ''),
       menuItem('sym', 'Drawing guide · Symmetry', () => symmetryDialog(app), app.symmetry.mode === 'off' ? '' : app.symmetry.mode),
+      h('div', {}, switchRow('Reference', app.reference.open, (v) => app.reference.toggle(v))),
       menuItem('pencil', 'Rename', async () => { const n = await promptDialog('Name', d.name); if (n) { d.name = n; $('#doc-title').textContent = n; app.changed(); } }),
     ],
     share: () => [
@@ -716,6 +724,7 @@ export function openActions(app, anchor) {
       h('div', {}, switchRow('Right-hand interface', app.settings.rightHanded, (v) => { app.settings.rightHanded = v; app.applySettings(); })),
       h('div', {}, switchRow('Reduce transparency', app.settings.solidUI, (v) => { app.settings.solidUI = v; app.applySettings(); })),
       h('div', {}, switchRow('Brush cursor', app.settings.cursor, (v) => { app.settings.cursor = v; app.applySettings(); })),
+      h('div', {}, switchRow('Brush cursor while painting', app.settings.cursorPaint, (v) => { app.settings.cursorPaint = v; app.applySettings(); })),
       menuItem('settings', 'All settings…', () => openSettings(app)),
     ],
     help: () => [menuItem('help', 'Gestures & shortcuts', () => helpDialog())],
@@ -855,7 +864,8 @@ export function openSettings(app) {
     h('div', { class: 'menu-section' }, 'Interface'),
     switchRow('Right-hand sidebar', s.rightHanded, (v) => { s.rightHanded = v; save(); }),
     switchRow('Reduce transparency (solid panels)', s.solidUI, (v) => { s.solidUI = v; save(); }),
-    switchRow('Brush cursor (hover)', s.cursor, (v) => { s.cursor = v; save(); }),
+    switchRow('Brush cursor (Apple Pencil hover)', s.cursor, (v) => { s.cursor = v; save(); }),
+    switchRow('Brush cursor while painting', s.cursorPaint, (v) => { s.cursorPaint = v; save(); }),
     switchRow('Gestures (pinch / rotate / pan)', s.gestures, (v) => { s.gestures = v; save(); }),
     h('div', { class: 'menu-section' }, 'Apple Pencil'),
     h('div', { class: 'stack' }, h('label', {}, 'Finger behaviour'), seg([['auto', 'Auto (pencil only once detected)'], ['on', 'Pencil only'], ['off', 'Fingers draw']], s.penOnly, (v) => { s.penOnly = v; save(); })),
