@@ -7,7 +7,7 @@ import { withUndo, touch } from './history.js';
 import { openPopover, closePopover } from './ui.js';
 
 // ───────── structural undo ─────────
-const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private'];
+const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint'];
 function captureStruct(doc) {
   return { items: [...doc.items], props: doc.items.map((it) => Object.fromEntries(PROPS.map((k) => [k, it[k]]))), active: doc.active };
 }
@@ -195,9 +195,11 @@ export function openLayers(app, anchor) {
     } else {
       const tags = [it.private && 'private', it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip'].filter(Boolean).join(' · ');
       const sub = it.type === '3d' ? `3D · ${it.scene3d ? it.scene3d.objects.length : 0} object${it.scene3d && it.scene3d.objects.length === 1 ? '' : 's'}` : it.type === 'frames' ? `${it.panels.length} panels` : it.type === 'balloons' ? `${it.balloons.length} balloons` : it.type === 'track' ? `${it.cels.length} drawings · ${it.keys.length} keys` : (tags || (it.opacity < 1 ? pct(it.opacity) : ''));
+      const canTint = it.type === 'raster' || it.type === 'track';
+      const tintBtn = canTint ? h('button', { class: 'layer-tint' + (it.tint ? ' on' : ''), title: 'Layer colour', style: it.tint ? { background: it.tint } : {}, onclick: (e) => { e.stopPropagation(); d.active = i; render(); openTint(it); } }) : null;
       const blendBtn = h('button', { class: 'layer-blend', title: 'Blend mode & opacity', onclick: (e) => { e.stopPropagation(); d.active = i; render(); openBlend(it); } }, it.type === 'raster' || it.type === 'track' ? blendShort(it.blend) : '');
       row = h('div', { class: 'layer-row' + (on ? ' on' : '') + (it.clip ? ' clip' : '') + (inGroup ? ' member' : '') },
-        thumbOf(app, it), h('div', { class: 'layer-name' }, h('b', {}, it.name), sub ? h('small', {}, sub) : null), blendBtn, vis);
+        thumbOf(app, it), h('div', { class: 'layer-name' }, h('b', {}, it.name), sub ? h('small', {}, sub) : null), tintBtn, blendBtn, vis);
     }
     row.dataset.idx = i;
     bindRow(row, it, i);
@@ -217,7 +219,7 @@ export function openLayers(app, anchor) {
   // tap = select / options; hold then drag = move (over a group's row = put inside it)
   const bindRow = (row, it, i) => {
     row.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.layer-vis, .grp-chev, .layer-blend, input')) return;
+      if (e.target.closest('.layer-vis, .grp-chev, .layer-blend, .layer-tint, input')) return;
       const st = { x: e.clientX, y: e.clientY, lifted: false, cancelled: false };
       const hold = e.pointerType === 'mouse' ? 120 : 220;
       st.timer = setTimeout(() => { if (!st.cancelled) lift(); }, hold);
@@ -307,6 +309,32 @@ export function openLayers(app, anchor) {
     setTimeout(() => blendEl && document.addEventListener('pointerdown', blendEl._outside, true), 0);
   };
 
+  // ── layer colour popup (display tint, e.g. blue sketch lines) ──
+  const openTint = (it) => {
+    closeSheet(); closeBlend();
+    const panel = list.closest('#popover, .float-win');
+    if (!panel) return;
+    const grid = h('div', { class: 'tint-grid' });
+    const set = (c) => { structCmd(app, c ? 'Layer colour' : 'Remove layer colour', () => { it.tint = c; }); fill(); render(); };
+    const fill = () => {
+      grid.innerHTML = '';
+      grid.append(h('button', { class: 'tint-chip none' + (!it.tint ? ' on' : ''), onclick: () => set(null) }, 'Off'));
+      for (const c of LAYER_TINTS) grid.append(h('button', { class: 'tint-chip' + (it.tint === c ? ' on' : ''), style: { background: c }, title: c, onclick: () => set(c) }));
+      grid.append(h('button', { class: 'tint-chip cur' + (it.tint === app.color && !LAYER_TINTS.includes(app.color) ? ' on' : ''), style: { background: app.color }, title: 'Current colour', onclick: () => set(app.color) }, '＋'));
+    };
+    fill();
+    blendEl = h('div', { class: 'blend-pop glass' },
+      h('div', { class: 'sheet-head' }, h('b', {}, 'Layer colour'), h('button', { class: 'float-close', onclick: closeBlend }, '×')),
+      h('div', { class: 'sheet-body' }, h('p', { class: 'hint' }, 'Shows this layer in one colour (like Clip Studio’s layer colour) — handy for blue sketch lines under line art. Your pixels aren’t changed; choose Off to see them again.'), grid));
+    $('#overlay-ui').append(blendEl);
+    const r = panel.getBoundingClientRect(), W = Math.min(250, innerWidth - 16);
+    const left = r.left - W - 8 >= 8 ? r.left - W - 8 : Math.min(r.right + 8, innerWidth - W - 8);
+    Object.assign(blendEl.style, { left: left + 'px', top: r.top + 'px', width: W + 'px' });
+    blendEl.style.zIndex = (parseInt(panel.style.zIndex) || 20) + 1;
+    blendEl._outside = (e) => { if (blendEl && !blendEl.contains(e.target) && !e.target.closest('.layer-tint')) closeBlend(); };
+    setTimeout(() => blendEl && document.addEventListener('pointerdown', blendEl._outside, true), 0);
+  };
+
   // ── options side sheet ──
   let sheetFor = null, sheetEl = null;
   const closeSheet = () => { if (sheetEl) sheetEl.remove(); sheetEl = null; sheetFor = null; };
@@ -352,6 +380,9 @@ export function openLayers(app, anchor) {
   render();
 }
 export function closeLayerSheet() { layersOpen && layersOpen.closeSheet(); }
+
+// layer colours offered (blue first: the classic sketch-layer colour)
+const LAYER_TINTS = ['#3d7bff', '#2fb8ff', '#7a5cff', '#ff4d6d', '#ff8a2a', '#f2c200', '#2fbf71', '#8a8f98', '#000000'];
 
 // Procreate-style grouping of the blend modes
 const BLEND_GROUPS = [

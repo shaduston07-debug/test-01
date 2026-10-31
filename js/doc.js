@@ -22,7 +22,30 @@ export const BLEND_MODES = [
 ];
 export const blendShort = (b) => (BLEND_MODES.find((m) => m[0] === b) || BLEND_MODES[0])[2];
 
-const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private'];
+const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint'];
+
+// Layer colour (display tint, like Clip Studio's layer colour): the layer's pixels shown in one
+// colour, keeping their alpha. Cached per canvas and redone only when the layer changes.
+function tintOf(src, color, holder, key) {
+  let t = holder._tintC;
+  if (!t || t.width !== src.width || t.height !== src.height) { t = holder._tintC = makeCanvas(src.width, src.height); holder._tintKey = null; }
+  if (key != null && holder._tintKey === key) return t;
+  const x = t.getContext('2d');
+  x.globalCompositeOperation = 'copy'; x.drawImage(src, 0, 0);
+  x.globalCompositeOperation = 'source-in'; x.fillStyle = color; x.fillRect(0, 0, t.width, t.height);
+  x.globalCompositeOperation = 'source-over';
+  holder._tintKey = key;
+  return t;
+}
+function tintRect(src, color, r) {
+  let t = src._tintR;
+  if (!t || t.width < r.w || t.height < r.h) t = src._tintR = makeCanvas(Math.max(r.w, 64), Math.max(r.h, 64));
+  const x = t.getContext('2d');
+  x.globalCompositeOperation = 'copy'; x.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+  x.globalCompositeOperation = 'source-in'; x.fillStyle = color; x.fillRect(0, 0, r.w, r.h);
+  x.globalCompositeOperation = 'source-over';
+  return t;
+}
 
 export class Layer {
   constructor(w, h, o = {}) {
@@ -33,6 +56,7 @@ export class Layer {
     this.opacity = o.opacity ?? 1;
     this.blend = o.blend || 'source-over';
     this.alphaLock = !!o.alphaLock;
+    this.tint = o.tint || null;
     this.clip = !!o.clip;
     this.reference = !!o.reference;
     this.panelMask = !!o.panelMask;
@@ -67,6 +91,7 @@ export class Track {
     this.opacity = o.opacity ?? 1;
     this.blend = o.blend || 'source-over';
     this.alphaLock = !!o.alphaLock;
+    this.tint = o.tint || null;
     this.clip = !!o.clip;
     this.reference = !!o.reference;
     this.private = !!o.private;
@@ -200,7 +225,13 @@ export class Doc {
       return { canvas: it._live, matrix: null, alpha: 1, overlay: null, size: [this.width, this.height] };
     } else if (it.type === 'raster' || it.type === '3d') c = it.canvas;
     else return null;
-    return { canvas: (preview && preview(c)) || c, matrix, alpha, overlay: overlay ? overlay(c) : null };
+    const pv = preview && preview(c), ov = overlay ? overlay(c) : null;
+    if (it.tint) {
+      // live preview canvases change every frame; the layer itself only when its version does
+      const canvas = pv ? tintOf(pv, it.tint, pv, null) : tintOf(c, it.tint, c, (c._ver || 0) + ':' + it.tint);
+      return { canvas, matrix, alpha, overlay: ov ? { ...ov, tint: it.tint } : null };
+    }
+    return { canvas: pv || c, matrix, alpha, overlay: ov };
   }
 
   drawSource(ctx, src) {
@@ -211,7 +242,10 @@ export class Doc {
       const a = ctx.globalAlpha;
       ctx.globalAlpha = a * src.overlay.alpha;
       const r = src.overlay.rect;
-      if (r) { if (r.w > 0 && r.h > 0) ctx.drawImage(src.overlay.canvas, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h); }
+      if (src.overlay.tint) {
+        const rr = r || { x: 0, y: 0, w: src.overlay.canvas.width, h: src.overlay.canvas.height };
+        if (rr.w > 0 && rr.h > 0) ctx.drawImage(tintRect(src.overlay.canvas, src.overlay.tint, rr), 0, 0, rr.w, rr.h, rr.x, rr.y, rr.w, rr.h);
+      } else if (r) { if (r.w > 0 && r.h > 0) ctx.drawImage(src.overlay.canvas, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h); }
       else ctx.drawImage(src.overlay.canvas, 0, 0);
       ctx.globalAlpha = a;
     }
@@ -367,7 +401,7 @@ export class Doc {
       out.layers.push(o);
     }
     for (const t of this.tracks) {
-      const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, private: t.private, keys: t.keys, cels: [] };
+      const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, private: t.private, tint: t.tint || null, keys: t.keys, cels: [] };
       for (const c of t.cels) o.cels.push({ start: c.start, dur: c.dur, png: blobFor(c.canvas) });
       out.tracks.push(o);
     }

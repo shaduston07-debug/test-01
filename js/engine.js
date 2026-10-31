@@ -67,6 +67,8 @@ export class StrokeEngine {
     }
     // post-correction amount (0 = strokes stay exactly as drawn … 1 = the brush's full end effect)
     this.liftK = clamp(o.liftAmount ?? (o.liftEffects ? 1 : 0), 0, 1);
+    // ink blobs where strokes start / end (brush fades above 100 %): 0 = clean joins
+    this.blobK = clamp(o.blobAmount ?? 0, 0, 1);
     if (!this.liftK) this.endLen = 0;
     this.tail = []; this.tailHead = 0;
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
@@ -211,9 +213,11 @@ export class StrokeEngine {
     let s = this.size * Math.max(0.35, 1 - b.sizePressure * (1 - pr));
     s = Math.max(s, this.size * (b.minSize || 0));
     s *= 1 + (b.tiltSize || 0) * pt.t;
-    if (b.speedSize) s *= 1 - b.speedSize * 0.85 * Math.min(1, (pt.v || 0) / 3);
+    // speed can thin a line a little (≤ 35 %), never make long fast lines vanish
+    if (b.speedSize) s *= 1 - Math.min(0.35, b.speedSize * 0.6) * Math.min(1, (pt.v || 0) / 5);
     if (this.fade) {
-      const k = (b.fadeStartSize ?? 1); 
+      let k = (b.fadeStartSize ?? 1);
+      if (k > 1) k = 1 + (k - 1) * this.blobK; // ink blob at the start (0 = none)
       if (k !== 1) s *= k + (1 - k) * smooth((this.travelNow ?? this.travel) * this.scale / fadeLen(b.fadeStartLen, this.size));
     } else if ((this.o.simTaper || b.taperAlways) && b.taper > 0) {
       const L = b.taper * this.size * 4 + 1;
@@ -229,11 +233,12 @@ export class StrokeEngine {
     let size = base;
     if (b.sizeJitter) size *= 1 - b.sizeJitter * Math.random();
     // "opacity" dynamics are converted to per-stamp alpha so their steady state matches
-    const o = Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - (b.speedOpacity || 0) * 0.85 * Math.min(1, (pt.v || 0) / 3));
+    const o = Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - Math.min(0.25, (b.speedOpacity || 0) * 0.45) * Math.min(1, (pt.v || 0) / 5));
     const ao = o >= 0.999 ? 1 : 1 - Math.pow(1 - clamp(o, 0, 0.999), Math.max(0.02, b.spacing));
     let alpha = b.flow * Math.max(0.3, 1 - (b.flowPressure || 0) * (1 - pt.p)) * ao;
     if (this.fade && (b.fadeStartAlpha ?? 1) !== 1) {
-      const k = b.fadeStartAlpha;
+      let k = b.fadeStartAlpha;
+      if (k > 1) k = 1 + (k - 1) * this.blobK;
       alpha = Math.min(1, alpha * (k + (1 - k) * smooth((this.travelNow ?? this.travel) * this.scale / fadeLen(b.fadeStartLen, this.size))));
     }
     let x = pt.x, y = pt.y;
@@ -294,7 +299,8 @@ export class StrokeEngine {
         const u = Math.max(0, rem / L);
         const k = this.liftK;
         if (this.endSize != null) {
-          const f = smooth(u), es = 1 + (this.endSize - 1) * k, ea = 1 + (this.endAlpha - 1) * k;
+          const bl = (r) => (r > 1 ? 1 + (r - 1) * this.blobK : r);
+          const f = smooth(u), es = 1 + (bl(this.endSize) - 1) * k, ea = 1 + (bl(this.endAlpha) - 1) * k;
           size *= es + (1 - es) * f;
           alpha = Math.min(1, alpha * (ea + (1 - ea) * f));
         } else size *= 1 - k * 0.9 * (1 - Math.sqrt(u));
