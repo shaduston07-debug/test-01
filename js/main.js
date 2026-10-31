@@ -255,11 +255,15 @@ class App {
       const d = this.doc, prev = this.saving && !this.saveStuck() ? this.savePromise : null;
       this.saving = true; this.saveStarted = performance.now();
       const job = (this.savePromise = within(prev, 4000).then(() => this.doSave(d)));
+      const tj = performance.now();
       const r = await within(job, 6000);
+      if (globalThis.__closeLog) console.log('LOG close save', Math.round(performance.now() - tj), 'ms, waited for previous:', !!prev);
       clearTimeout(slow);
       if (r === 'timeout') { toast('Still saving in the background…', 3000); job.then(() => { if (!this.doc) UI.renderGallery(this); }); }
       else toast(this.dirtySave ? 'Couldn’t save — try again from the gallery menu' : 'Saved ✓', 1400);
+      const tt = performance.now();
       await within(this.tlapse.detach(), 3000);
+      if (globalThis.__closeLog) console.log('LOG close timelapse', Math.round(performance.now() - tt), 'ms');
     } finally {
       step(() => { this.doc = null; this.dropCaches(); });
       $('#studio').hidden = true; $('#gallery').hidden = false;
@@ -293,12 +297,14 @@ class App {
     const seq = (this.saveSeq = (this.saveSeq || 0) + 1);
     try {
       if (!d) return;
-      await this.tlapse.flush();
-      const data = await d.serialize();
+      const L = globalThis.__closeLog ? (k) => console.log('LOG   save ' + k + ' ' + Math.round(performance.now() - t0) + 'ms') : () => {}; const t0 = performance.now();
+      await this.tlapse.flush(); L('timelapse');
+      const data = await d.serialize(); L('serialize');
       const s = Math.min(1, 420 / Math.max(d.width, d.mode === 'webtoon' ? d.width * 1.4 : d.height));
       const th = d.flatten({ width: Math.max(1, d.width * s), height: Math.max(1, (d.mode === 'webtoon' ? Math.min(d.height, d.width * 1.4) : d.height) * s), frame: d.playhead });
-      const thumb = await canvasToBlob(th, 'image/jpeg', 0.8);
+      const thumb = await canvasToBlob(th, 'image/jpeg', 0.8); L('thumb');
       await store.saveDoc(data, { id: d.id, name: d.name, mode: d.mode, width: d.width, height: d.height, updated: Date.now(), created: d.created, folder: d.folder || null, thumb });
+      L('stored');
       this.dirtySave = false;
     } catch (e) {
       console.error(e);

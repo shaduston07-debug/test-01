@@ -93,7 +93,17 @@ export async function wandRegionAsync(src, w, h, x, y, tol) {
 // Image encoding: the browser's own canvas.toBlob already encodes off the main thread and
 // benchmarked faster than shipping pixels to our workers, so it's used directly (callers
 // still encode many layers at once).
+// Chromium only runs canvas.toBlob in idle time (up to ~5 s late while anything animates), so
+// encode through an OffscreenCanvas when there is one; toBlob is the fallback.
+const hasOffscreen = typeof OffscreenCanvas !== 'undefined' && typeof OffscreenCanvas.prototype.convertToBlob === 'function';
 export function encodeImage(canvas, type = 'image/png', quality) {
+  if (hasOffscreen && canvas.width && canvas.height) {
+    try {
+      const oc = new OffscreenCanvas(canvas.width, canvas.height);
+      oc.getContext('2d').drawImage(canvas, 0, 0);
+      return oc.convertToBlob({ type, quality }).catch(() => new Promise((res) => canvas.toBlob(res, type, quality)));
+    } catch { /* fall back below */ }
+  }
   return new Promise((res) => canvas.toBlob(res, type, quality));
 }
 export const encodePNG = (canvas) => encodeImage(canvas, 'image/png');

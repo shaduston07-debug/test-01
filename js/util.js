@@ -171,7 +171,13 @@ export function loadScript(src) {
   }));
 }
 
-export const canvasToBlob = (c, type = 'image/png', q) => new Promise((res) => c.toBlob(res, type, q));
+// OffscreenCanvas encoding when available: Chromium delays canvas.toBlob until idle time
+export const canvasToBlob = (c, type = 'image/png', q) => {
+  if (typeof OffscreenCanvas !== 'undefined' && OffscreenCanvas.prototype.convertToBlob && c.width && c.height) {
+    try { const oc = new OffscreenCanvas(c.width, c.height); oc.getContext('2d').drawImage(c, 0, 0); return oc.convertToBlob({ type, quality: q }).catch(() => new Promise((res) => c.toBlob(res, type, q))); } catch { /* fall back */ }
+  }
+  return new Promise((res) => c.toBlob(res, type, q));
+};
 export const blobToDataURL = (b) => new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(b); });
 export async function dataURLToBlob(u) { return (await fetch(u)).blob(); }
 export function loadImage(src) {
