@@ -27,7 +27,7 @@ const SETTINGS_VERSION = 2;
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 550,
   fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
-  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true,
+  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true,
 };
 
 class App {
@@ -138,13 +138,26 @@ class App {
   }
 
   bindHoldRepeat(el, fn) {
-    let t1, t2;
-    const stop = () => { clearTimeout(t1); clearInterval(t2); };
+    let stop = null;
+    const end = () => { if (stop) { stop(); stop = null; } };
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault(); fn();
-      t1 = setTimeout(() => { t2 = setInterval(fn, 110); }, 450);
+      if (this.settings.holdRepeat !== false) stop = this.repeatSteps(fn, 450);
     });
-    el.addEventListener('pointerup', stop); el.addEventListener('pointerleave', stop); el.addEventListener('pointercancel', stop);
+    el.addEventListener('pointerup', end); el.addEventListener('pointerleave', end); el.addEventListener('pointercancel', end);
+  }
+  // Procreate-style rapid undo / redo: after `delay` ms, repeat fn, getting faster the longer
+  // it's held (≈7 → 20 steps a second). fn returns false when there's nothing left. Returns stop().
+  repeatSteps(fn, delay, onStep) {
+    let t = null, n = 0, alive = true;
+    const step = () => {
+      if (!alive) return;
+      const ok = fn(); n++; onStep && onStep(n, ok);
+      if (ok === false) return;
+      t = setTimeout(step, Math.max(50, 150 - n * 7));
+    };
+    t = setTimeout(step, delay);
+    return () => { alive = false; clearTimeout(t); return n; };
   }
 
   // ───────── documents ─────────
@@ -528,12 +541,29 @@ class App {
       ids, view: { ...this.view }, start: ids.map((id) => ({ ...this.ptrs.get(id) })),
       t0: keep && prev ? prev.t0 : performance.now(), maxTouches: Math.max(ids.length, prev && keep ? prev.maxTouches : 0),
       moved: keep && prev ? prev.moved : false, zoom0: keep && prev ? prev.zoom0 : this.view.zoom,
+      repeat: keep && prev ? prev.repeat : null, repeating: keep && prev ? prev.repeating : false,
     };
+    // hold two fingers = keep undoing, three = keep redoing (until they lift or move)
+    const g = this.gesture;
+    if (!g.repeating && this.settings.holdRepeat !== false && (ids.length === 2 || ids.length === 3)) {
+      if (g.repeat) g.repeat();
+      const redo = ids.length === 3, label = redo ? 'Redo' : 'Undo';
+      let first = true;
+      g.repeat = this.repeatSteps(() => {
+        if (this.gesture !== g || g.moved) return false;
+        if (first) { first = false; g.repeating = true; this.view = { ...g.view }; this.requestRender('view'); }
+        const can = redo ? this.history.canRedo : this.history.canUndo;
+        if (!can) return false;
+        redo ? this.redo() : this.undo();
+        return true;
+      }, 500, (n, ok) => this.showHud(ok === false ? `Nothing more to ${label.toLowerCase()}` : `${label} ×${n}`));
+    }
   }
   updateGesture() {
     const g = this.gesture;
     const cur = g.ids.map((id) => this.ptrs.get(id)).filter(Boolean);
     if (cur.length < 1) return;
+    if (g.repeating) return; // rapid undo / redo in progress: keep the view still
     for (const c of cur) if (dist(c.sx, c.sy, c.x0, c.y0) > 12) g.moved = true;
     if (!this.settings.gestures) return;
     const s0 = g.start;
@@ -558,6 +588,8 @@ class App {
   endGesture() {
     const g = this.gesture; this.gesture = null;
     this.requestRender('view');
+    if (g.repeat) g.repeat();
+    if (g.repeating) return;
     const dt = performance.now() - g.t0;
     if (!g.moved && dt < 350) {
       if (g.maxTouches === 2) this.undo();
