@@ -1762,6 +1762,8 @@ function moveDialog(app, m) {
 async function openSaved(app, m) {
   toast('Opening…', 6000);
   try {
+    // a save still finishing in the background must land first, or we'd open the older copy
+    if (app.saving && app.savePromise) await Promise.race([app.savePromise.catch(() => {}), new Promise((r) => setTimeout(r, 20000))]);
     const data = await store.loadDoc(m.id);
     if (!data) { toast('Document not found'); return; }
     const doc = await Doc.deserialize(data);

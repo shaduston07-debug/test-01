@@ -144,7 +144,11 @@ class App {
         else this.setTool(t);
       });
     }
-    $('#btn-gallery').onclick = () => this.closeDoc();
+    // pointerup as well as click: on iPad a click can be dropped when the finger/pencil moves a
+    // little or another touch is still down, which made Gallery sometimes do nothing
+    const gal = $('#btn-gallery');
+    gal.onclick = () => this.closeDoc();
+    gal.addEventListener('pointerup', (e) => { if (e.button === 0 || e.pointerType !== 'mouse') this.closeDoc(); });
     $('#btn-actions').onclick = (e) => UI.openActions(this, e.currentTarget);
     $('#btn-adjust').onclick = (e) => UI.openAdjustments(this, e.currentTarget);
     $('#btn-layers').onclick = (e) => UI.openLayers(this, e.currentTarget);
@@ -221,19 +225,41 @@ class App {
     this.requestRender();
   }
 
+  // Back to the gallery. Never gets stuck: every step is guarded, a save already running is
+  // waited for (then saved again if needed), and a save that hangs (e.g. iOS storage stalling)
+  // gives up waiting after a while — it keeps going in the background with its own copy.
   async closeDoc() {
-    if (!this.doc) return;
-    this.flushStroke();
-    this.finishTransient();
-    this.timeline.stop();
-    UI.closePopover();
-    UI.closeAllFloats();
-    await this.saveNow(true);
-    await this.tlapse.detach();
-    this.doc = null;
-    this.dropCaches();
-    $('#studio').hidden = true; $('#gallery').hidden = false;
-    UI.renderGallery(this);
+    if (!this.doc || this.closing) return;
+    this.closing = true;
+    const btn = $('#btn-gallery'); btn && btn.classList.add('busy');
+    const step = (fn) => { try { fn(); } catch (e) { console.error(e); } };
+    const within = (p, ms) => Promise.race([Promise.resolve(p).catch((e) => console.error(e)), new Promise((r) => setTimeout(() => r('timeout'), ms))]);
+    try {
+      step(() => { this.active = null; this.ptrs && this.ptrs.clear(); this.gesture = null; });
+      step(() => this.flushStroke());
+      step(() => this.finishTransient());
+      step(() => { if (this.engine.active) { const c = this.engine.end(); if (c) this.history.push(c); } });
+      step(() => this.timeline.stop());
+      step(() => UI.closePopover());
+      step(() => UI.closeAllFloats());
+      clearTimeout(this.saveTimer);
+      const slow = setTimeout(() => toast('Saving…', 4000), 400);
+      // save this drawing: after any save already running, and never block the way back
+      // for more than a few seconds — the save carries on in the background with its own doc
+      const d = this.doc, prev = this.saving && !this.saveStuck() ? this.savePromise : null;
+      this.saving = true; this.saveStarted = performance.now();
+      const job = (this.savePromise = within(prev, 4000).then(() => this.doSave(d)));
+      const r = await within(job, 6000);
+      clearTimeout(slow);
+      if (r === 'timeout') { toast('Still saving in the background…', 3000); job.then(() => { if (!this.doc) UI.renderGallery(this); }); }
+      await within(this.tlapse.detach(), 3000);
+    } finally {
+      step(() => { this.doc = null; this.dropCaches(); });
+      $('#studio').hidden = true; $('#gallery').hidden = false;
+      step(() => UI.renderGallery(this));
+      btn && btn.classList.remove('busy');
+      this.closing = false;
+    }
   }
 
   changed(kind) {
@@ -249,10 +275,16 @@ class App {
 
   async saveNow(force) {
     if (!this.doc || (!this.dirtySave && !force)) return;
-    if (this.engine.active || this.saving) return;
-    this.saving = true;
+    if (this.engine.active || (this.saving && !this.saveStuck())) return this.savePromise;
+    this.saving = true; this.saveStarted = performance.now();
+    return (this.savePromise = this.doSave(this.doc));
+  }
+  // a save that has run for 20 s is treated as hung (iOS storage can stall) so it can't block later saves
+  saveStuck() { return performance.now() - (this.saveStarted || 0) > 20000; }
+  async doSave(d) {
+    const seq = (this.saveSeq = (this.saveSeq || 0) + 1);
     try {
-      const d = this.doc;
+      if (!d) return;
       await this.tlapse.flush();
       const data = await d.serialize();
       const s = Math.min(1, 420 / Math.max(d.width, d.mode === 'webtoon' ? d.width * 1.4 : d.height));
@@ -263,7 +295,7 @@ class App {
     } catch (e) {
       console.error(e);
       toast('Could not save: ' + (e.message || e));
-    } finally { this.saving = false; }
+    } finally { if (seq === this.saveSeq) this.saving = false; }
   }
 
   maxRaster() { return Math.max(2, Math.floor((this.settings.memoryMB * 1e6) / this.doc.pixelBytes) - 5); }

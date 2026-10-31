@@ -489,3 +489,5 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .lib3d-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 4px 0 10px; }
 .lib3d-item { padding: 11px 12px; border-radius: 12px; background: var(--fill-1); text-align: left; font-size: 14px; }
 .lib3d-item.on { background: var(--accent); color: #fff; }
+
+#btn-gallery.busy { opacity: 0.5; pointer-events: none; }
