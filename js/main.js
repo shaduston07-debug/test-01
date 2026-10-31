@@ -77,6 +77,16 @@ class App {
     this.dirtySave = false;
   }
 
+  // undo any page shift / stale size so pen input and the drawn line line up again
+  resync() {
+    const se = document.scrollingElement || document.documentElement;
+    if (window.scrollX || window.scrollY || se.scrollTop || se.scrollLeft || document.body.scrollTop) {
+      window.scrollTo(0, 0); se.scrollTop = 0; se.scrollLeft = 0; document.body.scrollTop = 0;
+    }
+    const st = $('#studio'); if (st) { st.scrollTop = 0; st.scrollLeft = 0; }
+    if (this.doc) { this.resize(); this.requestRender('view'); }
+  }
+
   // ───────── boot ─────────
   async init() {
     this.applySettings();
@@ -96,7 +106,16 @@ class App {
     Toon.loadSavedFonts();
     setTimeout(() => warmUp(), 1500);
     store.requestPersistence();
-    document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveNow(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveNow(); else this.resync(); });
+    // iPadOS can leave the whole web view shifted after the on-screen keyboard closes (or after
+    // Split View / rotation / returning to the app); then the line no longer lands under the pen.
+    // Put the page back and re-measure the canvas whenever that can happen.
+    const later = () => { clearTimeout(this.resyncT); this.resyncT = setTimeout(() => this.resync(), 60); };
+    document.addEventListener('focusout', later);
+    window.addEventListener('pageshow', later);
+    window.addEventListener('orientationchange', later);
+    window.addEventListener('focus', later);
+    if (window.visualViewport) { visualViewport.addEventListener('resize', later); visualViewport.addEventListener('scroll', later); }
     window.addEventListener('pagehide', () => this.saveNow());
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
     UI.renderGallery(this);
@@ -195,6 +214,7 @@ class App {
     this.setTool(this.tool);
     this.timeline.mount(doc.mode === 'animate');
     this.tlapse.attach(doc);
+    this.resync();
     this.reference.restore();
     this.reference.changed();
     this.updateSliders();
@@ -334,7 +354,8 @@ class App {
     this.dpr = dpr;
     const r = this.canvas.getBoundingClientRect();
     this.vw = r.width || innerWidth; this.vh = r.height || innerHeight;
-    this.canvas.width = Math.round(this.vw * dpr); this.canvas.height = Math.round(this.vh * dpr);
+    const W = Math.round(this.vw * dpr), H = Math.round(this.vh * dpr);
+    if (this.canvas.width !== W || this.canvas.height !== H) { this.canvas.width = W; this.canvas.height = H; }
     this.requestRender('view');
   }
 
