@@ -1759,6 +1759,31 @@ function moveDialog(app, m) {
   });
 }
 
+// Some layer images couldn't be read (iPad storage bug in earlier versions). Put the newest picture
+// we still have (the last time-lapse frame, else the gallery thumbnail) on a Multiply layer on top so
+// the work isn't lost.
+async function recoverInto(doc, m) {
+  const tryImg = async (blob) => { if (!blob) return null; const u = URL.createObjectURL(blob); try { return await loadImage(u); } catch { return null; } finally { setTimeout(() => URL.revokeObjectURL(u), 1000); } };
+  let img = null, from = '';
+  const tl = doc.timelapse;
+  if (tl && tl.count) {
+    for (let n = tl.count - 1; n >= Math.max(0, tl.count - 6) && !img; n--) {
+      const rec = await store.getTimelapse(doc.id + ':' + Math.floor(n / 40)).catch(() => null);
+      img = await tryImg(rec && rec.frames[n % 40]);
+    }
+    if (img) from = 'time-lapse';
+  }
+  if (!img && m.thumb) { img = await tryImg(m.thumb); if (img) from = 'gallery preview'; }
+  const names = doc.unreadable.join(', ');
+  if (!img) return `Couldn’t read: ${names}. Those layers open empty.`;
+  const l = new Layer(doc.width, doc.height, { name: `Recovered (${from})`, blend: 'multiply' });
+  const x = l.canvas.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(img, 0, 0, doc.width, doc.height);
+  touch(l.canvas);
+  doc.layers.push(l);
+  const ix = doc.items.indexOf(l); if (ix >= 0) doc.active = ix;
+  return `Couldn’t read: ${names}. The last picture from the ${from} was added as the layer “Recovered” (Multiply) so you can keep working or trace over it.`;
+}
+
 async function openSaved(app, m) {
   toast('Opening…', 6000);
   try {
@@ -1768,8 +1793,10 @@ async function openSaved(app, m) {
     if (!data) { toast('Document not found'); return; }
     const doc = await Doc.deserialize(data);
     doc.folder = m.folder || null;
+    const lost = doc.unreadable && doc.unreadable.length ? await recoverInto(doc, m) : null;
     await app.openDoc(doc);
     $('#toast').hidden = true;
+    if (lost) { app.dirtySave = true; toast(lost, 9000); }
   } catch (e) { console.error(e); toast('Could not open: ' + e.message); }
 }
 

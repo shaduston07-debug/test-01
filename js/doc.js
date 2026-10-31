@@ -417,16 +417,22 @@ export class Doc {
       if (l.type === '3d') {
         l.scene3d = lo.scene3d;
         l.models = new Map();
-        for (const m of lo.models || []) l.models.set(m.id, { ...m, blob: await asBlob(m.blob) });
+        for (const m of lo.models || []) { const blob = await asBlob(m.blob); l.models.set(m.id, { ...m, blob: blob ? new Blob([await blob.arrayBuffer().catch(() => new ArrayBuffer(0))], { type: blob.type }) : blob }); }
       }
-      if ((l.type === 'raster' || l.type === '3d') && lo.png) { l.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(lo.png)), 0, 0); seedBlob(l.canvas, lo.png); }
+      if ((l.type === 'raster' || l.type === '3d') && lo.png) {
+        const img = await readImage(lo.png);
+        if (img) { l.canvas.getContext('2d').drawImage(img.canvas, 0, 0); seedBlob(l.canvas, img.blob); } else (d.unreadable ||= []).push(l.name);
+      }
       d.layers.push(l);
     }
     for (const to of o.tracks || []) {
       const t = new Track(to);
       for (const co of to.cels) {
         const cel = d.addCel(t, co.start, co.dur);
-        if (co.png) { cel.canvas.getContext('2d').drawImage(await blobToCanvas(await asBlob(co.png)), 0, 0); seedBlob(cel.canvas, co.png); }
+        if (co.png) {
+          const img = await readImage(co.png);
+          if (img) { cel.canvas.getContext('2d').drawImage(img.canvas, 0, 0); seedBlob(cel.canvas, img.blob); } else (d.unreadable ||= []).push(t.name + ' frame ' + (co.start + 1));
+        }
       }
       d.tracks.push(t);
     }
@@ -463,7 +469,14 @@ export class Doc {
   }
 }
 
-async function asBlob(x) { return x instanceof Blob ? x : dataURLToBlob(x); }
+async function asBlob(x) { return x instanceof Blob ? x : x && typeof x === 'object' && x.bytes ? new Blob([x.bytes], { type: x.type || 'image/png' }) : dataURLToBlob(x); }
+// Decode a stored layer image. A Blob that can't be read (WebKit storage bug) is retried as a fresh
+// copy; if that fails too the caller gets null and the rest of the drawing still opens.
+async function readImage(x) {
+  const b = await asBlob(x);
+  try { return { canvas: await blobToCanvas(b), blob: b }; } catch { /* retry below */ }
+  try { const fresh = new Blob([await b.arrayBuffer()], { type: b.type || 'image/png' }); return { canvas: await blobToCanvas(fresh), blob: fresh }; } catch { return null; }
+}
 
 // ───────── speech balloons ─────────
 // Fonts that ship with iPadOS (with fallbacks elsewhere). 'custom:<family>' = an imported font.

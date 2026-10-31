@@ -35,13 +35,18 @@ export async function exportBackup({ timelapse = false, onProgress } = {}) {
   }
   for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:')) data.prefs[k] = localStorage.getItem(k); }
   zip.file('backup.json', JSON.stringify(data));
-  for (const [p, b] of files) zip.file(p, b, { compression: 'STORE' }); // images are already compressed
+  // read each image now: a Blob broken by the old iPad storage bug must not fail the whole backup
+  let unreadable = 0;
+  for (const [p, b] of files) {
+    const v = b instanceof Blob ? await b.arrayBuffer().catch(() => { unreadable++; return new ArrayBuffer(0); }) : b;
+    zip.file(p, v, { compression: 'STORE' }); // images are already compressed
+  }
   onProgress && onProgress('Packing…');
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
   const n = (data.stores.meta || []).length;
   const d = new Date(), stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   await download(blob, `Inkwell backup ${stamp}.inkwellbackup`);
-  return { canvases: n, bytes: blob.size };
+  return { canvases: n, bytes: blob.size, unreadable };
 }
 
 export async function importBackup(file, { onProgress } = {}) {
