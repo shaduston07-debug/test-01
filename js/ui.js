@@ -129,10 +129,26 @@ export function vslider(app, el, kind) {
     if (kind === 'size') app.setSize(Math.max(1, 1 + v * v * (b.maxSize - 1)));
     else app.setOpacity(Math.max(0.01, v));
   };
+  // save points of the current brush, drawn as marks on the size slider (same curve as the knob)
+  const marks = kind === 'size' ? h('div', { class: 'vs-marks' }) : null;
+  if (marks) el.insertBefore(marks, knob);
+  let marksKey = '';
+  const pointVals = () => {
+    const b = app.brushFor(app.paintToolName());
+    return (store.prefs.get('brushPoints', {})[app.sizeKey()] || []).map((p) => ({ size: p.size, v: Math.sqrt(Math.max(0, p.size - 1) / Math.max(1, b.maxSize - 1)) }));
+  };
+  const drawMarks = () => {
+    if (!marks) return;
+    const pts = pointVals(), key = app.sizeKey() + ':' + pts.map((p) => p.size).join(',');
+    if (key === marksKey) return;
+    marksKey = key; marks.innerHTML = '';
+    for (const p of pts) { const v = clamp(p.v, 0, 1); marks.append(h('i', { style: { bottom: `calc(${v * 100}% - ${v * 14}px)` } })); }
+  };
   const sync = () => {
     const v = clamp(get(), 0, 1);
     knob.style.bottom = `calc(${v * 100}% - ${v * 14}px)`;
     fill.style.height = v * 100 + '%';
+    drawMarks();
   };
   const show = () => {
     const r = el.getBoundingClientRect();
@@ -150,10 +166,16 @@ export function vslider(app, el, kind) {
     bubble.style.top = r.top + r.height * (1 - clamp(get(), 0, 1)) - 30 + 'px';
   };
   let active = false;
+  let snapped = null;
   const onPos = (e) => {
     const r = el.getBoundingClientRect();
-    set(clamp(1 - (e.clientY - r.top) / r.height, 0, 1));
+    const v = clamp(1 - (e.clientY - r.top) / r.height, 0, 1);
+    // snap onto a save point's mark when the finger is within ~7 px of it
+    const fromBottom = r.bottom - e.clientY;
+    snapped = marks ? pointVals().find((p) => Math.abs(clamp(p.v, 0, 1) * (r.height - 14) - fromBottom) < 7) : null;
+    if (snapped) app.setSize(snapped.size); else set(v);
     sync(); show();
+    if (snapped) bubble.append(h('small', { class: 'vs-snap' }, 'Save point'));
   };
   el.addEventListener('pointerdown', (e) => { e.preventDefault(); active = true; el.setPointerCapture(e.pointerId); onPos(e); });
   el.addEventListener('pointermove', (e) => { if (active) onPos(e); });
@@ -948,7 +970,7 @@ export function openPoints(app, anchor) {
       const btn = h('button', { class: 'point' + (p.size === cur.size && p.opacity === cur.opacity ? ' on' : '') },
         h('i', { style: { width: dot + 'px', height: dot + 'px', opacity: Math.max(0.15, p.opacity) } }), h('span', {}, label(p)));
       let t = null;
-      btn.addEventListener('pointerdown', () => { t = setTimeout(async () => { t = null; if (await confirmDialog(`Delete the save point ${label(p)}?`, 'Delete', true)) { list.splice(i, 1); all[k] = list; store.prefs.set('brushPoints', all); render(); } }, 550); });
+      btn.addEventListener('pointerdown', () => { t = setTimeout(async () => { t = null; if (await confirmDialog(`Delete the save point ${label(p)}?`, 'Delete', true)) { list.splice(i, 1); all[k] = list; store.prefs.set('brushPoints', all); app.updateSliders(); render(); } }, 550); });
       btn.addEventListener('pointerup', () => { if (!t) return; clearTimeout(t); t = null; app.setSize(p.size); app.setOpacity(p.opacity); app.updateSliders(); app.showHud(label(p)); render(); });
       btn.addEventListener('pointerleave', () => { if (t) { clearTimeout(t); t = null; } });
       grid.append(btn);
@@ -956,7 +978,7 @@ export function openPoints(app, anchor) {
     if (!list.length) grid.append(h('p', { class: 'hint' }, 'No save points for this brush yet.'));
     const exists = list.some((p) => p.size === cur.size && p.opacity === cur.opacity);
     body.append(grid, h('button', { class: 'pill primary point-add', disabled: exists || list.length >= 16, onclick: () => {
-      list.push(cur); list.sort((a, c) => a.size - c.size || a.opacity - c.opacity); all[k] = list; store.prefs.set('brushPoints', all); render();
+      list.push(cur); list.sort((a, c) => a.size - c.size || a.opacity - c.opacity); all[k] = list; store.prefs.set('brushPoints', all); app.updateSliders(); render();
     } }, exists ? 'Current size is saved' : `＋ Save current · ${label(cur)}`));
   };
   render();

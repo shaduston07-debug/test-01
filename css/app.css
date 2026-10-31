@@ -467,3 +467,8 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .point-add { width: 100%; margin-top: 10px; }
 .point-add:disabled { opacity: 0.5; }
 #btn-points svg { width: 20px; height: 20px; }
+
+/* save-point marks on the size slider */
+.vs-marks { position: absolute; inset: 0; pointer-events: none; }
+.vs-marks i { position: absolute; left: 0; right: 0; height: 2px; transform: translateY(50%); background: linear-gradient(90deg, #fff 0 7px, transparent 7px calc(100% - 7px), #fff calc(100% - 7px)); opacity: 0.85; }
+#slider-bubble .vs-snap { display: block; font-size: 11px; opacity: 0.75; margin-top: 2px; }
