@@ -821,7 +821,11 @@ class App {
   // Frames that only need 'active' / 'cursor' repaint just the changed part of the screen.
   requestRender(kind) {
     if (kind !== 'view' && kind !== 'active' && kind !== 'cursor') this.contentVer++;
-    if (kind === 'active' || kind === 'cursor') { if (this.pendingPartial !== false) this.pendingPartial = true; }
+    // a partial repaint is only safe for the brush engine's own stroke area (or the cursor);
+    // any other 'active' change (3D layer, text, transform, fill…) repaints the whole frame
+    const en = this.engine, f = en && en.frame;
+    const strokeArea = en && (en.active || (f && f.x1 > f.x0 && f.y1 > f.y0));
+    if (kind === 'cursor' || (kind === 'active' && strokeArea)) { if (this.pendingPartial !== false) this.pendingPartial = true; }
     else this.pendingPartial = false;
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => { this.raf = 0; this.renderFrame(); });

@@ -3,14 +3,15 @@
 // move / rotate / scale, per-joint posing, lighting and outlines. The scene is rendered with
 // WebGL into the layer's canvas, so it composites like any other layer (and can be clipped
 // to or rasterized). three.js is loaded only when a 3D layer is first edited.
-import { h, toast, dialog, field, switchRow, uid, clamp, pickFile, makeCanvas, canvasToBlob } from './util.js';
+import { h, toast, dialog, field, switchRow, seg, uid, clamp, pickFile, makeCanvas, canvasToBlob } from './util.js';
 import { Layer } from './doc.js';
 import { touch } from './history.js';
 import { insertLayer, structCmd } from './layers.js';
+import * as M from './models3d.js';
 
 let T = null;
 async function three() {
-  if (!T) T = await import('../vendor/three.bundle.js');
+  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); }
   return T;
 }
 
@@ -21,12 +22,23 @@ export const defaultScene = () => ({
   outline: true, outlineWidth: 0.008,
   objects: [],
 });
-const figureObject = (x = 0) => ({ id: uid(), kind: 'figure', name: 'Drawing figure', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#d8d2c8' });
+// drawing figures: rig 2 = the Clip-Studio-style female / male figure with finger joints
+// (older documents keep their original simple figure)
+const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 2, name: sex === 'male' ? 'Drawing figure (male)' : 'Drawing figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#c9c6c1', outfit: 'none',
+  body: sex === 'male' ? { sex: 'male', height: 1.75, heads: 7.5, build: 0.55 } : { sex: 'female', height: 1.62, heads: 7.2, build: 0.4 } });
+// built-in library models (generated, no download)
+export const LIBRARY = [
+  ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour']]],
+  ['Creatures', [['dragon', 'Dragon (posable)']]],
+  ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
+  ['Places', [['castle', 'Castle'], ['street', 'City street'], ['district', 'City district']]],
+];
+const procObject = (gen, x = 0) => ({ id: uid(), kind: 'proc', gen, name: LIBRARY.flatMap((c) => c[1]).find((i) => i[0] === gen)?.[1] || gen, pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: { dragon: '#7f8a84', car: '#3d6fd6', sports: '#e8b21a', moto: '#c72c2c' }[gen] || '#cfcac2' });
 
 export function create3DLayer(doc) {
   const l = new Layer(doc.width, doc.height, { type: '3d', name: '3D' });
   l.scene3d = defaultScene();
-  l.scene3d.objects.push(figureObject());
+  l.scene3d.objects.push(figureObject(0, 'female'));
   return l;
 }
 
@@ -133,7 +145,7 @@ async function runtimeFor(layer) {
   await three();
   let rt = runtimes.get(layer);
   if (rt) return rt;
-  rt = { scene: new T.Scene(), camera: new T.PerspectiveCamera(35, 1, 0.02, 200), objs: new Map(), outlineW: { value: 0.008 } };
+  rt = { scene: new T.Scene(), camera: new T.PerspectiveCamera(35, 1, 0.02, 2000), objs: new Map(), outlineW: { value: 0.008 } };
   rt.hemi = new T.HemisphereLight(0xffffff, 0x8a8478, 1);
   rt.sun = new T.DirectionalLight(0xffffff, 2.4);
   rt.scene.add(rt.hemi, rt.sun);
@@ -143,9 +155,19 @@ async function runtimeFor(layer) {
 }
 
 async function buildObject(layer, rt, o) {
-  let node, joints = null, figMat = null;
-  if (o.kind === 'figure') {
+  let node, joints = null, figMat = null, rig = null, fig = null;
+  if (o.kind === 'figure' && o.rig === 2) {
+    fig = M.buildHuman(o.body, o.color); if (o.outfit && o.outfit !== 'none') M.buildArmor(fig, o.outfit);
+    node = fig.root; joints = fig.joints; figMat = fig.mat; rig = 'human';
+  } else if (o.kind === 'figure') {
     const f = buildFigure(o.color); node = f.root; joints = f.joints; figMat = f.mat;
+  } else if (o.kind === 'proc') {
+    const g = o.gen;
+    const built = g === 'dragon' ? M.buildDragon(o.color) : g === 'car' ? M.buildCar('sedan', o.color) : g === 'sports' ? M.buildCar('sports', o.color) : g === 'moto' ? M.buildMotorcycle(o.color)
+      : g === 'castle' ? M.buildCastle() : g === 'street' ? M.buildCity('street') : g === 'district' ? M.buildCity('district') : null;
+    if (!built) return;
+    node = built.root;
+    if (g === 'dragon') { joints = built.joints; figMat = built.mat; rig = 'dragon'; fig = built; }
   } else if (o.kind === 'prim') {
     const geo = { cube: () => new T.BoxGeometry(0.5, 0.5, 0.5), sphere: () => new T.SphereGeometry(0.3, 40, 28), cylinder: () => new T.CylinderGeometry(0.25, 0.25, 0.6, 40), cone: () => new T.ConeGeometry(0.3, 0.6, 40), floor: () => new T.PlaneGeometry(6, 6) }[o.prim]();
     const m = new T.Mesh(geo, new T.MeshStandardMaterial({ color: o.color || '#cfcac2', roughness: 0.7, side: o.prim === 'floor' ? T.DoubleSide : T.FrontSide }));
@@ -162,7 +184,7 @@ async function buildObject(layer, rt, o) {
   if ((o.kind !== 'prim' || o.prim !== 'floor') && !heavy) addOutlines(node, rt.outlineW);
   if (heavy) toast(`Large model (${Math.round(node.userData.tris / 1000)}k triangles): outlines are off for it to keep things smooth`, 3500);
   rt.scene.add(node);
-  const entry = { node, joints, figMat, data: o };
+  const entry = { node, joints, figMat, data: o, rig, fig };
   rt.objs.set(o.id, entry);
   syncObject(entry);
 }
@@ -172,7 +194,9 @@ function syncObject(e) {
   e.node.position.set(...o.pos);
   e.node.quaternion.set(...o.quat);
   e.node.scale.setScalar(o.scale);
-  if (e.joints) applyPose({ joints: e.joints }, o);
+  if (e.rig === 'human') M.applyPose(e.joints, o.pose || {}, M.HUMAN_REST, e.fig.H);
+  else if (e.rig === 'dragon') M.applyPose(e.joints, o.pose || {}, M.DRAGON_REST, 1);
+  else if (e.joints) applyPose({ joints: e.joints }, o);
 }
 
 // Big textures cost memory and upload time on every layer; 2048 px is plenty for drawing.
@@ -338,7 +362,7 @@ function renderNow(layer, doc, rt, scale = 1, live = false) {
 // ───────── tool ─────────
 export function tool3d(app) {
   const t = {
-    mode: 'orbit', sel: null, joint: null, busy: false,
+    mode: 'orbit', sel: null, joint: null, busy: false, ik: true,
     layer() { const it = app.doc && app.doc.activeItem; return it && it.type === '3d' ? it : null; },
     async enter() {
       const L = this.layer();
@@ -434,6 +458,12 @@ export function tool3d(app) {
           o.quat = qd.multiply(e.node.quaternion).toArray();
         } else if (this.mode === 'scale') {
           o.scale = clamp(o.scale * Math.exp(-dy * 0.005), 0.05, 50);
+        } else if (this.mode === 'pose' && this.joint && e.joints && e.rig === 'human' && this.ik && M.IK_CHAINS[this.joint]) {
+          // drag a hand / foot: the arm / leg follows (two-bone IK), like Clip Studio
+          const j = e.joints[this.joint], at = j.getWorldPosition(new T.Vector3());
+          const k = unit(cam.position.distanceTo(at));
+          const target = at.add(right.clone().multiplyScalar(dx * k)).add(up.clone().multiplyScalar(-dy * k));
+          for (const n of M.solveIK(e.joints, this.joint, target)) o.pose[n] = e.joints[n].quaternion.toArray();
         } else if (this.mode === 'pose' && this.joint && e.joints) {
           const j = e.joints[this.joint];
           const pq = j.parent.getWorldQuaternion(new T.Quaternion());
@@ -458,16 +488,178 @@ export function tool3d(app) {
       const cb = (label, fn, on, cls = '') => h('button', { class: 'cb-btn' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), onclick: fn }, label);
       const sep = () => h('span', { class: 'cb-sep' });
       const setMode = (m) => { this.mode = m; if (m !== 'pose') { this.joint = null; this.highlight(null); this.redraw(1); } app.updateCtxBar(); };
+      const e = this.selEntry();
       const items = [
-        ...[['orbit', 'Orbit'], ['pan', 'Pan'], ['zoom', 'Zoom']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), sep(),
+        ...[['orbit', 'Orbit'], ['pan', 'Pan'], ['zoom', 'Zoom']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), cb('Camera…', () => this.cameraMenu()), sep(),
         ...[['move', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale'], ['pose', 'Pose']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), sep(),
-        cb('＋ Figure', () => this.addFigure()), cb('＋ Model…', () => this.importModel()), cb('＋ Shape', () => this.shapeMenu()),
+        cb('＋ Figure', () => this.figureMenu()), cb('＋ Library…', () => this.libraryMenu()), cb('＋ Model…', () => this.importModel()), cb('＋ Shape', () => this.shapeMenu()),
         cb('Light…', () => this.lightDialog()),
       ];
-      if (this.mode === 'pose') items.push(sep(), h('span', { class: 'three-hint' }, this.joint ? `Joint: ${this.joint} · drag to bend` : 'Tap a body part, then drag'), cb('Poses…', () => this.poseMenu()));
+      if (this.mode === 'pose') {
+        const ikJoint = this.joint && M.IK_CHAINS[this.joint] && e && e.rig === 'human';
+        items.push(sep(), h('span', { class: 'three-hint' }, this.joint ? (ikJoint && this.ik ? `${this.jointLabel(this.joint)} · drag to move the limb` : `${this.jointLabel(this.joint)} · drag to bend`) : 'Tap a body part, then drag'));
+        if (e && e.rig === 'human') items.push(cb('IK', () => { this.ik = !this.ik; app.updateCtxBar(); }, this.ik));
+        items.push(cb('Poses…', () => this.poseMenu()));
+        if (e && e.rig === 'human') items.push(cb('Hands…', () => this.handMenu()), cb('Mirror', () => this.mirrorPose()), cb('Body…', () => this.bodyDialog()), cb('BVH…', () => this.bvhMenu()));
+        if (e && e.joints) items.push(cb('Reset pose', () => this.resetPose()));
+      }
       if (this.sel) items.push(sep(), cb('Delete object', () => this.deleteSel()));
       items.push(sep(), cb('Reset camera', () => { const b = this.snapshot(); L.scene3d.camera = defaultScene().camera; this.commit('Reset camera', b); this.redraw(1); }), cb('Rasterize', () => this.rasterize(), false, 'primary'));
       return items;
+    },
+    selEntry() { const L = this.layer(), rt = L && runtimes.get(L); return rt && this.sel ? rt.objs.get(this.sel) : null; },
+    jointLabel(j) {
+      const side = /L\d?$/.test(j) ? 'left ' : /R\d?$/.test(j) ? 'right ' : '';
+      const base = j.replace(/^d_/, '').replace(/(L|R)(\d?)$/, '$2').replace(/(\d)$/, ' $1');
+      return side + base;
+    },
+    // the figure / dragon to pose: the selection, else the first posable object
+    poseTarget() {
+      const L = this.layer(), rt = L && runtimes.get(L); if (!rt) return null;
+      const e = this.selEntry();
+      if (e && e.joints) return e;
+      for (const x of rt.objs.values()) if (x.joints) { this.sel = x.data.id; return x; }
+      return null;
+    },
+    figureMenu() {
+      dialog({ title: 'Add drawing figure', body: h('p', { class: 'hint' }, 'Clip Studio-style mannequins with finger joints. Pose: tap a part, drag (hands / feet move the whole arm / leg). Body… changes height, head ratio, build and armour.'), actions: [
+        { label: 'Female', onClick: () => this.addFigure('female') }, { label: 'Male', onClick: () => this.addFigure('male') }, { label: 'Cancel', primary: true },
+      ] });
+    },
+    libraryMenu() {
+      const body = h('div', { class: 'lib3d' });
+      let dlg = null;
+      for (const [cat, items] of LIBRARY) {
+        body.append(h('div', { class: 'menu-section' }, cat));
+        const grid = h('div', { class: 'lib3d-grid' });
+        for (const [gen, label] of items) grid.append(h('button', { class: 'lib3d-item', onclick: () => { dlg && dlg.close(); this.addLibrary(gen); } }, label));
+        body.append(grid);
+      }
+      dlg = dialog({ title: '3D model library', wide: true, body, actions: [{ label: 'Close', primary: true }] });
+    },
+    async addLibrary(gen) {
+      const L = this.layer(), n = L.scene3d.objects.length;
+      if (gen === 'figure-female' || gen === 'figure-male') return this.addFigure(gen === 'figure-male' ? 'male' : 'female');
+      if (gen === 'knight' || gen === 'scifi') { const o = figureObject(n * 0.7, gen === 'knight' ? 'male' : 'female'); o.outfit = gen === 'knight' ? 'medieval' : 'scifi'; o.name = gen === 'knight' ? 'Knight' : 'Sci-fi armour'; return this.addObject(o, 'Add ' + o.name); }
+      const big = ['castle', 'street', 'district'].includes(gen);
+      const o = procObject(gen, big ? 0 : n * 1.2);
+      if (gen === 'dragon') o.pos = [n ? 3 : 0, 0, n ? -3 : 0];
+      await this.addObject(o, 'Add ' + o.name);
+      this.frameObject(o.id, gen);
+    },
+    // fit the camera to an object (castles, cities and dragons are much bigger than a figure)
+    frameObject(id, gen) {
+      const L = this.layer(), rt = runtimes.get(L), e = rt && rt.objs.get(id); if (!e) return;
+      const b = this.snapshot(), s = L.scene3d;
+      const box = new T.Box3().setFromObject(e.node), c = box.getCenter(new T.Vector3()), size = box.getSize(new T.Vector3());
+      if (gen === 'street') { s.camera = { pos: [2, 1.6, -60], target: [0, 4, 0], fov: 40 }; }
+      else if (gen === 'district') { s.camera = { pos: [-110, 70, 150], target: [0, 15, 0], fov: 40 }; }
+      else {
+        const r = size.length() / 2, dist = r / Math.sin((s.camera.fov * Math.PI / 180) / 2) * 0.9;
+        const dir = new T.Vector3(0.55, 0.32, 1).normalize();
+        s.camera = { ...s.camera, target: [c.x, c.y * 0.8, c.z], pos: c.clone().add(dir.multiplyScalar(dist)).toArray() };
+      }
+      this.commit('Frame model', b); this.redraw(1);
+    },
+    cameraMenu() {
+      const L = this.layer(), s = L.scene3d, e = this.poseTarget();
+      const at = e ? e.node.position.clone().add(new T.Vector3(0, (e.rig === 'dragon' ? 1.6 : 0.95) * e.data.scale, 0)) : new T.Vector3(...s.camera.target);
+      const dist = Math.max(1.2, new T.Vector3(...s.camera.pos).distanceTo(new T.Vector3(...s.camera.target)));
+      const set = (dirv, fov, dk = 1, dy = 0) => { const b = this.snapshot(); const d = new T.Vector3(...dirv).normalize().multiplyScalar(dist * dk); s.camera = { pos: at.clone().add(d).toArray(), target: [at.x, at.y + dy, at.z], fov }; this.commit('Camera angle', b); this.redraw(1); };
+      dialog({ title: 'Camera angle', body: h('p', { class: 'hint' }, 'Dynamic angles like PoseManiacs. Aims at the selected figure.'), actions: [
+        { label: 'Front', onClick: () => set([0, 0.05, 1], 35) }, { label: 'Three-quarter', onClick: () => set([0.7, 0.12, 1], 35) }, { label: 'Side', onClick: () => set([1, 0.05, 0], 35) }, { label: 'Back', onClick: () => set([-0.4, 0.1, -1], 35) },
+        { label: 'High angle', onClick: () => set([0.45, 1.3, 1], 40) }, { label: 'Low angle', onClick: () => set([0.4, -0.55, 1], 45, 0.85, 0.3) }, { label: 'Dramatic (wide, low)', onClick: () => set([0.8, -0.35, 0.9], 70, 0.55, 0.25) }, { label: 'Top down', onClick: () => set([0.01, 1, 0.02], 40, 1.2) },
+        { label: 'Cancel', primary: true },
+      ] });
+    },
+    poseMenu() {
+      const e = this.poseTarget();
+      if (!e) { toast('Add a figure or the dragon first'); return; }
+      const b = this.snapshot(), lib = e.rig === 'dragon' ? { Dragon: M.DRAGON_POSES } : e.rig === 'human' ? M.HUMAN_POSES : null;
+      if (!lib) { toast('This older figure has no pose library — add a new figure'); return; }
+      const body = h('div', { class: 'lib3d' });
+      let cur = null;
+      for (const [cat, poses] of Object.entries(lib)) {
+        body.append(h('div', { class: 'menu-section' }, cat));
+        const grid = h('div', { class: 'lib3d-grid' });
+        for (const [name, def] of Object.entries(poses)) {
+          const btn = h('button', { class: 'lib3d-item', onclick: () => {
+            // keep the current hand shapes unless the pose sets its own
+            const keepHands = Object.fromEntries(Object.entries(e.data.pose || {}).filter(([k]) => /^(thumb|index|middle|ring|pinky)[LR]\d$/.test(k)));
+            e.data.pose = { ...keepHands, ...M.poseFromDegrees(def) };
+            syncObject(e); this.redraw(1);
+            if (cur) cur.classList.remove('on'); btn.classList.add('on'); cur = btn;
+          } }, name);
+          grid.append(btn);
+        }
+        body.append(grid);
+      }
+      dialog({ title: (e.rig === 'dragon' ? 'Dragon' : 'Figure') + ' poses', wide: true, body, actions: [{ label: 'Done', primary: true }], onClose: () => this.commit('Pose preset', b) });
+    },
+    handMenu() {
+      const e = this.poseTarget(); if (!e || e.rig !== 'human') return;
+      const b = this.snapshot();
+      let side = 'both';
+      const sideSeg = h('div', { class: 'seg' }, ...[['both', 'Both'], ['L', 'Left'], ['R', 'Right']].map(([v, l]) => { const bt = h('button', { class: v === side ? 'on' : '', onclick: () => { side = v; for (const x of sideSeg.children) x.classList.remove('on'); bt.classList.add('on'); } }, l); return bt; }));
+      const grid = h('div', { class: 'lib3d-grid' });
+      for (const name of Object.keys(M.HAND_SHAPES)) grid.append(h('button', { class: 'lib3d-item', onclick: () => {
+        const hp = M.handPose(name, side), q = M.poseFromDegrees(hp);
+        const pose = { ...e.data.pose };
+        for (const k of Object.keys(pose)) if (/^(thumb|index|middle|ring|pinky)[LR]\d$/.test(k) && (side === 'both' || k.includes(side))) delete pose[k];
+        e.data.pose = name === 'Relaxed' ? pose : { ...pose, ...q };
+        syncObject(e); this.redraw(1);
+      } }, name));
+      dialog({ title: 'Hands', body: h('div', {}, sideSeg, grid, h('p', { class: 'hint' }, 'Fingers can also be posed one joint at a time: zoom in and tap a finger in Pose mode.')), actions: [{ label: 'Done', primary: true }], onClose: () => this.commit('Hand shape', b) });
+    },
+    mirrorPose() { const e = this.poseTarget(); if (!e || e.rig !== 'human') return; const b = this.snapshot(); e.data.pose = M.mirrorStored(e.data.pose || {}); syncObject(e); this.commit('Mirror pose', b); this.redraw(1); },
+    resetPose() { const e = this.poseTarget(); if (!e) return; const b = this.snapshot(); e.data.pose = {}; syncObject(e); this.commit('Reset pose', b); this.redraw(1); },
+    async rebuild(e) {
+      const L = this.layer(), rt = runtimes.get(L);
+      rt.scene.remove(e.node);
+      e.node.traverse((m) => { if (m.isMesh && m.geometry && !m.userData.outline) m.geometry.dispose(); });
+      await buildObject(L, rt, e.data);
+      this.highlight(null);
+    },
+    bodyDialog() {
+      const e = this.poseTarget(); if (!e || e.rig !== 'human') return;
+      const o = e.data, b = this.snapshot(), body = { ...o.body };
+      let t = null;
+      const apply = () => { clearTimeout(t); t = setTimeout(async () => { o.body = { ...body }; await this.rebuild(this.selEntry() || e); this.redraw(1); }, 120); };
+      const color = h('input', { type: 'color', value: o.color || '#c9c6c1' });
+      color.oninput = () => { o.color = color.value; apply(); };
+      dialog({ title: 'Body', body: h('div', {},
+        h('div', { class: 'stack' }, h('label', {}, 'Body'), seg([['female', 'Female'], ['male', 'Male']], body.sex, (v) => { body.sex = v; if (v === 'male' && body.height < 1.68) body.height = 1.75; if (v === 'female' && body.height > 1.7) body.height = 1.62; apply(); })),
+        field('Height', { min: 1.2, max: 2.1, step: 0.01, value: body.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => { body.height = v; apply(); } }),
+        field('Head-to-body ratio', { min: 5, max: 9, step: 0.1, value: body.heads, fmt: (v) => v.toFixed(1) + ' heads', onInput: (v) => { body.heads = v; apply(); } }),
+        field('Build', { min: 0, max: 1, step: 0.05, value: body.build, fmt: (v) => (v < 0.3 ? 'slim' : v < 0.7 ? 'average' : 'strong'), onInput: (v) => { body.build = v; apply(); } }),
+        h('div', { class: 'stack' }, h('label', {}, 'Armour'), seg([['none', 'None'], ['medieval', 'Medieval'], ['scifi', 'Sci-fi']], o.outfit || 'none', (v) => { o.outfit = v; apply(); })),
+        h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), color)),
+        actions: [{ label: 'Done', primary: true }], onClose: () => { clearTimeout(t); o.body = { ...body }; this.rebuild(this.selEntry() || e).then(() => { this.commit('Body', b); this.redraw(1); }); } });
+    },
+    bvhMenu() {
+      const e = this.poseTarget(); if (!e || e.rig !== 'human') return;
+      dialog({ title: 'BVH poses', body: h('p', { class: 'hint' }, 'BVH is the open pose format Clip Studio Paint imports (File › Import › 3D data), and Mixamo, Blender and most pose libraries export. Multi-frame files become numbered poses to choose from.'), actions: [
+        { label: 'Cancel' },
+        { label: 'Export pose (.bvh)', onClick: async () => { const { download } = await import('./util.js'); download(new Blob([M.exportBVH(e.fig, e.data.pose || {})], { type: 'text/plain' }), (e.data.name || 'pose').replace(/[^\w -]+/g, '') + '.bvh'); } },
+        { label: 'Import BVH…', primary: true, onClick: () => this.importBVH(e) },
+      ] });
+    },
+    async importBVH(e) {
+      const [f] = await pickFile('.bvh,text/plain');
+      if (!f) return;
+      let bvh;
+      try { bvh = M.parseBVH(await f.text()); } catch (err) { toast('Could not read this BVH: ' + err.message, 4000); return; }
+      const info = M.bvhInfo(bvh);
+      if (!info.hasBody) { toast(`Only ${info.mapped} joints matched a human skeleton — this BVH may use unusual joint names`, 5000); if (!info.mapped) return; }
+      const b = this.snapshot();
+      const show = (k) => { try { e.data.pose = M.retargetBVH(bvh, k, e.fig); syncObject(e); this.redraw(this.previewScale()); } catch (err) { toast(err.message, 4000); } };
+      show(0);
+      if (bvh.frames.length === 1) { this.commit('Import BVH pose', b); this.redraw(1); toast(`Pose imported (${info.mapped} joints matched)`); return; }
+      let k = 0;
+      const label = h('span', { class: 'hint' }, `Pose 1 of ${bvh.frames.length}`);
+      const slider = h('input', { type: 'range', min: 0, max: bvh.frames.length - 1, step: 1, value: '0' });
+      slider.oninput = () => { k = +slider.value; label.textContent = `Pose ${k + 1} of ${bvh.frames.length}`; show(k); };
+      dialog({ title: f.name, body: h('div', {}, h('p', { class: 'hint' }, `${bvh.frames.length} poses · ${info.mapped} joints matched. Scrub to pick one.`), slider, label), actions: [{ label: 'Cancel', onClick: () => { const s0 = JSON.parse(b); e.data.pose = s0.objects.find((x) => x.id === e.data.id)?.pose || {}; syncObject(e); this.redraw(1); } }, { label: 'Use this pose', primary: true, onClick: () => { this.commit('Import BVH pose', b); this.redraw(1); } }] });
     },
     async addObject(o, label) {
       const L = this.layer(); const b = this.snapshot();
@@ -475,22 +667,10 @@ export function tool3d(app) {
       const rt = await runtimeFor(L); await buildObject(L, rt, o);
       this.sel = o.id; this.commit(label, b); this.redraw(1); app.updateCtxBar();
     },
-    addFigure() { const n = this.layer().scene3d.objects.filter((o) => o.kind === 'figure').length; this.addObject(figureObject(n * 0.7), 'Add figure'); },
+    addFigure(sex = 'female') { const n = this.layer().scene3d.objects.filter((o) => o.kind === 'figure').length; this.addObject(figureObject(n * 0.7, sex), 'Add figure'); },
     shapeMenu() {
       dialog({ title: 'Add shape', body: '', actions: [
         ...[['cube', 'Cube'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder'], ['cone', 'Cone'], ['floor', 'Floor plane']].map(([k, l]) => ({ label: l, onClick: () => this.addObject({ id: uid(), kind: 'prim', prim: k, name: l, pos: [0.8, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cfcac2' }, 'Add ' + l) })),
-        { label: 'Cancel', primary: true },
-      ] });
-    },
-    poseMenu() {
-      const e = runtimes.get(this.layer()).objs.get(this.sel);
-      if (!e || !e.joints) { toast('Tap a figure first'); return; }
-      dialog({ title: 'Pose presets', body: '', actions: [
-        ...Object.keys(POSES).map((k) => ({ label: k, onClick: () => {
-          const b = this.snapshot();
-          e.data.pose = Object.fromEntries(Object.entries(POSES[k]).map(([j, eu]) => [j, new T.Quaternion().setFromEuler(new T.Euler(...eu)).toArray()]));
-          syncObject(e); this.commit('Pose preset', b); this.redraw(1);
-        } })),
         { label: 'Cancel', primary: true },
       ] });
     },

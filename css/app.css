@@ -483,3 +483,9 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .tint-chip.none { background: var(--fill-1); font-size: 12px; }
 .tint-chip.on { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
 .tint-chip.cur { text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+
+/* 3D library / pose pickers */
+.lib3d { max-height: 62vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.lib3d-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 4px 0 10px; }
+.lib3d-item { padding: 11px 12px; border-radius: 12px; background: var(--fill-1); text-align: left; font-size: 14px; }
+.lib3d-item.on { background: var(--accent); color: #fff; }
