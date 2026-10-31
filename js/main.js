@@ -58,7 +58,8 @@ class App {
     this.symmetry = { mode: 'off', count: 6 };
     this.brushes = [...DEFAULT_BRUSHES, ...IBIS_PRESETS];
     this.penSeen = store.prefs.get('penSeen', false);
-    this.penNoPressure = store.prefs.get('penNoPressure', false);
+    this.penHasPressure = store.prefs.get('penHasPressure', false);
+    this.flatStrokes = 0;
     this.doc = null;
     this.tools = this.makeTools();
     this.timeline = new Timeline(this);
@@ -421,10 +422,12 @@ class App {
     return { x: d.x, y: d.y, sx, sy, pressure, tilt, type: e.pointerType, time: raw && raw.time != null ? raw.time : e.timeStamp };
   }
 
-  // 'pressure' | 'tilt' | 'speed' | 'off'. Auto: real pressure if the pen reports it, else tilt.
+  // 'pressure' | 'tilt' | 'speed' | 'off'. Auto: real pressure once the pen has shown it really
+  // senses pressure; until then (and for pens without a sensor) every brush draws at full
+  // strength — pressure is a bonus, never needed for a brush to look right.
   pressureSource() {
     const s = this.settings.pressureSource || 'auto';
-    return s !== 'auto' ? s : this.penNoPressure ? 'tilt' : 'pressure';
+    return s !== 'auto' ? s : this.penHasPressure ? 'pressure' : 'off';
   }
   // per stroke, note whether the pen's pressure ever changes; two flat strokes = no pressure sensor
   notePenPressure(v) {
@@ -434,13 +437,13 @@ class App {
   endPenStat() {
     const st = this.penStat; this.penStat = null;
     if (!st || st.n < 12) return;
-    if (st.max - st.min < 0.01) {
-      this.flatStrokes = (this.flatStrokes || 0) + 1;
-      if (this.flatStrokes >= 2 && !this.penNoPressure) {
-        this.penNoPressure = true; store.prefs.set('penNoPressure', true);
-        if ((this.settings.pressureSource || 'auto') === 'auto') toast('Your pen doesn’t report pressure — tilt now sets the line width (lean = thicker). Change it in Settings › Pen pressure from', 6000);
-      }
-    } else { this.flatStrokes = 0; if (this.penNoPressure) { this.penNoPressure = false; store.prefs.set('penNoPressure', false); } }
+    if (st.max - st.min >= 0.01) {
+      this.flatStrokes = 0;
+      if (!this.penHasPressure) { this.penHasPressure = true; store.prefs.set('penHasPressure', true); }
+    } else if (++this.flatStrokes >= 3 && this.penHasPressure) {
+      // a different pen without a pressure sensor: back to full strength
+      this.penHasPressure = false; store.prefs.set('penHasPressure', false);
+    }
   }
   // simulated pressure from pen speed: slow = heavy, fast = light (screen px per ms)
   speedPressure(sx, sy, t) {

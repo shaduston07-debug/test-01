@@ -112,7 +112,7 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **Steady ink** (on by default, Actions › Prefs): pens and markers always lay down solid ink — pressure and speed never fade them, a light touch still gives a clean line (30–45% of full width minimum), pressure follows a soft curve and only changes the width gently, and edges stay crisp. Pencils, chalk, airbrushes and paint brushes keep their own pressure behaviour.
 
-**Styluses without pressure** (Apple Pencil USB-C, Logitech Crayon, most other pens): detected automatically after a couple of strokes — tilt then sets the line width (lean = thicker). Settings › Pen pressure from: Auto, Pencil pressure, Tilt, Speed or Off.
+**Pressure is a bonus**: every brush is tuned to look right at full strength. Auto only uses pressure once your pen shows it really senses it (Apple Pencil); pens without a sensor (Apple Pencil USB-C, Logitech Crayon, most other styluses) draw at full strength. Light pressure can thin / lighten a stroke but never make it vanish (≥ 35 % size, ≥ 50 % opacity). Optional extras in Settings › Pen pressure from: Tilt or Speed.
 
 **Brush save points**: the bookmark button under the sliders saves the current size + opacity for each brush; tap a point to jump back to it, hold to delete.
 

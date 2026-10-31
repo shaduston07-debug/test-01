@@ -54,7 +54,7 @@ export class StrokeEngine {
     if (this.grain) {
       this.pattern = this.bctx.createPattern(this.grain, 'repeat');
     }
-    this.bounds = emptyRect(); this.dirty = emptyRect(); this.frame = emptyRect();
+    this.bounds = emptyRect(); this.dirty = emptyRect(); this.frame = emptyRect(); this.vSm = null;
     // end taper: the last stamps are logged so the stroke's end can be re-drawn to a point on lift
     // ibis-style Fade: thickness / opacity ratios at the start and end of every stroke
     // (e.g. 185% = the ink swells into a blob), each over a "duration" of the stroke
@@ -190,7 +190,12 @@ export class StrokeEngine {
     while (pos + this.carry <= len) {
       pos += this.carry;
       const t = pos / len;
-      pt.x = a.x + dx * t; pt.y = a.y + dy * t; pt.p = a.p + (b.p - a.p) * t; pt.t = a.t + (b.t - a.t) * t; pt.v = av + dv * t;
+      pt.x = a.x + dx * t; pt.y = a.y + dy * t; pt.p = a.p + (b.p - a.p) * t; pt.t = a.t + (b.t - a.t) * t;
+      // speed effects change gradually along the line (over ~2 brush widths), so uneven pen
+      // sample timing can never show up as beads or dashes
+      const vRaw = av + dv * t, step = Math.max(0.5, this.carry || 1);
+      this.vSm = this.vSm == null ? vRaw : this.vSm + (vRaw - this.vSm) * Math.min(1, step / (this.size / this.scale * 2 + 6));
+      pt.v = this.vSm;
       this.travelNow = this.travel + pos;
       // stampAt returns the un-jittered size so spacing needn't recompute it
       this.carry = Math.max(0.4 / this.scale, this.stampAt(pt) * Math.max(0.01, this.brush.spacing));
@@ -202,7 +207,8 @@ export class StrokeEngine {
   sizeAt(pt) {
     const b = this.brush;
     const pr = b.pressureCurve ? Math.pow(pt.p, b.pressureCurve) : pt.p;
-    let s = this.size * (1 - b.sizePressure * (1 - pr));
+    // pressure can thin a stroke but never make it vanish (≥ 35 % of the size, ≥ 50 % opacity)
+    let s = this.size * Math.max(0.35, 1 - b.sizePressure * (1 - pr));
     s = Math.max(s, this.size * (b.minSize || 0));
     s *= 1 + (b.tiltSize || 0) * pt.t;
     if (b.speedSize) s *= 1 - b.speedSize * 0.85 * Math.min(1, (pt.v || 0) / 3);
@@ -223,9 +229,9 @@ export class StrokeEngine {
     let size = base;
     if (b.sizeJitter) size *= 1 - b.sizeJitter * Math.random();
     // "opacity" dynamics are converted to per-stamp alpha so their steady state matches
-    const o = (1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - (b.speedOpacity || 0) * 0.85 * Math.min(1, (pt.v || 0) / 3));
+    const o = Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - (b.speedOpacity || 0) * 0.85 * Math.min(1, (pt.v || 0) / 3));
     const ao = o >= 0.999 ? 1 : 1 - Math.pow(1 - clamp(o, 0, 0.999), Math.max(0.02, b.spacing));
-    let alpha = b.flow * (1 - (b.flowPressure || 0) * (1 - pt.p)) * ao;
+    let alpha = b.flow * Math.max(0.3, 1 - (b.flowPressure || 0) * (1 - pt.p)) * ao;
     if (this.fade && (b.fadeStartAlpha ?? 1) !== 1) {
       const k = b.fadeStartAlpha;
       alpha = Math.min(1, alpha * (k + (1 - k) * smooth((this.travelNow ?? this.travel) * this.scale / fadeLen(b.fadeStartLen, this.size))));
