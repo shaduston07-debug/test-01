@@ -27,7 +27,7 @@ const SETTINGS_VERSION = 2;
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 550,
   fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
-  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true,
+  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35,
 };
 
 class App {
@@ -99,6 +99,8 @@ class App {
   }
 
   applySettings() {
+    // undo history may use about a third of the memory budget (≈700 MB on an 8 GB iPad)
+    if (this.history) this.history.maxBytes = Math.max(260e6, (this.settings.memoryMB || 1000) * 1e6 * 0.35);
     document.body.classList.toggle('right-handed', !!this.settings.rightHanded);
     document.body.classList.toggle('solid-ui', !!this.settings.solidUI);
     store.prefs.set('settings', this.settings);
@@ -142,23 +144,31 @@ class App {
     const end = () => { if (stop) { stop(); stop = null; } };
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault(); fn();
-      if (this.settings.holdRepeat !== false) stop = this.repeatSteps(fn, 450);
+      if (this.settings.holdRepeat !== false) stop = this.repeatSteps(fn, this.rapidDelay);
     });
     el.addEventListener('pointerup', end); el.addEventListener('pointerleave', end); el.addEventListener('pointercancel', end);
   }
-  // Procreate-style rapid undo / redo: after `delay` ms, repeat fn, getting faster the longer
-  // it's held (≈7 → 20 steps a second). fn returns false when there's nothing left. Returns stop().
+  // Procreate-style rapid undo / redo: after `delay` ms, repeat fn faster and faster (15 → 120
+  // steps a second, several per frame at full speed). fn returns false when there's nothing
+  // left. Returns stop().
   repeatSteps(fn, delay, onStep) {
-    let t = null, n = 0, alive = true;
-    const step = () => {
+    let alive = true, n = 0, t0 = 0, last = 0, carry = 0, raf = 0;
+    const loop = (now) => {
       if (!alive) return;
-      const ok = fn(); n++; onStep && onStep(n, ok);
-      if (ok === false) return;
-      t = setTimeout(step, Math.max(50, 150 - n * 7));
+      if (!t0) { t0 = last = now; carry = 1; }
+      const rate = Math.min(120, 15 + 70 * (now - t0) / 1000);
+      carry += rate * (now - last) / 1000; last = now;
+      while (carry >= 1) {
+        carry--;
+        const ok = fn(); n++; onStep && onStep(n, ok);
+        if (ok === false) return;
+      }
+      raf = requestAnimationFrame(loop);
     };
-    t = setTimeout(step, delay);
-    return () => { alive = false; clearTimeout(t); return n; };
+    const timer = setTimeout(() => { raf = requestAnimationFrame(loop); }, delay);
+    return () => { alive = false; clearTimeout(timer); cancelAnimationFrame(raf); return n; };
   }
+  get rapidDelay() { return Math.round((this.settings.rapidUndoDelay ?? 0.35) * 1000); }
 
   // ───────── documents ─────────
   async openDoc(doc) {
@@ -556,7 +566,7 @@ class App {
         if (!can) return false;
         redo ? this.redo() : this.undo();
         return true;
-      }, 500, (n, ok) => this.showHud(ok === false ? `Nothing more to ${label.toLowerCase()}` : `${label} ×${n}`));
+      }, this.rapidDelay, (n, ok) => this.showHud(ok === false ? `Nothing more to ${label.toLowerCase()}` : `${label} ×${n}`));
     }
   }
   updateGesture() {

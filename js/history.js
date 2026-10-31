@@ -6,7 +6,7 @@ import { makeCanvas, clamp } from './util.js';
 export class History {
   constructor(onChange) {
     this.u = []; this.r = []; this.bytes = 0;
-    this.maxSteps = 60; this.maxBytes = 260e6;
+    this.maxSteps = 250; this.maxBytes = 260e6; // like Procreate: 250 steps (bytes set from the memory budget)
     this.onChange = onChange || (() => {});
   }
   push(cmd) {
