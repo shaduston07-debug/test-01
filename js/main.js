@@ -843,6 +843,9 @@ class App {
   flushStroke() { if (this.pendingStroke) this.pendingStroke.finish(); }
 
   undo() {
+    // a tool with its own in-progress steps (e.g. an open lasso) undoes those first
+    const tl = this.tools && this.tools[this.tool];
+    if (tl && tl.undoStep && tl.undoStep()) return;
     this.flushStroke();
     if (this.engine.active) return;
     if (this.transform) { this.tools.transform.cancel(); return; }

@@ -1256,7 +1256,9 @@ export function selectTool(app) {
       if (this.mode === 'auto') { this.startWand(p); return; }
       if (this.mode === 'freehand') {
         this.fresh = !this.poly;
-        if (!this.poly) this.poly = [{ x: p.x, y: p.y }];
+        // each drag / tapped point is one undo step while the lasso is open
+        this.stepStart = this.poly ? this.poly.length : 0;
+        if (!this.poly) { this.poly = [{ x: p.x, y: p.y }]; this.steps = []; }
         this.segStart = this.poly.length;
         return;
       }
@@ -1287,6 +1289,7 @@ export function selectTool(app) {
           else if (!this.fresh) poly.push({ x: p.x, y: p.y });
           else app.showHud('Tap to add points · tap the first point to close', 1800);
         }
+        if (this.poly && this.poly.length > this.stepStart) (this.steps ||= []).push(this.stepStart);
         app.updateCtxBar(); app.requestRender('view');
         return;
       }
@@ -1296,6 +1299,15 @@ export function selectTool(app) {
       selCmd('Select', () => app.selection.apply(sh, this.op));
     },
     cancel() { this.drag = false; if (this.mode === 'freehand' && this.fresh) this.poly = null; this.wand = null; },
+    // undo while the lasso is open: remove the last drag / point instead of the last stroke
+    undoStep() {
+      if (!this.poly) return false;
+      const start = (this.steps || []).pop() ?? 0;
+      this.poly.length = Math.max(0, start);
+      if (this.poly.length === 0) { this.poly = null; this.steps = []; }
+      app.showHud('Undo lasso', 600); app.updateCtxBar(); app.requestRender('view');
+      return true;
+    },
     closeLasso() {
       const pts = this.poly; this.poly = null;
       if (!pts || pts.length < 3) { app.updateCtxBar(); return; }
@@ -1389,7 +1401,7 @@ export function selectTool(app) {
       if (this.poly) {
         return [h('span', { class: 'cb-label' }, `Lasso · ${this.poly.length} point${this.poly.length === 1 ? '' : 's'} · tap the start dot to close`),
           cbBtn('Close ✓', () => this.closeLasso(), false, 'primary'),
-          cbBtn('Undo point', () => { this.poly.pop(); if (!this.poly.length) this.poly = null; app.updateCtxBar(); app.requestRender('view'); }),
+          cbBtn('Undo', () => this.undoStep()),
           cbBtn('Cancel', () => { this.poly = null; app.updateCtxBar(); app.requestRender('view'); })];
       }
       const setMode = (v) => { t.mode = v; store.prefs.set('selMode', v); app.updateCtxBar(); };
