@@ -185,9 +185,8 @@ export function humanSpec(body = HUMAN_DEFAULT) {
 let sculptHuman = null;
 export function setSculptor(fn) { sculptHuman = fn; }
 export function buildHuman(body = HUMAN_DEFAULT, color = '#c9c6c1') {
-  if (sculptHuman) {
-    try { return sculptHuman(body, color); } catch (e) { console.error('sculpted body failed, using the simple one', e); }
-  }
+  // async when the sculptor is set (meshing runs in workers) — callers await it
+  if (sculptHuman) return Promise.resolve().then(() => sculptHuman(body, color)).catch((e) => { console.error('sculpted body failed, using the simple one', e); return buildHumanParts(body, color); });
   return buildHumanParts(body, color);
 }
 export function buildHumanParts(body = HUMAN_DEFAULT, color = '#c9c6c1') {
@@ -387,7 +386,7 @@ export function applyPose(joints, pose, rest = HUMAN_REST, H = 1.7) {
     if (q) j.quaternion.set(q[0], q[1], q[2], q[3]);
     else { const e = rest[name] || [0, 0, 0]; j.quaternion.setFromEuler(new T.Euler(e[0] * D, e[1] * D, e[2] * D)); }
   }
-  const root = joints.pelvis || joints.d_hip;
+  const root = joints.pelvis || joints.d_hip || joints.hips || joints.body || joints.mantle;
   if (root && root.userData.base) {
     const r = pose.$root || [0, 0, 0];
     root.position.copy(root.userData.base).add(new T.Vector3(r[0] * H, r[1] * H, r[2] * H));

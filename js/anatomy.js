@@ -21,7 +21,7 @@ const FINGERS = ['thumb', 'index', 'middle', 'ring', 'pinky'];
 // bind pose for meshing (local euler degrees, same conventions as the pose library)
 const BIND = { shoulderL: [0, 0, -45], shoulderR: [0, 0, 45] };
 
-export function sculptHuman(body, color = '#c9c6c1') {
+export async function sculptHuman(body, color = '#c9c6c1') {
   const { b, F, H, hd, spec, dims } = humanSpec(body);
   const { hipY, waistY, chestY, neckY, headY, shW, hipW, upArm, foreArm, handL, ankleY, footLen } = dims;
   const fe = F ? 1 : 0;                       // female ↔ male blend
@@ -193,7 +193,7 @@ export function sculptHuman(body, color = '#c9c6c1') {
     const Fo = feet[sd];
     const fs = footLen / (0.15 * u);
     Fo.push(
-      S.ell('foot' + sd, add(An, [0, -0.019 * u, -0.024 * u]), [0.018 * u, 0.021 * u, 0.026 * u]),                                     // heel
+      S.ell('foot' + sd, add(An, [0, -0.02 * u, -0.014 * u]), [0.0165 * u, 0.02 * u, 0.024 * u]),                                     // heel
       S.cone('foot' + sd, add(An, [0, -0.004 * u, 0.006 * u]), add(To, [-x * 0.002 * u, 0.003 * u, -0.012 * u]), 0.021 * u, 0.0125 * u, { sx: 0.78, sz: 1.22, up: [0, 1, 0] }), // instep
       S.ell('foot' + sd, add(To, [-x * 0.002 * u, -0.004 * u, -0.006 * u]), [0.026 * u * fs, 0.012 * u, 0.018 * u]),                 // ball of the foot
       S.ell('foot' + sd, add(An, [x * 0.013 * u, -0.022 * u, 0.04 * u]), [0.01 * u, 0.011 * u, 0.042 * u]),                          // outer edge
@@ -203,7 +203,7 @@ export function sculptHuman(body, color = '#c9c6c1') {
   }
 
   // ── blend tree ──
-  const legTree = (sd) => S.clip(S.smooth(0.016 * hu, S.smooth(0.02 * hu, legs[sd]), S.smooth(0.01 * hu, feet[sd])), [0, 0.0005 * u, 0], [0, 1, 0], 'foot' + sd);
+  const legTree = (sd) => S.clip(S.smooth(0.016 * hu, S.smooth(0.02 * hu, legs[sd]), S.smooth(0.016 * hu, feet[sd])), [0, 0.0005 * u, 0], [0, 1, 0], 'foot' + sd);
   // the forearm sinks smoothly inside the hand's wrist stub (no cut edge that could show)
   const armTree = (sd) => S.grow(S.smooth(0.014 * hu, arms[sd]), wristPlane[sd].p, wristPlane[sd].n.map((v) => -v), 0.02 * u, 0, -0.012 * u, 'elbow' + sd);
   const torso = S.carve(0.008 * hu, S.smooth(0.022 * hu, torsoP), navel);
@@ -235,10 +235,90 @@ export function sculptHuman(body, color = '#c9c6c1') {
     { tree: hands.L, h: 0.0024 * hu, skin: { falloff: 0.32 }, smooth: 1 },
     { tree: hands.R, h: 0.0024 * hu, skin: { falloff: 0.32 }, smooth: 1 },
   ];
-  const mesh = S.sculptSkinned({ key, parts, bones: joints, mats, material: mat, root });
+  const boneNames = Object.keys(joints).filter((n) => n !== '_root');
+  const geo = await S.sculptGeometry({ key, parts, mats: Object.fromEntries(Object.entries(mats).map(([n, m]) => [n, Array.from(m.elements)])), boneNames });
+  const mesh = S.bindSkinned(geo, joints, mat, root);
   mesh.name = 'body';
   // back to the T-pose reference: poses are applied on top by the caller
   for (const n of Object.keys(BIND)) joints[n].quaternion.identity();
   root.updateMatrixWorld(true);
-  return { root, joints, mat, world, H, mesh };
+  const matArr = Object.fromEntries(Object.entries(mats).map(([n, m]) => [n, Array.from(m.elements)]));
+
+  // ── armour: plates are the body surface grown outwards and cut into pieces at the joints, so
+  // they fit this exact body and bend with it. style: 'medieval' | 'scifi'
+  const armor = async (style) => {
+    const med = style !== 'scifi';
+    const inflate = (node, g) => S.grow(node, [0, 0, 0], [0, 1, 0], 1, g, g);
+    const band = (node, bone, a, na, b, nb) => S.clip(S.clip(node, a, na, bone), b, nb, bone);
+    const ringCuts = (bone, c, rx, rz, ys, th = 0.0025 * u) => ys.map((y) => S.ell(bone, [c[0], y, c[2]], [rx, th, rz], { w: false }));
+    const plates = [], limbsL = [], limbsR = [], legsP = [], accents = [];
+    const T0 = med ? 0.013 * u : 0.01 * u;
+    // cuirass (breast + back plate) with a centre ridge, faulds (hip lames), gorget
+    const chestBulk = med ? S.ell('chest', [0, chestY + 0.012 * u, 0.012 * u], [G(0.098, 0.11) * u, 0.12 * u, G(0.088, 0.09) * u]) : S.ell('chest', [0, chestY + 0.02 * u, 0.008 * u], [G(0.09, 0.104) * u, 0.1 * u, 0.078 * u]);
+    let cuirass = band(S.smooth(0.03 * u, inflate(torso, T0), chestBulk), 'chest', [0, waistY - 0.014 * u, 0], [0, 1, 0], [0, neckY - 0.014 * u, 0], [0, -1, 0]);
+    if (med) cuirass = S.smooth(0.006 * u, cuirass, S.cone('chest', [0, waistY + 0.02 * u, 0.07 * u], [0, chestY + 0.07 * u, 0.098 * u], 0.006 * u, 0.006 * u));
+    else cuirass = S.carve(0.003 * u, cuirass, S.rbox('chest', [0, chestY - 0.03 * u, 0.12 * u], [0.002 * u, 0.12 * u, 0.06 * u], 0.001 * u, { w: false }), ringCuts('spine', [0, 0, 0], 0.13 * u, 0.12 * u, [waistY + 0.03 * u]));
+    plates.push(cuirass);
+    const faulds = band(inflate(torso, T0 + 0.006 * u), 'pelvis', [0, hipY - 0.07 * u, 0], [0, 1, 0], [0, waistY - 0.02 * u, 0], [0, -1, 0]);
+    plates.push(S.carve(0.002 * u, faulds, ringCuts('pelvis', [0, 0, 0], 0.16 * u, 0.14 * u, [hipY - 0.03 * u, hipY + 0.005 * u, hipY + 0.04 * u])));
+    plates.push(band(inflate(upper, 0.011 * u), 'neck', [0, neckY - 0.012 * u, 0], [0, 1, 0], [0, neckY + 0.045 * u, 0], [0, -1, 0]));
+    // helmet: a grown head with a dome; visor slit (medieval) or a glowing visor (sci-fi)
+    const dome = S.ell('head', [0, Y(0.44), -0.04 * hd], [0.38 * hd, 0.5 * hd, 0.5 * hd]);
+    const guard = med ? S.ell('head', [0, Y(0.66), 0.12 * hd], [0.33 * hd, 0.42 * hd, 0.34 * hd]) : S.ell('head', [0, Y(0.7), 0.13 * hd], [0.3 * hd, 0.36 * hd, 0.32 * hd]);
+    let helm = S.clip(S.smooth(0.06 * hd, dome, guard), [0, Y(1.06), 0], [0, 1, 0], 'head');
+    if (med) {
+      const slit = [S.rbox('head', [0, Y(0.5), 0.45 * hd], [0.25 * hd, 0.018 * hd, 0.12 * hd], 0.005 * hd, { w: false })];
+      for (const dx of [-0.12, -0.06, 0, 0.06, 0.12]) slit.push(S.ell('head', [dx * hd, Y(0.74), 0.45 * hd], [0.012 * hd, 0.03 * hd, 0.1 * hd], { w: false }));
+      helm = S.smooth(0.01 * hd, S.carve(0.006 * hd, helm, slit), S.cone('head', [0, Y(0.05), 0.4 * hd], [0, Y(0.02), -0.45 * hd], 0.03 * hd, 0.025 * hd));
+    } else {
+      helm = S.carve(0.01 * hd, helm, S.ell('head', [0, Y(0.5), 0.5 * hd], [0.3 * hd, 0.09 * hd, 0.14 * hd], { w: false }));
+      accents.push(S.ell('head', [0, Y(0.5), 0.33 * hd], [0.31 * hd, 0.085 * hd, 0.13 * hd]));
+    }
+    plates.push(helm);
+    for (const [x, sd] of [[1, 'L'], [-1, 'R']]) {
+      const Sh = W('shoulder' + sd), El = W('elbow' + sd), Wr = W('hand' + sd), Hp = W('hip' + sd), Kn = W('knee' + sd), An = W('foot' + sd);
+      const A = x > 0 ? limbsL : limbsR, arm = armTree(sd), leg = legTree(sd);
+      // pauldron: layered dome over the shoulder
+      const pc = add(Sh, [x * 0.01 * u, 0.016 * u, -0.002 * u]);
+      let paul = S.clip(S.smooth(0.012 * u, S.ell('shoulder' + sd, pc, [0.07 * u, 0.042 * u, 0.066 * u], { rot: [0, 0, -x * 12] }), S.ell('shoulder' + sd, add(pc, [x * 0.035 * u, -0.026 * u, 0]), [0.06 * u, 0.04 * u, 0.062 * u], { rot: [0, 0, -x * 20] })), add(Sh, [0, -0.05 * u, 0]), [0, 1, 0], 'shoulder' + sd);
+      paul = S.carve(0.002 * u, paul, ringCuts('shoulder' + sd, pc, 0.1 * u, 0.1 * u, med ? [Sh[1] - 0.008 * u, Sh[1] - 0.028 * u] : [Sh[1] - 0.02 * u], 0.0022 * u));
+      A.push(paul);
+      A.push(band(inflate(arm, 0.009 * u), 'shoulder' + sd, add(Sh, [x * 0.07 * u, 0, 0]), [x, 0, 0], add(El, [-x * 0.022 * u, 0, 0]), [-x, 0, 0]));           // upper arm
+      A.push(S.ell('elbow' + sd, add(El, [0, 0, -0.006 * u]), [0.03 * u, 0.034 * u, 0.034 * u]));                                                             // elbow cop
+      A.push(band(S.smooth(0.01 * u, inflate(arm, 0.008 * u), S.cone('elbow' + sd, add(Wr, [-x * 0.05 * u, 0, 0]), add(Wr, [x * 0.004 * u, 0, 0]), 0.019 * u, med ? 0.028 * u : 0.021 * u, { sx: 0.78, sz: 1.1 })),
+        'elbow' + sd, add(El, [x * 0.03 * u, 0, 0]), [x, 0, 0], add(Wr, [x * 0.004 * u, 0, 0]), [-x, 0, 0]));                                              // forearm + cuff
+      legsP.push(band(inflate(leg, 0.008 * u), 'hip' + sd, [0, Hp[1] - 0.06 * u, 0], [0, -1, 0], [0, Kn[1] + 0.035 * u, 0], [0, 1, 0]));                   // thigh
+      legsP.push(S.ell('knee' + sd, add(Kn, [0, 0.004 * u, 0.012 * u]), [0.036 * u, 0.042 * u, 0.034 * u]));                                               // knee cop
+      legsP.push(band(inflate(leg, 0.011 * u), 'knee' + sd, [0, Kn[1] - 0.032 * u, 0], [0, -1, 0], [0, An[1] + 0.022 * u, 0], [0, 1, 0]));                 // shin
+      legsP.push(S.carve(0.002 * u, S.clip(S.clip(inflate(leg, 0.008 * u), [0, An[1] + 0.016 * u, 0], [0, -1, 0], 'foot' + sd), [0, 0.0005 * u, 0], [0, 1, 0], 'foot' + sd),
+        med ? ringCuts('toe' + sd, W('toe' + sd), 0.05 * u, 0.008 * u, []).concat([S.ell('foot' + sd, add(An, [0, -0.01 * u, 0.06 * u]), [0.06 * u, 0.04 * u, 0.0022 * u], { w: false }), S.ell('foot' + sd, add(An, [0, -0.01 * u, 0.09 * u]), [0.06 * u, 0.04 * u, 0.0022 * u], { w: false })]) : [])); // boots
+      if (!med) { accents.push(S.cone('elbow' + sd, add(El, [x * 0.06 * u, 0.0, 0.02 * u]), add(Wr, [-x * 0.06 * u, 0, 0.02 * u]), 0.0035 * u, 0.0035 * u), S.cone('knee' + sd, add(Kn, [x * 0.026 * u, -0.06 * u, 0.01 * u]), add(An, [x * 0.02 * u, 0.06 * u, 0.01 * u]), 0.0035 * u, 0.0035 * u)); }
+    }
+    const gaunt = (sd) => S.clip(inflate(hands[sd], 0.0032 * u), add(W('hand' + sd), [sd === 'L' ? -0.006 * u : 0.006 * u, 0, 0]), [sd === 'L' ? 1 : -1, 0, 0], 'elbow' + sd);
+    const hb = 0.0085 * hu;
+    const parts = [
+      { tree: S.union(plates), h: hb, skin: { falloff: 0.42 } },
+      { tree: S.union(limbsL), h: hb * 0.85, skin: { falloff: 0.42 } },
+      { tree: S.union(limbsR), h: hb * 0.85, skin: { falloff: 0.42 } },
+      { tree: S.union(legsP), h: hb, skin: { falloff: 0.42 } },
+      { tree: gaunt('L'), h: 0.003 * hu, skin: { falloff: 0.32 }, smooth: 1 },
+      { tree: gaunt('R'), h: 0.003 * hu, skin: { falloff: 0.32 }, smooth: 1 },
+    ];
+    const armorMat = med ? stdMat('#9ea4ab', { metalness: 0.55, roughness: 0.32 }) : stdMat('#e9ebef', { metalness: 0.08, roughness: 0.38 });
+    const [geo, geo2] = await Promise.all([
+      S.sculptGeometry({ key: key + '|armor|' + style, parts, mats: matArr, boneNames }),
+      accents.length ? S.sculptGeometry({ key: key + '|armor-acc|' + style, parts: [{ tree: S.union(accents), h: 0.003 * hu, skin: { falloff: 0.4 } }], mats: matArr, boneNames }) : null,
+    ]);
+    // bind in the same pose as the body
+    for (const [n, e] of Object.entries(BIND)) joints[n].quaternion.setFromEuler(new T.Euler(e[0] * D, e[1] * D, e[2] * D));
+    root.updateMatrixWorld(true);
+    const m1 = S.bindSkinned(geo, joints, armorMat, root); m1.name = 'armor';
+    if (geo2) { const m2 = S.bindSkinned(geo2, joints, new T.MeshStandardMaterial({ color: '#4ff0ff', emissive: '#28c8ff', emissiveIntensity: 1.2, roughness: 0.3 }), root); m2.name = 'armor-glow'; }
+    for (const n of Object.keys(BIND)) joints[n].quaternion.identity();
+    root.updateMatrixWorld(true);
+    // the body underneath becomes the padded / under-suit layer
+    mat.color.set(med ? '#5d5953' : '#2b2e35');
+    return m1;
+  };
+  return { root, joints, mat, world, H, mesh, armor };
 }

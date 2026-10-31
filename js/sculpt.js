@@ -17,6 +17,8 @@ const D = Math.PI / 180;
 // rot = euler degrees (ellipsoid / box), w = false → not used for skin weights (e.g. eyes)
 export function cone(bone, a, b, r1, r2, o = {}) { return { t: 0, bone, a, b, r1, r2, sx: o.sx || 1, sz: o.sz || 1, up: o.up || null, w: o.w !== false, tag: o.tag }; }
 export function ell(bone, c, r, o = {}) { return { t: 1, bone, c, r, rot: o.rot || [0, 0, 0], w: o.w !== false, tag: o.tag }; }
+// thin rounded triangle (wing membranes, fins): corners a, b, c, half thickness th
+export function tri(bone, a, b, c, th, o = {}) { return { t: 3, bone, a, b, c, th, w: o.w !== false, tag: o.tag }; }
 export function rbox(bone, c, half, round = 0.005, o = {}) { return { t: 2, bone, c, half, round, rot: o.rot || [0, 0, 0], w: o.w !== false, tag: o.tag }; }
 // blend tree nodes
 export const smooth = (k, ...ch) => ({ op: 'smin', k, ch: ch.flat().filter(Boolean) });
@@ -28,12 +30,21 @@ export const clip = (node, p0, n, bone = null) => ({ op: 'clip', k: 0, ch: [node
 // overlapping stub where a finer-meshed part (hand, head) meets the body without a visible ridge
 export const grow = (node, p0, n, len, g0, g1, bone = null) => ({ op: 'grow', k: 0, ch: [node], p0, n, len, g0, g1, bone });
 
-// ───────── math helpers ─────────
+// ───────── math helpers (no three.js: this file also runs in workers) ─────────
+// rotation for euler degrees, XYZ order (same as three.js); returns the three local axes in world
 function eulerMat(r) {
-  const e = new T.Euler(r[0] * D, r[1] * D, r[2] * D), m = new T.Matrix4().makeRotationFromEuler(e).elements;
-  // columns of the rotation (local axes in world)
-  return [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]];
+  const x = r[0] * D, y = r[1] * D, z = r[2] * D;
+  const a = Math.cos(x), b = Math.sin(x), c = Math.cos(y), d = Math.sin(y), e = Math.cos(z), f = Math.sin(z);
+  const ae = a * e, af = a * f, be = b * e, bf = b * f;
+  return [c * e, af + be * d, bf - ae * d, -c * f, ae - bf * d, be + af * d, d, -b * c, a * c];
 }
+// M: 16 numbers, column-major (three.js Matrix4.elements) or null
+const mPoint = (M, a) => (M ? [M[0] * a[0] + M[4] * a[1] + M[8] * a[2] + M[12], M[1] * a[0] + M[5] * a[1] + M[9] * a[2] + M[13], M[2] * a[0] + M[6] * a[1] + M[10] * a[2] + M[14]] : a.slice());
+const mDir = (M, a) => {
+  if (!M) return a.slice();
+  const v = [M[0] * a[0] + M[4] * a[1] + M[8] * a[2], M[1] * a[0] + M[5] * a[1] + M[9] * a[2], M[2] * a[0] + M[6] * a[1] + M[10] * a[2]];
+  const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l];
+};
 function perp(u, up) {
   let h = up || (Math.abs(u[1]) < 0.9 ? [0, 1, 0] : [0, 0, 1]);
   if (Math.abs(h[0] * u[0] + h[1] * u[1] + h[2] * u[2]) > 0.98) h = Math.abs(u[0]) < 0.9 ? [1, 0, 0] : [0, 0, 1];
@@ -44,12 +55,21 @@ function perp(u, up) {
   return [v, w];
 }
 
-// Prepare a primitive for fast evaluation; M = optional THREE.Matrix4 moving it (bone motion
-// from the authoring pose to the bind pose).
+// Prepare a primitive for fast evaluation; M = optional matrix moving it (bone motion from the
+// authoring pose to the bind pose).
 function prep(p, M) {
-  const tp = (a) => { const v = new T.Vector3(...a); if (M) v.applyMatrix4(M); return [v.x, v.y, v.z]; };
-  const td = (a) => { const v = new T.Vector3(...a); if (M) v.transformDirection(M); return [v.x, v.y, v.z]; };
+  const tp = (a) => mPoint(M, a);
+  const td = (a) => mDir(M, a);
   const q = { t: p.t, bone: p.bone, w: p.w, tag: p.tag, side: null, sub: null };
+  if (p.t === 3) {
+    const a = tp(p.a), b = tp(p.b), c = tp(p.c), th = p.th;
+    const ba = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], cb = [c[0] - b[0], c[1] - b[1], c[2] - b[2]], ac = [a[0] - c[0], a[1] - c[1], a[2] - c[2]];
+    const nor = [ba[1] * ac[2] - ba[2] * ac[1], ba[2] * ac[0] - ba[0] * ac[2], ba[0] * ac[1] - ba[1] * ac[0]];
+    Object.assign(q, { a, b, c, ba, cb, ac, nor, th, nn: nor[0] ** 2 + nor[1] ** 2 + nor[2] ** 2 });
+    q.bb = [0, 1, 2].map((i) => Math.min(a[i], b[i], c[i]) - th).concat([0, 1, 2].map((i) => Math.max(a[i], b[i], c[i]) + th));
+    q.size = th * 2.5; q.rad = Math.max(Math.hypot(...ba), Math.hypot(...cb), Math.hypot(...ac)) / 2;
+    return q;
+  }
   if (p.t === 0) {
     const a = tp(p.a), b = tp(p.b);
     const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], h = Math.max(1e-5, Math.hypot(...d)), u = d.map((x) => x / h);
@@ -82,7 +102,24 @@ function prep(p, M) {
   return q;
 }
 
+
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+function segD2(e, px, py, pz) { // squared distance from p (relative to the edge start) to edge e
+  const t = Math.max(0, Math.min(1, (e[0] * px + e[1] * py + e[2] * pz) / (e[0] * e[0] + e[1] * e[1] + e[2] * e[2])));
+  const dx = e[0] * t - px, dy = e[1] * t - py, dz = e[2] * t - pz; return dx * dx + dy * dy + dz * dz;
+}
+function evTri(q, x, y, z) {
+  const { a, b, c, ba, cb, ac, nor } = q;
+  const pa = [x - a[0], y - a[1], z - a[2]], pb = [x - b[0], y - b[1], z - b[2]], pc = [x - c[0], y - c[1], z - c[2]];
+  const cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const sgn = Math.sign(dot3(cr(ba, nor), pa)) + Math.sign(dot3(cr(cb, nor), pb)) + Math.sign(dot3(cr(ac, nor), pc));
+  let d2;
+  if (sgn < 2) d2 = Math.min(segD2(ba, pa[0], pa[1], pa[2]), segD2(cb, pb[0], pb[1], pb[2]), segD2(ac, pc[0], pc[1], pc[2]));
+  else { const k = dot3(nor, pa); d2 = k * k / q.nn; }
+  return Math.sqrt(d2) - q.th;
+}
 function evPrim(q, x, y, z) {
+  if (q.t === 3) return evTri(q, x, y, z);
   if (q.t === 0) {
     const px = x - q.ax, py = y - q.ay, pz = z - q.az;
     const ly = px * q.ux + py * q.uy + pz * q.uz;
@@ -123,12 +160,14 @@ function compile(node, mats, leaves, pad, inh = 0) {
     return q;
   }
   const n = { op: node.op, k: node.k, ch: [], pad };
-  const kk = node.op === 'smin' || node.op === 'sub' ? Math.max(inh, node.k) : inh;
+  // inflating ('grow') turns a cheap far-away lower bound into a fake surface unless the margin
+  // also covers the inflation
+  const kk = node.op === 'smin' || node.op === 'sub' ? Math.max(inh, node.k) : node.op === 'grow' ? inh + Math.max(0, node.g0, node.g1) * 1.5 : inh;
   const cpad = Math.max(kk * 1.2, 0.004) + 0.006;
   n.ch = node.ch.map((c) => compile(c, mats, leaves, cpad, kk));
   if (node.op === 'clip' || node.op === 'grow') {
     let p0 = node.p0, nn = node.n;
-    if (node.bone && mats && mats[node.bone]) { const v = new T.Vector3(...p0).applyMatrix4(mats[node.bone]); p0 = [v.x, v.y, v.z]; const w = new T.Vector3(...nn).transformDirection(mats[node.bone]); nn = [w.x, w.y, w.z]; }
+    if (node.bone && mats && mats[node.bone]) { p0 = mPoint(mats[node.bone], p0); nn = mDir(mats[node.bone], nn); }
     const l = Math.hypot(...nn); n.nx = nn[0] / l; n.ny = nn[1] / l; n.nz = nn[2] / l; n.pd = p0[0] * n.nx + p0[1] * n.ny + p0[2] * n.nz;
   }
   // union box (subtractors don't grow it)
@@ -317,7 +356,7 @@ function tagsFor(bone) {
   const f = bone.match(/^(thumb|index|middle|ring|pinky|claw\w*|toe\d|tent\d+|leg\d+|f\d+)/);
   return { side, sub: f ? f[1] + (side || '') : null };
 }
-export function skinWeights(pos, leaves, boneIndex, { falloff = 0.4, maxDist = 0.08 } = {}) {
+export function skinWeights(pos, leaves, boneIndex, { falloff = 0.4, maxDist = 0.08, maxS = 0.03 } = {}) {
   const nv = pos.length / 3;
   const si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4), dom = new Uint16Array(nv);
   const W = leaves.filter((q) => q.w && boneIndex[q.bone] != null);
@@ -337,7 +376,7 @@ export function skinWeights(pos, leaves, boneIndex, { falloff = 0.4, maxDist = 0
       if (d < bdst) { bdst = d; best = i; }
     }
     if (best < 0) { si[v * 4] = 0; sw[v * 4] = 1; continue; }
-    const q0 = W[best], s = Math.max(0.0025, Math.min(0.03, q0.size * falloff));
+    const q0 = W[best], s = Math.max(0.0025, Math.min(maxS, q0.size * falloff));
     touched.length = 0;
     for (let i = 0; i < W.length; i++) {
       const d = ds[i]; if (d === Infinity) continue;
@@ -398,50 +437,78 @@ export function smoothWeights(index, nv, si, sw, iters = 2) {
   }
 }
 
+// ───────── one part: mesh + skin weights (pure; runs in a worker) ─────────
+export function buildPart({ tree, h, mats, boneIndex, skin, smooth }) {
+  const t0 = Date.now();
+  const r = meshSDF(tree, { h, mats });
+  const { si, sw } = skinWeights(r.pos, r.leaves, boneIndex, skin || {});
+  smoothWeights(r.index, r.pos.length / 3, si, sw, smooth ?? 2);
+  return { pos: r.pos, nor: r.nor, index: r.index, si, sw, ms: Date.now() - t0, stats: r.stats };
+}
+
+// small pool of module workers (one per part, up to the core count); falls back to the main thread
+let pool = null;
+function workers() {
+  if (pool !== null) return pool;
+  pool = [];
+  try {
+    const n = Math.max(1, Math.min(4, (globalThis.navigator && navigator.hardwareConcurrency) || 2));
+    for (let i = 0; i < n; i++) {
+      const w = new Worker(new URL('./sculpt-worker.js', import.meta.url), { type: 'module' });
+      w.jobs = new Map(); w.busy = 0;
+      w.onmessage = (e) => { const j = w.jobs.get(e.data.id); if (!j) return; w.jobs.delete(e.data.id); w.busy--; e.data.error ? j.reject(new Error(e.data.error)) : j.resolve(e.data.result); };
+      w.onerror = (e) => { for (const j of w.jobs.values()) j.reject(e); w.jobs.clear(); w.busy = 0; w.dead = true; };
+      pool.push(w);
+    }
+  } catch (e) { pool = []; }
+  return pool;
+}
+let jobId = 0;
+function runPart(job) {
+  const ws = workers().filter((w) => !w.dead);
+  if (!ws.length || globalThis.__sculptInline) return Promise.resolve(buildPart(job));
+  const w = ws.reduce((a, b) => (b.busy < a.busy ? b : a));
+  const id = ++jobId;
+  return new Promise((resolve, reject) => { w.jobs.set(id, { resolve, reject }); w.busy++; w.postMessage({ id, job }); })
+    .catch((e) => { console.warn('sculpt worker failed, meshing here', e); return buildPart(job); });
+}
+
 // ───────── build a skinned mesh on existing joint objects ─────────
 // parts: [{ tree, h }] meshed separately (e.g. body + hands at a finer grid) and merged.
 // bones: { name: Object3D } already posed in the bind pose with world matrices up to date;
-// mats: { bone: Matrix4 } moving authoring coordinates to that bind pose (or null).
+// mats: { bone: number[16] } moving authoring coordinates to that bind pose (or null).
 const meshCache = new Map();
-export function sculptSkinned({ key, parts, bones, mats, material, root }) {
+export async function sculptGeometry({ key, parts, mats, boneNames }) {
+  const boneIndex = Object.fromEntries(boneNames.map((n, i) => [n, i]));
+  if (key && meshCache.has(key)) return meshCache.get(key);
+  const t0 = Date.now();
+  const use = parts.filter((_, i) => !globalThis.__sculptParts || globalThis.__sculptParts.includes(i));
+  const res = await Promise.all(use.map((part) => runPart({ tree: part.tree, h: part.h, mats, boneIndex, skin: part.skin, smooth: part.smooth })));
+  if (globalThis.__sculptLog) console.log('LOG sculpt ' + res.map((r) => `${r.pos.length / 3}v/${r.index.length / 3}t ${r.ms}ms`).join(' · ') + ` total ${Date.now() - t0}ms`);
+  const cat = (arrs, C) => { const n = arrs.reduce((s, a) => s + a.length, 0), o = new C(n); let k = 0; for (const a of arrs) { o.set(a, k); k += a.length; } return o; };
+  const nv = res.reduce((s, r) => s + r.pos.length / 3, 0);
+  const I = new (nv > 65535 ? Uint32Array : Uint16Array)(res.reduce((s, r) => s + r.index.length, 0));
+  let base = 0, k = 0;
+  for (const r of res) { for (let i = 0; i < r.index.length; i++) I[k++] = r.index[i] + base; base += r.pos.length / 3; }
+  const geo = new T.BufferGeometry();
+  geo.setAttribute('position', new T.BufferAttribute(cat(res.map((r) => r.pos), Float32Array), 3));
+  geo.setAttribute('normal', new T.BufferAttribute(cat(res.map((r) => r.nor), Float32Array), 3));
+  geo.setAttribute('skinIndex', new T.BufferAttribute(cat(res.map((r) => r.si), Uint16Array), 4));
+  geo.setAttribute('skinWeight', new T.BufferAttribute(cat(res.map((r) => r.sw), Float32Array), 4));
+  geo.setIndex(new T.BufferAttribute(I, 1));
+  geo.computeBoundingSphere(); geo.computeBoundingBox();
+  if (key) { meshCache.set(key, geo); if (meshCache.size > 12) meshCache.delete(meshCache.keys().next().value); }
+  return geo;
+}
+// bind a (cached) geometry to joint objects that are currently in the bind pose
+export function bindSkinned(geo, bones, material, root) {
   const names = Object.keys(bones).filter((n) => n !== '_root');
-  const boneIndex = Object.fromEntries(names.map((n, i) => [n, i]));
-  let geo = key && meshCache.get(key);
-  if (!geo) {
-    const P = [], N = [], I = [], SI = [], SW = [];
-    let base = 0;
-    for (const [pi, part] of parts.entries()) {
-      if (globalThis.__sculptParts && !globalThis.__sculptParts.includes(pi)) continue;
-      const t0 = performance.now();
-      const r = meshSDF(part.tree, { h: part.h, mats });
-      const t1 = performance.now();
-      const { si, sw } = skinWeights(r.pos, r.leaves, boneIndex, part.skin || {});
-      const t2 = performance.now();
-      smoothWeights(r.index, r.pos.length / 3, si, sw, part.smooth ?? 2);
-      if (globalThis.__sculptLog) console.log(`LOG part h=${part.h.toFixed(4)} verts=${r.pos.length / 3} tris=${r.index.length / 3} leaves=${r.leaves.length} mesh=${(t1 - t0) | 0}ms weights=${(t2 - t1) | 0}ms smooth=${(performance.now() - t2) | 0}ms` + (r.stats ? ' ' + JSON.stringify(r.stats) : ''));
-      P.push(r.pos); N.push(r.nor); SI.push(si); SW.push(sw);
-      for (const i of r.index) I.push(i + base);
-      base += r.pos.length / 3;
-    }
-    const cat = (arrs, C) => { const n = arrs.reduce((s, a) => s + a.length, 0), o = new C(n); let k = 0; for (const a of arrs) { o.set(a, k); k += a.length; } return o; };
-    geo = new T.BufferGeometry();
-    geo.setAttribute('position', new T.BufferAttribute(cat(P, Float32Array), 3));
-    geo.setAttribute('normal', new T.BufferAttribute(cat(N, Float32Array), 3));
-    geo.setAttribute('skinIndex', new T.BufferAttribute(cat(SI, Uint16Array), 4));
-    geo.setAttribute('skinWeight', new T.BufferAttribute(cat(SW, Float32Array), 4));
-    geo.setIndex(new T.BufferAttribute(base > 65535 ? new Uint32Array(I) : new Uint16Array(I), 1));
-    geo.computeBoundingSphere(); geo.computeBoundingBox();
-    if (key) { meshCache.set(key, geo); if (meshCache.size > 12) meshCache.delete(meshCache.keys().next().value); }
-  }
   geo = geo.clone();
   const mesh = new T.SkinnedMesh(geo, material);
   root.add(mesh);
   root.updateMatrixWorld(true);
-  const list = names.map((n) => bones[n]);
-  const skeleton = new T.Skeleton(list);
-  mesh.bind(skeleton);
+  mesh.bind(new T.Skeleton(names.map((n) => bones[n])));
   mesh.frustumCulled = false; // posed limbs can leave the bind-pose bounds
-  // the joint a vertex mostly follows (for tapping a body part)
   const si = geo.attributes.skinIndex.array, sw = geo.attributes.skinWeight.array;
   mesh.userData.boneOf = (v) => { let b = 0, w = -1; for (let k = 0; k < 4; k++) if (sw[v * 4 + k] > w) { w = sw[v * 4 + k]; b = si[v * 4 + k]; } return names[b]; };
   mesh.userData.boneNames = names;
@@ -465,7 +532,7 @@ export function boneOverlay(mesh, boneName, material) {
   m.bind(mesh.skeleton, mesh.bindMatrix);
   m.frustumCulled = false;
   m.raycast = () => {};
-  m.userData.outline = true; // never outlined / picked
+  m.userData.overlay = true; // never outlined / picked
   return m;
 }
 export const _test = { meshSDF, compile, ev };

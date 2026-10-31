@@ -8,10 +8,12 @@ import { Layer } from './doc.js';
 import { touch } from './history.js';
 import { insertLayer, structCmd } from './layers.js';
 import * as M from './models3d.js';
+import * as A from './anatomy.js';
+import * as SC from './sculpt.js';
 
 let T = null;
 async function three() {
-  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); }
+  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); A.setThree(T); M.setSculptor(A.sculptHuman); }
   return T;
 }
 
@@ -127,7 +129,7 @@ function outlineMaterial(widthRef) {
 function addOutlines(root, widthRef) {
   const mat = outlineMaterial(widthRef), add = [];
   root.traverse((o) => {
-    if (!o.isMesh || o.userData.outline) return;
+    if (!o.isMesh || o.userData.outline || o.userData.overlay) return;
     const c = o.isSkinnedMesh ? new T.SkinnedMesh(o.geometry, mat) : new T.Mesh(o.geometry, mat);
     if (o.isSkinnedMesh) c.bind(o.skeleton, o.bindMatrix);
     c.userData.outline = true; c.raycast = () => {};
@@ -139,6 +141,7 @@ function addOutlines(root, widthRef) {
 
 // ───────── runtime scene per layer ─────────
 const runtimes = new WeakMap();
+let hlMat = null;
 let renderer = null;
 
 async function runtimeFor(layer) {
@@ -157,7 +160,7 @@ async function runtimeFor(layer) {
 async function buildObject(layer, rt, o) {
   let node, joints = null, figMat = null, rig = null, fig = null;
   if (o.kind === 'figure' && o.rig === 2) {
-    fig = M.buildHuman(o.body, o.color); if (o.outfit && o.outfit !== 'none') M.buildArmor(fig, o.outfit);
+    fig = await M.buildHuman(o.body, o.color); if (o.outfit && o.outfit !== 'none') { if (fig.armor) await fig.armor(o.outfit); else M.buildArmor(fig, o.outfit); }
     node = fig.root; joints = fig.joints; figMat = fig.mat; rig = 'human';
   } else if (o.kind === 'figure') {
     const f = buildFigure(o.color); node = f.root; joints = f.joints; figMat = f.mat;
@@ -401,11 +404,24 @@ export function tool3d(app) {
       const rt = runtimes.get(this.layer()); if (!rt) return null;
       const ray = new T.Raycaster(); ray.setFromCamera(this.ndc(p), rt.camera);
       const hit = ray.intersectObjects(rt.scene.children, true).find((i) => i.object.visible && !i.object.userData.outline);
-      return hit ? { objId: hit.object.userData.objId, joint: hit.object.userData.joint || null } : null;
+      if (!hit) return null;
+      // one skinned body: the joint is the one that vertex follows most
+      const joint = hit.object.userData.joint || (hit.object.userData.boneOf && hit.face ? hit.object.userData.boneOf(hit.face.a) : null);
+      return { objId: hit.object.userData.objId, joint };
     },
     highlight(jointName) {
       const rt = runtimes.get(this.layer()); if (!rt) return;
       for (const e of rt.objs.values()) if (e.figMat) {
+        // skinned body: a blue overlay on the triangles that follow the selected joint
+        const body = e.fig && e.fig.mesh;
+        if (body) {
+          if (e.hl) { e.hl.parent && e.hl.parent.remove(e.hl); e.hl.geometry.dispose(); e.hl = null; }
+          if (jointName && e.data.id === this.sel) {
+            hlMat ||= new T.MeshStandardMaterial({ color: '#4d93ff', roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+            e.hl = SC.boneOverlay(body, jointName, hlMat);
+            if (e.hl) body.parent.add(e.hl);
+          }
+        }
         e.node.traverse((m) => {
           if (!m.isMesh || m.userData.outline) return;
           const on = jointName && m.userData.joint === jointName && e.data.id === this.sel;
