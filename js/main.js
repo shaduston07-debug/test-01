@@ -276,7 +276,7 @@ class App {
   getOpacity() { const b = this.brushFor(this.paintToolName()); return this.sizes[this.sizeKey()]?.opacity ?? b.opacity; }
   setSize(v) { const k = this.sizeKey(); this.sizes[k] = { ...this.sizes[k], size: v }; store.prefs.set('sizes', this.sizes); }
   setOpacity(v) { const k = this.sizeKey(); this.sizes[k] = { ...this.sizes[k], opacity: v }; store.prefs.set('sizes', this.sizes); }
-  updateSliders() { this.sizeSlider && this.sizeSlider.sync(); this.opSlider && this.opSlider.sync(); }
+  updateSliders() { this.sizeSlider && this.sizeSlider.sync(); this.opSlider && this.opSlider.sync(); this.onBrushValues && this.onBrushValues(); }
 
   setTool(name, oneShot = false) {
     this.flushStroke();

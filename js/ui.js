@@ -29,7 +29,7 @@ export { insertLayer, structCmd, openLayers, onDocChanged, closeLayerSheet };
 // window: draggable by its title bar, stays open while you paint, remembers its position.
 let pop = null;
 const floats = new Map();
-export function openPopover(anchor, { title, body, width = 340, head = [], onClose, key, float = false }) {
+export function openPopover(anchor, { title, body, width = 340, head = [], onClose, key, float = false, side = false }) {
   const k = key || title;
   if (floats.has(k)) { const f = floats.get(k).el; f.classList.remove('flash'); void f.offsetWidth; f.classList.add('flash'); return null; }
   if (pop && pop.key === k) { closePopover(); return null; }
@@ -49,7 +49,17 @@ export function openPopover(anchor, { title, body, width = 340, head = [], onClo
   const left = clamp(r.left + r.width / 2 - W / 2, 8, innerWidth - W - 8);
   el.style.left = left + 'px';
   el.style.top = (r.bottom + 12) + 'px';
-  el.append(h('div', { class: 'pop-arrow', style: { left: clamp(r.left + r.width / 2 - left, 24, W - 24) + 'px' } }));
+  if (side) {
+    // beside a sidebar button: to its right (left in right-hand mode), vertically kept on screen
+    const right = document.body.classList.contains('right-handed');
+    const sb = anchor.closest('#sidebar') ? anchor.closest('#sidebar').getBoundingClientRect() : r;
+    el.style.left = (right ? Math.max(8, sb.left - W - 12) : Math.min(sb.right + 12, innerWidth - W - 8)) + 'px';
+    el.style.maxHeight = innerHeight - 16 + 'px';
+    const place = () => { const H = el.offsetHeight; el.style.top = clamp(r.top + r.height / 2 - H / 2, 8, Math.max(8, innerHeight - H - 8)) + 'px'; };
+    place();
+    // re-place whenever the content grows (e.g. more save points), so it never runs off screen
+    if (window.ResizeObserver) { const ro = new ResizeObserver(() => { if (el.hidden) ro.disconnect(); else place(); }); ro.observe(el); }
+  } else el.append(h('div', { class: 'pop-arrow', style: { left: clamp(r.left + r.width / 2 - left, 24, W - 24) + 'px' } }));
   pop = { el, anchor, onClose, key: k, body: bodyEl };
   const floatify = () => {
     const rect = el.getBoundingClientRect();
@@ -135,7 +145,7 @@ export function vslider(app, el, kind) {
   let marksKey = '';
   const pointVals = () => {
     const b = app.brushFor(app.paintToolName());
-    return (store.prefs.get('brushPoints', {})[app.sizeKey()] || []).map((p) => ({ size: p.size, v: Math.sqrt(Math.max(0, p.size - 1) / Math.max(1, b.maxSize - 1)) }));
+    return (store.prefs.get('brushPoints', {})[app.sizeKey()] || []).map((p) => ({ size: p.size, opacity: p.opacity, v: Math.sqrt(Math.max(0, p.size - 1) / Math.max(1, b.maxSize - 1)) }));
   };
   const drawMarks = () => {
     if (!marks) return;
@@ -167,17 +177,28 @@ export function vslider(app, el, kind) {
   };
   let active = false;
   let snapped = null;
-  const onPos = (e) => {
+  // the save point whose mark is nearest the finger (within tol px), if any
+  const nearMark = (e, tol) => {
+    if (!marks) return null;
+    const r = el.getBoundingClientRect(), fromBottom = r.bottom - e.clientY;
+    let best = null, bd = tol;
+    for (const p of pointVals()) { const d = Math.abs(clamp(p.v, 0, 1) * (r.height - 14) - fromBottom); if (d < bd) { bd = d; best = p; } }
+    return best;
+  };
+  const onPos = (e, tap) => {
     const r = el.getBoundingClientRect();
     const v = clamp(1 - (e.clientY - r.top) / r.height, 0, 1);
-    // snap onto a save point's mark when the finger is within ~7 px of it
-    const fromBottom = r.bottom - e.clientY;
-    snapped = marks ? pointVals().find((p) => Math.abs(clamp(p.v, 0, 1) * (r.height - 14) - fromBottom) < 7) : null;
-    if (snapped) app.setSize(snapped.size); else set(v);
+    // tapping a mark jumps to that save point (size + opacity); dragging snaps onto marks
+    snapped = nearMark(e, tap ? 14 : 7);
+    if (snapped) {
+      app.setSize(snapped.size);
+      if (tap && snapped.opacity != null) { app.setOpacity(snapped.opacity); app.updateSliders(); }
+    } else set(v);
     sync(); show();
-    if (snapped) bubble.append(h('small', { class: 'vs-snap' }, 'Save point'));
+    app.onBrushValues && app.onBrushValues();
+    if (snapped) bubble.append(h('small', { class: 'vs-snap' }, tap && snapped.opacity != null ? `Save point · ${Math.round(snapped.opacity * 100)}%` : 'Save point'));
   };
-  el.addEventListener('pointerdown', (e) => { e.preventDefault(); active = true; el.setPointerCapture(e.pointerId); onPos(e); });
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); active = true; el.setPointerCapture(e.pointerId); onPos(e, true); });
   el.addEventListener('pointermove', (e) => { if (active) onPos(e); });
   const end = () => { active = false; bubble.hidden = true; };
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
@@ -982,7 +1003,9 @@ export function openPoints(app, anchor) {
     } }, exists ? 'Current size is saved' : `＋ Save current · ${label(cur)}`));
   };
   render();
-  openPopover(anchor, { title: 'Save points', body, width: 300, key: 'points', float: true });
+  // keep the list and the "Save current" button up to date while sizes / opacity change
+  app.onBrushValues = () => { if (body.isConnected) render(); };
+  openPopover(anchor, { title: 'Save points', body, width: 300, key: 'points', float: true, side: true, onClose: () => { if (app.onBrushValues) app.onBrushValues = null; } });
 }
 
 // ───────── backup / restore ─────────
