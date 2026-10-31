@@ -93,16 +93,27 @@ export class StrokeEngine {
   add(p) {
     if (!this.active) return;
     const l = this.target.toLocal(p.x, p.y);
-    // light pressure smoothing: Apple Pencil readings jitter a little, which shows as beads
-    const pr = clamp(p.pressure, 0, 1), pp = this.lastRaw ? this.lastRaw.p + (pr - this.lastRaw.p) * 0.5 : pr;
+    // Apple Pencil samples arrive unevenly (timestamps bunch up, positions sometimes only
+    // update every other sample, pressure jitters). Brushes whose size / opacity follow
+    // speed and pressure turned that into beads, so both are measured over time, not per sample.
+    const pr = clamp(p.pressure, 0, 1);
+    const hasT = p.time != null && this.lastTime != null;
+    const dt = hasT ? clamp(p.time - this.lastTime, 0, 50) : 4;
+    const pp = this.lastRaw ? this.lastRaw.p + (pr - this.lastRaw.p) * (1 - Math.exp(-Math.max(dt, 0.5) / 12)) : pr;
     const pt = { x: l.x, y: l.y, p: pp, t: p.tilt || 0, v: 0 };
-    // pointer speed in screen px per ms, smoothed (drives speed dynamics)
-    if (this.lastRaw && p.time != null && this.lastTime != null) {
-      const dt = Math.max(1, p.time - this.lastTime);
-      const inst = Math.hypot(pt.x - this.lastRaw.x, pt.y - this.lastRaw.y) * this.scale * (this.o.viewZoom || 1) / dt;
-      this.speed = this.speed * 0.75 + Math.min(inst, 8) * 0.25;
+    if (p.time != null) {
+      // speed over a ~30 ms window of recent samples (screen px per ms)
+      const H = this.speedHist || (this.speedHist = []);
+      if (!this.lastRaw) H.length = 0;
+      H.push(p.time, pt.x, pt.y);
+      while (H.length > 6 && p.time - H[3] >= 30) H.splice(0, 3);
+      const span = p.time - H[0];
+      if (span >= 8) {
+        const inst = Math.hypot(pt.x - H[1], pt.y - H[2]) * this.scale * (this.o.viewZoom || 1) / span;
+        this.speed += (Math.min(inst, 8) - this.speed) * (1 - Math.exp(-Math.max(dt, 0.5) / 25));
+      }
+      this.lastTime = p.time;
     }
-    if (p.time != null) this.lastTime = p.time;
     pt.v = this.speed || 0;
     this.lastRaw = pt;
     if (!this.s) {

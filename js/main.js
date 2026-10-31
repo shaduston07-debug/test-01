@@ -373,8 +373,9 @@ class App {
       else if (e.buttons) this.penPressure = pr;
       pressure = Math.pow(clamp(pr, 0.01, 1), this.settings.pressureGamma);
       let t = 0;
-      if (typeof e.altitudeAngle === 'number' && e.altitudeAngle > 0) t = 1 - e.altitudeAngle / (Math.PI / 2);
-      else if (e.tiltX || e.tiltY) t = Math.min(1, Math.hypot(e.tiltX, e.tiltY) / 90);
+      const te = (raw && raw.tiltFrom) || e;
+      if (typeof te.altitudeAngle === 'number' && te.altitudeAngle > 0) t = 1 - te.altitudeAngle / (Math.PI / 2);
+      else if (te.tiltX || te.tiltY) t = Math.min(1, Math.hypot(te.tiltX, te.tiltY) / 90);
       tilt = clamp((t - 0.4) / 0.6, 0, 1);
     }
     return { x: d.x, y: d.y, sx, sy, pressure, tilt, type: e.pointerType, time: raw && raw.time != null ? raw.time : e.timeStamp };
@@ -472,7 +473,9 @@ class App {
             let tm = ce.timeStamp;
             if (!(tm > lastT) || tm > e.timeStamp) tm = t0 + (e.timeStamp - t0) * f;
             lastT = tm;
-            tool.move(this.pt(ce, { pressure: ce.pressure > 0 ? ce.pressure : p0 + (p1 - p0) * f, time: tm }, r), ce);
+            // pressure / tilt always come from the frame's own event, interpolated: iPadOS may
+            // give in-between samples 0 or a placeholder 0.5, which alternates with the real value
+            tool.move(this.pt(ce, { pressure: p0 + (p1 - p0) * f, time: tm, tiltFrom: e }, r), ce);
           }
         } else tool.move(list.length ? this.pt(list[0]) : p, e);
       } else tool.move && tool.move(p, e);
