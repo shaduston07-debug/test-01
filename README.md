@@ -80,7 +80,7 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - Adjustments with live preview: HSB, color balance, levels, blur, sharpen, noise, posterize, threshold, gradient map, *brightness → opacity* (clean up scanned line art), *change line color*
 
 **3D layers** (Clip Studio-style):
-- **Drawing figures**: natural female and male bodies, sculpted from about 120 anatomical forms (muscles, bones under the skin, a face, fingers) into one continuous skinned surface that bends smoothly at every joint. There are ~60 joints, including the clavicles, spine, neck and every finger. *Body…* sets the sex, height, head-to-body ratio and build.
+- **Drawing figures**: realistic female and male bodies built on the MakeHuman base mesh (CC0, makehumancommunity.org). They are rigged with the app's skeleton and skinned automatically, so the surface bends smoothly at every joint. Optional **guide lines** (face and body centre line, eye line) help with drawing, like Clip Studio's figures; turn them off in *Body…*. If that mesh can't load, a sculpted body (about 120 anatomical forms) is used instead. There are ~60 joints, including the clavicles, spine, neck and every finger. *Body…* sets the sex, height, head-to-body ratio and build.
 - **Armour**: *Body…* can add fitted **medieval plate** or **sci-fi** armour. The plates are grown from the body's own surface and bend with it.
 - **Posing**: in *Pose* mode, tap a body part and drag to bend it. Dragging a hand or foot moves the whole limb (**IK**, toggle it off with the *IK* button). *Mirror* swaps left and right.
 - **Poses…**: 44 built-in poses (standing, action and dynamic, sitting and floor, expressive, riding, driving). *Hands…* gives 8 hand shapes.

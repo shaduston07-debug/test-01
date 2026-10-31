@@ -12,10 +12,11 @@ import * as A from './anatomy.js';
 import * as SC from './sculpt.js';
 import * as C from './creatures.js';
 import * as WD from './world3d.js';
+import * as MH from './mhbody.js';
 
 let T = null;
 async function three() {
-  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); A.setThree(T); M.setSculptor(A.sculptHuman); C.setThree(T); WD.setThree(T); }
+  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); A.setThree(T); MH.setThree(T); M.setSculptor(async (b, c) => { try { return await MH.buildHumanMH(b, c); } catch (e) { console.warn('realistic body unavailable, sculpting one', e); return A.sculptHuman(b, c); } }); C.setThree(T); WD.setThree(T); }
   return T;
 }
 
@@ -222,7 +223,7 @@ function syncObject(e) {
   e.node.position.set(...o.pos);
   e.node.quaternion.set(...o.quat);
   e.node.scale.setScalar(o.scale);
-  if (e.rig === 'human') M.applyPose(e.joints, o.pose || {}, M.HUMAN_REST, e.fig.H);
+  if (e.rig === 'human') M.applyPose(e.joints, o.pose || {}, e.fig.rest || M.HUMAN_REST, e.fig.H);
   else if (e.rig === 'dragon') M.applyPose(e.joints, o.pose || {}, M.DRAGON_REST, 1);
   else if (e.rig === 'creature') M.applyPose(e.joints, o.pose || {}, C.creatureRest(o.gen), 1);
   else if (e.joints) applyPose({ joints: e.joints }, o);
@@ -684,6 +685,7 @@ export function tool3d(app) {
         field('Head-to-body ratio', { min: 5, max: 9, step: 0.1, value: body.heads, fmt: (v) => v.toFixed(1) + ' heads', onInput: (v) => { body.heads = v; apply(); } }),
         field('Build', { min: 0, max: 1, step: 0.05, value: body.build, fmt: (v) => (v < 0.3 ? 'slim' : v < 0.7 ? 'average' : 'strong'), onInput: (v) => { body.build = v; apply(); } }),
         h('div', { class: 'stack' }, h('label', {}, 'Armour'), seg([['none', 'None'], ['medieval', 'Medieval'], ['scifi', 'Sci-fi']], o.outfit || 'none', (v) => { o.outfit = v; apply(); })),
+        switchRow('Guide lines (face & body centre, eye line)', body.guides !== false, (v) => { body.guides = v; o.body = { ...o.body, guides: v }; const m = e.fig && e.fig.mesh; if (m && m.userData.setGuides) { m.userData.setGuides(v); this.redraw(1); } }),
         h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), color)),
         actions: [{ label: 'Done', primary: true }], onClose: () => { clearTimeout(t); o.body = { ...body }; this.rebuild(this.selEntry() || e).then(() => { this.commit('Body', b); this.redraw(1); }); } });
     },
