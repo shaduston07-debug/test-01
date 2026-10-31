@@ -120,6 +120,16 @@
   <!-- Word card: spelling suggestions + book-like definition -->
   <div class="word-card" id="word-card" role="dialog" aria-label="Word details" hidden></div>
 
+  <!-- Shown under selected text: translate or check the whole selection -->
+  <div class="selection-bar" id="selection-bar" hidden>
+    <button data-sel="translate">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h8M8 3v2M6 5c0 4 3 7 6 8M10 5c0 4-3 8-6 9"/><path d="M13 21l4-9 4 9M14.5 18h5"/></svg>
+      Translate</button>
+    <button data-sel="spelling">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l3-9 3 9M5 13h4M13 12l3 3 6-7"/></svg>
+      Spelling<span class="sel-count"></span></button>
+  </div>
+
   <!-- Text colour and highlight -->
   <div class="menu colour-menu" id="colour-menu" role="menu" hidden></div>
 
@@ -198,6 +208,16 @@
         <button role="radio" data-width="760">Medium</button>
         <button role="radio" data-width="none">Full</button>
       </div>
+
+      <section class="claude-settings" id="claude-settings">
+        <h3 class="setting-section">Claude (optional)</h3>
+        <p class="modal-hint">With your own Anthropic API key, this app translates whole phrases into every language (Old Norse, Greek and argot included), solves handwritten maths and writes missing definitions. The key stays on this device and is only sent to Anthropic. Use is billed to your Anthropic account. Create a key at platform.claude.com.</p>
+        <form class="add-word" id="claude-key-form">
+          <input id="claude-key-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" aria-label="Anthropic API key">
+          <button type="submit" class="primary-btn">Save</button>
+        </form>
+        <p class="claude-key-status" id="claude-key-status"></p>
+      </section>
     </div>
   </div>
 
@@ -268,6 +288,7 @@
   <script src="js/lexicons/argot.js"></script>
   <script src="js/lexicons/lingala.js"></script>
   <script src="js/lexicons/tshiluba.js"></script>
+  <script src="js/phrase.js"></script>
   <script src="js/calc.js"></script>
   <script src="js/media.js"></script>
   <script src="js/blocks.js"></script>

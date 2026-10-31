@@ -27,6 +27,98 @@ const Cloud = (() => {
   const downloadsPromise = !available ? Promise.resolve(null) :
     window.claude.use('downloads').catch(() => null);
 
+  /* ---------- Claude with your own API key (installed app, websites) ---------- */
+
+  // Outside claude.ai, an Anthropic API key saved in Settings gives the same
+  // { json, limits } interface as claude.ai's `sample`, so phrase translation,
+  // Solve and Claude definitions work in the installed app too.
+  const KEY_STORE = 'inkwell.claudeKey';
+  const MODEL = 'claude-opus-5-5';
+  const EFFORT = { quick: 'low', default: 'medium', complex: 'high' };
+
+  function claudeKey() {
+    try { return localStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
+  }
+
+  function setClaudeKey(key) {
+    try {
+      if (key) localStorage.setItem(KEY_STORE, key);
+      else localStorage.removeItem(KEY_STORE);
+    } catch { /* storage blocked: nothing to remember */ }
+    window.dispatchEvent(new Event('inkwell:claude-changed'));
+  }
+
+  const failure = (code, message) => Object.assign(new Error(message), { code });
+
+  const blobToBase64 = blob => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+
+  // The reply's JSON, from the first { or [ to the matching end.
+  function parseJson(text) {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const body = fenced ? fenced[1] : text;
+    const start = body.search(/[{[]/);
+    if (start < 0) throw failure('invalid_json', 'No JSON in the reply');
+    const end = Math.max(body.lastIndexOf('}'), body.lastIndexOf(']'));
+    try {
+      return JSON.parse(body.slice(start, end + 1));
+    } catch {
+      throw failure('invalid_json', 'The reply was not valid JSON');
+    }
+  }
+
+  function keyAdapter(key) {
+    async function json(prompt, options = {}) {
+      const content = [];
+      for (const image of options.images || []) {
+        content.push({ type: 'image', source: { type: 'base64', media_type: image.type || 'image/png', data: await blobToBase64(image) } });
+      }
+      content.push({ type: 'text', text: prompt });
+      let res;
+      try {
+        res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': key,
+            'anthropic-version': '2026-10-21',
+            'anthropic-beta': 'server-side-fallback-2026-07-01',
+            // The key is the user's own and stays on their device.
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify({
+            model: MODEL,
+            max_tokens: 16000,
+            // If Claude declines, the API retries on Anthropic's recommended fallback model.
+            fallbacks: 'default',
+            output_config: { effort: EFFORT[options.modelTier] || 'medium' },
+            messages: [{ role: 'user', content }],
+          }),
+        });
+      } catch {
+        throw failure('network', 'Claude is out of reach');
+      }
+      if (res.status === 401 || res.status === 403) throw failure('not_granted', 'The Claude API key was refused');
+      if (res.status === 429) throw failure('rate_limited', 'Too many requests');
+      if (!res.ok) throw failure('upstream_error', 'Claude returned ' + res.status);
+      const message = await res.json();
+      if (message.stop_reason === 'refusal') throw failure('refused', 'Claude declined this request');
+      const text = (message.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+      return parseJson(text);
+    }
+    return {
+      json,
+      limits: async () => ({ maxPromptBytes: 262144, images: { maxCount: 20, maxInputBytes: 5e6, mediaTypes: ['image/png', 'image/jpeg'] } }),
+    };
+  }
+
+  // What answers "ask Claude": claude.ai's sample, else your key, else nothing.
+  const sample = () => (available ? samplePromise : Promise.resolve(claudeKey() ? keyAdapter(claudeKey()) : null));
+
   /* ---------- Notes & personal dictionary ---------- */
 
   const notesCollection = s => s.db.doc(s.base + '/notes').collection('items');
@@ -109,7 +201,9 @@ const Cloud = (() => {
   return {
     onClaude: available,   // opened as a claude.ai page
     store: () => storePromise,
-    sample: () => samplePromise,
+    sample,
+    claudeKey,
+    setClaudeKey,
     assets: () => assetsPromise,
     downloads: () => downloadsPromise,
     loadNotes,

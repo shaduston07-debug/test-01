@@ -8,6 +8,7 @@ A notes app in the style of Apple Notes, with a few extras:
   - A letters switch writes Old Norse, Latin, Greek and Lingala words with everyday a–z letters (*vordr*, *ensis*, *xiphos*) or with their own letters (*vǫrðr*, *ēnsis* with its long-vowel mark, *ξίφος*).
   - Typed an old word from memory, like *voror* or *xifos*? The spelling card suggests the real one.
   - Built-in glossaries work offline (about 270 Norse, 210 Latin, 185 Greek, 90 argot, 120 Lingala and 90 Tshiluba entries). The Lingala and Tshiluba lists are written without tone marks; check important words with a speaker or a dictionary. "More translations" uses Wiktionary, or Claude on claude.ai.
+- **Select text to translate or correct it.** Select a phrase (finger, pencil or mouse) and a **Translate · Spelling** bar appears under it. **Translate** translates the whole phrase at once ("I said it was good" → Lingala *Nalobaki ete ezalaki malamu*) into Old Norse, Latin, Greek, argot, Lingala, Tshiluba, English or French; tap a result to put it in your note, and tap it later to swap it or put the original back. **Spelling** lists every misspelled word in the selection with suggestions. Phrase translations come from Claude (on claude.ai, or in the app with your own API key under **Appearance › Claude**), otherwise from Google Translate's free endpoint (Latin, Lingala, Tshiluba, English, French), otherwise word by word from the built-in lists, marked as rough. Words from the built-in lists (Lingala, Tshiluba, Latin …) are never flagged as spelling mistakes.
 - **Groups.** Organise notes into coloured groups from the sidebar (+ to create, ⋯ to rename, recolour or delete). The folder button on the toolbar puts the open note into a group.
 - **Appearance.** Automatic, light or dark theme, and nine accent colours.
 - **Page.** Plain, lined, grid or dotted paper; seven paper colours; five fonts (System, Book, Garamond, Typewriter, Handwriting); four text sizes; three page widths.
@@ -62,7 +63,8 @@ python3 -m http.server 8000
 | Translation engine (Wiktionary / Claude lookups, Greek transliteration) | `js/lexicon.js` |
 | Glossaries: Old Norse, Latin, Ancient Greek, argot, Lingala, Tshiluba | `js/lexicons/` |
 | Typed-sum calculator | `js/calc.js` |
-| claude.ai sync and Claude lookups | `js/cloud.js` |
+| claude.ai sync, Claude lookups, Claude with your own API key | `js/cloud.js` |
+| Whole-phrase translation | `js/phrase.js` |
 | Home-screen app: manifest, icons, offline cache | `manifest.webmanifest`, `icons/`, `sw.js` |
 | Native iPad/iPhone app and its .ipa build | `ios/`, `.github/workflows/ios.yml` |
 | Pencil / stylus sketching | `js/sketch.js` |

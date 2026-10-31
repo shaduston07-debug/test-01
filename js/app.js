@@ -477,9 +477,12 @@
 
   // Whether Claude can be asked (only when opened on claude.ai).
   let canAskClaude = false;
-  Cloud.sample().then(s => { canAskClaude = !!s; });
+  const refreshClaude = () => Cloud.sample().then(s => { canAskClaude = !!s; });
+  refreshClaude();
+  window.addEventListener('inkwell:claude-changed', refreshClaude);
 
   function openCard(hit, misspelled) {
+    if (hit.xlat && hit.xlat.dataset.phrase) return openPhraseCard(hit.range, null, hit.xlat);
     active = { ...hit, misspelled, more: {} };
     const token = ++cardToken;
     setLookupHighlight(hit.range);
@@ -744,6 +747,222 @@
     }
   }
 
+  /* ---------- Selected text: translate the whole phrase, or check its spelling ---------- */
+
+  const PHRASE_TAB_KEY = 'inkwell.phraseTab';
+  const selectionBar = $('#selection-bar');
+  let selectionRange = null;
+  let selectionTimer = null;
+
+  // Leave out spaces at either end of a selection ("I said " → "I said").
+  function trimRange(range) {
+    const r = range.cloneRange();
+    while (r.startContainer.nodeType === Node.TEXT_NODE && r.startOffset < r.startContainer.length &&
+           /\s/.test(r.startContainer.data[r.startOffset]) && r.toString().trim()) r.setStart(r.startContainer, r.startOffset + 1);
+    while (r.endContainer.nodeType === Node.TEXT_NODE && r.endOffset > 0 &&
+           /\s/.test(r.endContainer.data[r.endOffset - 1]) && r.toString().trim()) r.setEnd(r.endContainer, r.endOffset - 1);
+    return r;
+  }
+
+  // Misspelled words that touch the range (a half-selected word counts).
+  function misspellingsIn(range) {
+    const found = [];
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!range.intersectsNode(node)) continue;
+      if (node.parentElement.closest(XLAT) || node.parentElement.closest('[contenteditable="false"]')) continue;
+      for (const m of node.data.matchAll(WORD_RE)) {
+        const end = m.index + m[0].length;
+        const before = node === range.startContainer ? end <= range.startOffset : range.comparePoint(node, end) < 0;
+        const after = node === range.endContainer ? m.index >= range.endOffset : range.comparePoint(node, m.index) > 0;
+        if (before || after || SpellCheck.isCorrect(m[0])) continue;
+        const r = document.createRange();
+        r.setStart(node, m.index);
+        r.setEnd(node, end);
+        found.push({ word: m[0], range: r });
+      }
+    }
+    return found;
+  }
+
+  function hideSelectionBar() {
+    selectionBar.hidden = true;
+  }
+
+  function updateSelectionBar() {
+    const sel = getSelection();
+    if (!sel.rangeCount || sel.isCollapsed || !editor.contains(sel.anchorNode) || !editor.contains(sel.focusNode) ||
+        (!card.hidden && active && active.phrase)) return hideSelectionBar();
+    const range = trimRange(sel.getRangeAt(0));
+    const text = range.toString();
+    if (!/\p{L}/u.test(text) || text.length > 3000) return hideSelectionBar();
+    selectionRange = range;
+    const issues = SpellCheck.ready ? misspellingsIn(range).length : 0;
+    selectionBar.querySelector('.sel-count').textContent = issues ? ` (${issues})` : '';
+    selectionBar.querySelector('[data-sel="spelling"]').classList.toggle('has-issues', issues > 0);
+    selectionBar.hidden = false;
+    const box = range.getBoundingClientRect();
+    let top = box.bottom + 12;
+    if (top + selectionBar.offsetHeight > window.innerHeight - 12) top = box.top - selectionBar.offsetHeight - 12;
+    selectionBar.style.top = Math.max(8, top) + 'px';
+    selectionBar.style.left = Math.max(8, Math.min(box.left + box.width / 2 - selectionBar.offsetWidth / 2,
+      window.innerWidth - selectionBar.offsetWidth - 8)) + 'px';
+  }
+
+  document.addEventListener('selectionchange', () => {
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(updateSelectionBar, 250);
+  });
+  selectionBar.addEventListener('pointerdown', e => e.preventDefault());   // keep the selection
+  selectionBar.addEventListener('mousedown', e => e.preventDefault());
+  selectionBar.addEventListener('click', e => {
+    const btn = e.target.closest('[data-sel]');
+    if (btn && selectionRange) openPhraseCard(selectionRange, btn.dataset.sel);
+  });
+
+  const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+  // span: an earlier phrase translation being reopened.
+  function openPhraseCard(range, tab, span = null) {
+    const text = range.toString();
+    active = {
+      phrase: true, range, word: text, xlat: span, misspelled: false, results: {},
+      text: (span ? span.dataset.original : text).trim(),
+    };
+    const token = ++cardToken;
+    hideSelectionBar();
+    setLookupHighlight(range);
+    card.innerHTML = `
+      <div class="phrase-head">
+        <p class="card-label">${span ? 'Translated phrase' : 'Selected text'}</p>
+        <p class="phrase-text"></p>
+        ${span ? '<button class="action subtle restore" data-action="restore">↩ Put back the original</button>' : ''}
+      </div>
+      <div class="card-tabs" role="tablist">
+        ${span ? '' : '<button role="tab" data-ptab="spelling">Spelling</button>'}
+        ${Phrase.TARGETS.map(t => `<button role="tab" data-ptab="${t.id}">${esc(t.id === 'norse' ? 'Norse' : t.id === 'greek' ? 'Greek' : t.name)}</button>`).join('')}
+      </div>
+      <div class="phrase-body"></div>`;
+    card.querySelector('.phrase-text').textContent = '“' + truncate(active.text, 180) + '”';
+    showCard();
+    switchPhraseTab(span ? spanLang(span) : tab === 'spelling' ? 'spelling' : pref(PHRASE_TAB_KEY, 'lingala'), token);
+  }
+
+  function switchPhraseTab(tab, token = cardToken) {
+    active.ptab = tab;
+    card.querySelectorAll('[data-ptab]').forEach(b => {
+      b.setAttribute('aria-selected', b.dataset.ptab === tab);
+      if (b.dataset.ptab === tab) b.scrollIntoView({ block: 'nearest', inline: 'center' });
+    });
+    if (tab === 'spelling') return renderPhraseSpelling();
+    setPref(PHRASE_TAB_KEY, tab);
+    if (active.results[tab]) return renderPhraseResult(tab);
+    const body = card.querySelector('.phrase-body');
+    const t = Phrase.TARGETS.find(x => x.id === tab);
+    body.innerHTML = `<p class="phrase-empty">Translating into ${esc(t.name)}…</p>`;
+    positionCard();
+    Phrase.translate(active.text, tab).then(result => {
+      if (token !== cardToken) return;
+      active.results[tab] = result;
+      if (active.ptab === tab) renderPhraseResult(tab);
+    }).catch(err => {
+      if (token !== cardToken || active.ptab !== tab) return;
+      const why = {
+        not_granted: 'The Claude API key was refused. Check it under Appearance › Claude.',
+        rate_limited: 'Claude is busy right now. Try again in a minute.',
+        refused: 'Claude declined to translate this.',
+      }[err && err.code] || 'The translator is out of reach. Check your internet connection.';
+      body.innerHTML = `<p class="phrase-empty">${why}</p><button class="action subtle" data-action="retry-phrase">Try again</button>`;
+      positionCard();
+    });
+  }
+
+  function renderPhraseSpelling() {
+    const body = card.querySelector('.phrase-body');
+    const issues = misspellingsIn(active.range).slice(0, 12);
+    active.issues = issues;
+    if (!issues.length) {
+      body.innerHTML = '<p class="phrase-empty">No spelling mistakes in the selection.</p>';
+      return positionCard();
+    }
+    body.innerHTML = issues.map((issue, i) => `
+      <div class="phrase-issue">
+        <span class="misspelled-word">${esc(issue.word)}</span>
+        <div class="suggestions" data-issue="${i}"><span class="muted">…</span></div>
+      </div>`).join('') +
+      '<div class="card-actions"><button class="action subtle" data-action="add-all">Add all to Personal Dictionary</button></div>';
+    positionCard();
+    // Suggestions take a moment per word; fill them in one at a time.
+    const token = cardToken;
+    issues.forEach((issue, i) => setTimeout(() => {
+      if (token !== cardToken || active.ptab !== 'spelling') return;
+      const box = card.querySelector(`[data-issue="${i}"]`);
+      if (!box) return;
+      const options = SpellCheck.suggest(issue.word).slice(0, 4);
+      box.innerHTML = options.length
+        ? options.map(s => `<button class="suggestion" data-fix="${i}" data-to="${esc(s)}">${esc(s)}</button>`).join('')
+        : '<span class="muted">No suggestions</span>';
+      positionCard();
+    }, 0));
+  }
+
+  function fixIssue(i, replacement) {
+    const issue = active.issues && active.issues[i];
+    if (!issue || issue.range.toString() !== issue.word) return renderPhraseSpelling();
+    const node = issue.range.startContainer;
+    node.replaceData(issue.range.startOffset, issue.word.length, replacement);   // the selection's range follows along
+    active.word = active.range.toString();
+    active.text = active.word.trim();
+    active.results = {};
+    card.querySelector('.phrase-text').textContent = '“' + truncate(active.text, 180) + '”';
+    saveCurrent();
+    scanSpelling();
+    renderPhraseSpelling();
+  }
+
+  function renderPhraseResult(id) {
+    const body = card.querySelector('.phrase-body');
+    const result = active.results[id];
+    const lang = Lexicon.get(id);
+    const options = result.options.map((o, i) => {
+      const shown = lang ? lettersFor(id, o.text) : o.text;
+      const other = lang && lang.letters ? (shown === o.text ? Lexicon.plain(id, o.text) : o.text) : '';
+      return `
+        <button class="xlat-option phrase-option" data-phrase-option="${i}">
+          <span class="xlat-word"${lang ? ` lang="${lang.htmlLang}"` : ''}>${esc(shown)}</span>
+          ${other && other !== shown ? `<span class="xlat-alt">${esc(other)}</span>` : ''}
+          ${o.note ? `<span class="xlat-gloss">${esc(o.note)}</span>` : ''}
+        </button>`;
+    }).join('');
+    const letters = lang && lang.letters ? `
+      <div class="letters phrase-letters" role="group" aria-label="Letters to write with">
+        <button data-letters="plain" aria-pressed="${plainLetters(id)}">${lang.letters.plain}</button>
+        <button data-letters="native" aria-pressed="${!plainLetters(id)}">${lang.letters.native}</button>
+      </div>` : '';
+    const note = result.rough
+      ? 'Rough: word by word from the built-in lists, not a real translation. For whole phrases, add a Claude API key under Appearance › Claude.'
+      : result.source === 'Google Translate'
+        ? 'Translated by Google Translate. Machine translation: check anything important.'
+        : 'Translated by Claude. Check anything important with a fluent speaker.';
+    body.innerHTML = `${letters}<div class="phrase-options">${options}</div>
+      <p class="xlat-note">${note} Tap a translation to put it in your note.</p>`;
+    positionCard();
+  }
+
+  function insertPhrase(i) {
+    const id = active.ptab;
+    const option = active.results[id].options[i];
+    const lang = Lexicon.get(id);
+    const shown = lang ? lettersFor(id, option.text) : option.text;
+    const text = matchCase(active.text, shown);
+    if (!lang) return replaceActive(text);   // English or French: ordinary text (undo with Ctrl/⌘ Z)
+    const original = active.xlat ? active.xlat.dataset.original : active.text;
+    replaceActive(
+      `<span class="xlat" lang="${lang.htmlLang}" data-lang="${id}" data-phrase="1" data-word="${esc(option.text)}"` +
+      ` data-original="${esc(original)}" data-text="${esc(text)}" title="${esc(lang.name)}: ${esc(option.text)} (for “${esc(original)}”)">${esc(text)}</span>`,
+      true);
+  }
+
   /* ---------- Card placement ---------- */
 
   function showCard() {
@@ -814,6 +1033,21 @@
   card.addEventListener('click', e => {
     const btn = e.target.closest('button');
     if (!btn || !active) return;
+    if (active.phrase) {
+      if (btn.dataset.ptab) return switchPhraseTab(btn.dataset.ptab);
+      if (btn.dataset.fix !== undefined) return fixIssue(+btn.dataset.fix, btn.dataset.to);
+      if (btn.dataset.phraseOption !== undefined) return insertPhrase(+btn.dataset.phraseOption);
+      if (btn.dataset.letters) {
+        setPref('inkwell.letters.' + active.ptab, btn.dataset.letters);
+        return renderPhraseResult(active.ptab);
+      }
+      if (btn.dataset.action === 'add-all') {
+        (active.issues || []).forEach(issue => SpellCheck.addPersonal(issue.word));
+        flash('Added to your Personal Dictionary');
+        return renderPhraseSpelling();
+      }
+      if (btn.dataset.action === 'retry-phrase') return switchPhraseTab(active.ptab);
+    }
     if (btn.dataset.replace) return replaceActive(btn.dataset.replace);
     if (btn.dataset.xlat) return insertTranslation(btn.dataset.xlat, btn.dataset.lang, btn.dataset.gloss);
     if (btn.dataset.tab) return switchTab(btn.dataset.tab);
@@ -920,6 +1154,7 @@
       closeAppearance();
       closeGroupMenu();
       closeShare();
+      hideSelectionBar();
       colourMenu.hidden = true;
       Blocks.deselect();
     }
@@ -931,6 +1166,7 @@
   editorScroll.addEventListener('scroll', () => {
     closeCard();
     hideMath();
+    hideSelectionBar();
   });
 
   /* ---------- Typed sums: "12 × 7 =" ---------- */
@@ -1320,6 +1556,33 @@
   applyAppearance();
   applyPage();
 
+  /* Claude with your own API key (not needed, and hidden, on claude.ai) */
+
+  const claudeSettings = $('#claude-settings');
+  claudeSettings.hidden = Cloud.onClaude;
+
+  function renderClaudeKey() {
+    const key = Cloud.claudeKey();
+    $('#claude-key-status').textContent = key
+      ? `Key saved (${key.slice(0, 10)}\u2026${key.slice(-4)}). To remove it, save an empty field.`
+      : 'No key saved. Phrases use Google Translate where it can, otherwise the built-in word lists.';
+  }
+
+  $('#claude-key-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const input = $('#claude-key-input');
+    const key = input.value.trim();
+    if (key && !key.startsWith('sk-ant-')) {
+      $('#claude-key-status').textContent = 'That doesn\u2019t look like an Anthropic API key (they start with \u201Csk-ant-\u201D).';
+      return;
+    }
+    Cloud.setClaudeKey(key);
+    input.value = '';
+    renderClaudeKey();
+    flash(key ? 'Claude key saved on this device' : 'Claude key removed');
+  });
+  renderClaudeKey();
+
   /* ---------- Text colour and highlight ---------- */
 
   const TEXT_COLOURS = [
@@ -1611,6 +1874,7 @@
   // Parse the dictionary after the first paint so the app appears instantly.
   setTimeout(() => {
     SpellCheck.init();
+    SpellCheck.addKnown(Lexicon.words());   // Lingala, Latin … words aren't spelling mistakes
     scanSpelling();
     if (supportsHighlights) status.classList.remove('visible');
   }, 30);

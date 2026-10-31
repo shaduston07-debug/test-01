@@ -1587,3 +1587,57 @@ html.native-app .sketch-bar { padding-top: calc(8px + env(safe-area-inset-top, 0
   .format-group { order: 2; flex: 1 0 100%; flex-wrap: wrap; overflow: visible; }
   .toolbar-right { margin-left: auto; }
 }
+
+/* ---------- Selected text: Translate / Spelling ---------- */
+
+.selection-bar {
+  position: fixed;
+  z-index: 24;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--sidebar-border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.selection-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+.selection-bar button:hover { background: var(--hover); }
+.selection-bar svg { width: 18px; height: 18px; color: var(--accent); }
+.selection-bar .has-issues svg, .selection-bar .has-issues .sel-count { color: var(--misspelled); }
+
+/* Phrase card */
+.phrase-head { padding: 14px 16px 2px; font-family: var(--sans); }
+.phrase-text {
+  margin: 4px 0 6px;
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.35;
+  color: var(--ink);
+}
+.phrase-body { padding: 10px 16px 14px; font-family: var(--serif); }
+.phrase-empty { margin: 4px 0 8px; font-size: 16px; color: var(--ink-soft); }
+.phrase-issue { padding: 8px 0; border-bottom: 1px solid var(--paper-edge); font-family: var(--sans); }
+.phrase-issue .misspelled-word { display: inline-block; margin: 0 0 6px; font-size: 16px; }
+.phrase-issue .suggestions { margin-bottom: 0; }
+.phrase-body .card-actions { margin-top: 10px; font-family: var(--sans); }
+.phrase-options { display: grid; gap: 4px; }
+.phrase-option .xlat-word { font-size: 19px; line-height: 1.3; }
+.phrase-letters { float: right; margin: 0 0 6px 8px; }
+
+/* Claude key setting */
+.claude-key-status { margin: 0; font-size: 13px; color: var(--muted); }

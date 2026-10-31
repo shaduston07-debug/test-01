@@ -21,6 +21,7 @@ const SpellCheck = (() => {
   const checkCache = new Map();
   const suggestCache = new Map();
   const ignored = new Set();          // "Ignore" for this session only
+  const known = new Set();            // words from the translation lists (Lingala, Latin …)
   let personal = loadPersonal();      // Map<lowercase, word as typed>
   const listeners = new Set();
 
@@ -59,7 +60,7 @@ const SpellCheck = (() => {
     const word = normalize(raw);
     if (shouldSkip(word)) return true;
     const lower = word.toLowerCase();
-    if (personal.has(lower) || ignored.has(lower) || MODERN_WORDS.has(lower)) return true;
+    if (personal.has(lower) || ignored.has(lower) || MODERN_WORDS.has(lower) || known.has(lower)) return true;
     if (!checkCache.has(word)) {
       // Typo.js doesn't know possessives of every word, so accept "word's" if "word" is fine.
       const ok = typo.check(word) || (/'s$/i.test(word) && typo.check(word.slice(0, -2)));
@@ -85,7 +86,10 @@ const SpellCheck = (() => {
         const key = c.toLowerCase();
         if (!byKey.has(key) || c === key) byKey.set(key, c);
       }
-      const rank = s => editDistance(s.toLowerCase(), lower) * 2 + (s[0].toLowerCase() === lower[0] ? 0 : 1);
+      // Closest first; then same first letter; names ("Asa") after ordinary words when you typed lowercase.
+      const typedLower = word === lower;
+      const rank = s => editDistance(s.toLowerCase(), lower) * 4 + (s[0].toLowerCase() === lower[0] ? 0 : 1) +
+        (typedLower && s !== s.toLowerCase() ? 2 : 0);
       const ranked = [...byKey.values()]
         .map((s, i) => ({ s, i, r: rank(s) }))
         .sort((a, b) => a.r - b.r || a.i - b.i)
@@ -104,20 +108,21 @@ const SpellCheck = (() => {
     return suggestion;
   }
 
+  // Edit distance where swapping two neighbouring letters ("wsa" → "was") costs 1.
   function editDistance(a, b) {
     if (Math.abs(a.length - b.length) > 3) return 4;
-    const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+    const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
     for (let i = 1; i <= a.length; i++) {
-      let prev = row[0];
-      row[0] = i;
       for (let j = 1; j <= b.length; j++) {
-        const tmp = row[j];
-        row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
-        prev = tmp;
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
       }
     }
-    return row[b.length];
+    return d[a.length][b.length];
   }
+
 
   function addPersonal(raw) {
     const word = normalize(raw.trim());
@@ -149,6 +154,12 @@ const SpellCheck = (() => {
     savePersonal();
   }
 
+  // Words of other languages that should never be flagged.
+  function addKnown(words) {
+    for (const w of words) known.add(normalize(w).toLowerCase());
+    checkCache.clear();
+  }
+
   function ignore(raw) {
     ignored.add(normalize(raw).toLowerCase());
     listeners.forEach(fn => fn());
@@ -165,6 +176,7 @@ const SpellCheck = (() => {
     suggest,
     addPersonal,
     merge,
+    addKnown,
     removePersonal,
     ignore,
     list,

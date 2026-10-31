@@ -194,5 +194,18 @@ At most 8 words. If there is no good equivalent, reply {"words": []}.`, { modelT
     return lang.cache.get(key);
   }
 
-  return { register, get, list, plain, translate, similar, more };
+  // Every single word in the lists, as written and in a–z letters (for the spell-checker).
+  function words() {
+    const out = new Set();
+    for (const lang of languages.values()) {
+      for (const entries of lang.byKey.values()) {
+        for (const e of entries) {
+          for (const w of [e.word, lang.toPlain(e.word)]) w.split(/\s+/).forEach(part => part && out.add(part));
+        }
+      }
+    }
+    return out;
+  }
+
+  return { register, get, list, plain, translate, similar, more, words };
 })();

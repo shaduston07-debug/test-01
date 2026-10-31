@@ -3,7 +3,7 @@
  * are served from a cache and refreshed in the background. Dictionary and
  * Wiktionary lookups still go to the network.
  */
-const CACHE = 'inkwell-v3';
+const CACHE = 'inkwell-v4';
 const SHELL = [
   './',
   'index.html',
@@ -19,6 +19,7 @@ const SHELL = [
   'js/lexicons/argot.js',
   'js/lexicons/lingala.js',
   'js/lexicons/tshiluba.js',
+  'js/phrase.js',
   'js/calc.js',
   'js/media.js',
   'js/blocks.js',

@@ -277,11 +277,13 @@ const Sketch = (() => {
   let solution = null;
 
   // Only shown where Claude can be asked and can look at pictures.
-  Cloud.sample().then(async sample => {
-    if (!sample) return;
-    const limits = await Promise.resolve().then(() => sample.limits()).catch(() => null);
+  async function refreshSolve() {
+    const sample = await Cloud.sample();
+    const limits = sample ? await Promise.resolve().then(() => sample.limits()).catch(() => null) : null;
     solveButton.hidden = !(limits && limits.images);
-  });
+  }
+  refreshSolve();
+  window.addEventListener('inkwell:claude-changed', refreshSolve);
 
   // The sketch as a picture: dark ink on white, whatever the theme.
   function snapshot() {
