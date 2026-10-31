@@ -27,7 +27,7 @@ const SETTINGS_VERSION = 2;
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 550,
   fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
-  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35,
+  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35, pressureSource: 'auto',
 };
 
 class App {
@@ -56,6 +56,7 @@ class App {
     this.symmetry = { mode: 'off', count: 6 };
     this.brushes = [...DEFAULT_BRUSHES, ...IBIS_PRESETS];
     this.penSeen = store.prefs.get('penSeen', false);
+    this.penNoPressure = store.prefs.get('penNoPressure', false);
     this.doc = null;
     this.tools = this.makeTools();
     this.timeline = new Timeline(this);
@@ -395,16 +396,56 @@ class App {
     if (e.pointerType === 'pen') {
       // iPadOS sometimes reports 0 pressure (pen-down, some coalesced samples): reuse the last real value
       let pr = raw && raw.pressure != null ? raw.pressure : e.pressure;
+      if (e.buttons && raw == null) this.notePenPressure(e.pressure);
       if (!(pr > 0)) pr = this.penPressure || 0.35;
       else if (e.buttons) this.penPressure = pr;
-      pressure = Math.pow(clamp(pr, 0.01, 1), this.settings.pressureGamma);
-      let t = 0;
+      let t = 0, hasTilt = false;
       const te = (raw && raw.tiltFrom) || e;
-      if (typeof te.altitudeAngle === 'number' && te.altitudeAngle > 0) t = 1 - te.altitudeAngle / (Math.PI / 2);
-      else if (te.tiltX || te.tiltY) t = Math.min(1, Math.hypot(te.tiltX, te.tiltY) / 90);
+      if (typeof te.altitudeAngle === 'number' && te.altitudeAngle > 0) { t = 1 - te.altitudeAngle / (Math.PI / 2); hasTilt = true; }
+      else if (te.tiltX || te.tiltY) { t = Math.min(1, Math.hypot(te.tiltX, te.tiltY) / 90); hasTilt = true; }
       tilt = clamp((t - 0.4) / 0.6, 0, 1);
+      // styluses without pressure (Apple Pencil USB-C, Logitech Crayon, generic pens) can
+      // drive "pressure" from tilt or speed instead
+      const src = this.pressureSource();
+      const time = raw && raw.time != null ? raw.time : e.timeStamp;
+      if (src === 'tilt') pr = hasTilt ? 0.25 + 0.75 * clamp((t - 0.17) / 0.55, 0, 1) : 0.6; // upright ≈ fine, leaning ≈ full
+      else if (src === 'speed') pr = this.speedPressure(sx, sy, time);
+      else if (src === 'off') pr = 1;
+      pressure = Math.pow(clamp(pr, 0.01, 1), this.settings.pressureGamma);
     }
     return { x: d.x, y: d.y, sx, sy, pressure, tilt, type: e.pointerType, time: raw && raw.time != null ? raw.time : e.timeStamp };
+  }
+
+  // 'pressure' | 'tilt' | 'speed' | 'off'. Auto: real pressure if the pen reports it, else tilt.
+  pressureSource() {
+    const s = this.settings.pressureSource || 'auto';
+    return s !== 'auto' ? s : this.penNoPressure ? 'tilt' : 'pressure';
+  }
+  // per stroke, note whether the pen's pressure ever changes; two flat strokes = no pressure sensor
+  notePenPressure(v) {
+    const st = this.penStat || (this.penStat = { n: 0, min: 1, max: 0 });
+    if (v > 0) { st.n++; st.min = Math.min(st.min, v); st.max = Math.max(st.max, v); }
+  }
+  endPenStat() {
+    const st = this.penStat; this.penStat = null;
+    if (!st || st.n < 12) return;
+    if (st.max - st.min < 0.01) {
+      this.flatStrokes = (this.flatStrokes || 0) + 1;
+      if (this.flatStrokes >= 2 && !this.penNoPressure) {
+        this.penNoPressure = true; store.prefs.set('penNoPressure', true);
+        if ((this.settings.pressureSource || 'auto') === 'auto') toast('Your pen doesn’t report pressure — tilt now sets the line width (lean = thicker). Change it in Settings › Pen pressure from', 6000);
+      }
+    } else { this.flatStrokes = 0; if (this.penNoPressure) { this.penNoPressure = false; store.prefs.set('penNoPressure', false); } }
+  }
+  // simulated pressure from pen speed: slow = heavy, fast = light (screen px per ms)
+  speedPressure(sx, sy, t) {
+    const L = this.spdLast;
+    if (L && t > L.t) {
+      const v = Math.hypot(sx - L.sx, sy - L.sy) / (t - L.t);
+      this.spdV += (v - this.spdV) * (1 - Math.exp(-(t - L.t) / 40));
+    } else if (!L) this.spdV = 0;
+    this.spdLast = { sx, sy, t };
+    return clamp(1.05 - this.spdV * 0.35, 0.3, 1);
   }
 
   touchesDown() { let n = 0; for (const p of this.ptrs.values()) if (p.type === 'touch') n++; return n; }
@@ -421,6 +462,7 @@ class App {
     UI.closePopover();
     try { this.canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     this.lastMoveTime = e.timeStamp;
+    if (e.pointerType === 'pen' && !this.pendingStroke) { this.spdLast = null; this.penStat = null; }
     const p = this.pt(e);
     if (this.recordPen) this.logPen('down', e);
     if (this.pendingStroke) {
@@ -525,6 +567,7 @@ class App {
   onUp(e, cancelled) {
     if (!this.doc) return;
     if (this.recordPen) this.logPen(cancelled ? 'cancel' : 'up', e);
+    if (e.pointerType === 'pen') this.endPenStat();
     const rec = this.ptrs.get(e.pointerId);
     this.ptrs.delete(e.pointerId);
     const p = this.pt(e);

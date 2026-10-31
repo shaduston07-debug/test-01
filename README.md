@@ -112,6 +112,8 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **Steady ink** (on by default, Actions › Prefs): pens and markers always lay down solid ink — pressure and speed never fade them, a light touch still gives a clean line (30–45% of full width minimum), pressure follows a soft curve and only changes the width gently, and edges stay crisp. Pencils, chalk, airbrushes and paint brushes keep their own pressure behaviour.
 
+**Styluses without pressure** (Apple Pencil USB-C, Logitech Crayon, most other pens): detected automatically after a couple of strokes — tilt then sets the line width (lean = thicker). Settings › Pen pressure from: Auto, Pencil pressure, Tilt, Speed or Off.
+
 **Rapid undo / redo**: hold two fingers on the canvas to keep undoing, three to keep redoing (or hold the undo / redo buttons) — it starts after a short delay (adjustable, like Procreate's Rapid Undo Delay) and speeds up from 15 to 120 steps a second, with a step counter. Up to 250 undo steps.
 
 **Reference window**: Actions › Canvas › Reference toggles a floating, resizable companion window — *Canvas* shows a live overview of the whole artwork, *Image* shows a reference picture you import. Pinch / scroll to zoom, drag to pan, double-tap to reset, touch and hold to pick a colour.
