@@ -52,6 +52,10 @@ export class StrokeEngine {
       this.pattern = this.bctx.createPattern(this.grain, 'repeat');
     }
     this.bounds = emptyRect(); this.dirty = emptyRect(); this.frame = emptyRect();
+    // end taper: the last stamps are logged so the stroke's end can be re-drawn to a point on lift
+    const et = this.kind === 'smudge' ? 0 : (brush.endTaper ?? (brush.taperAlways ? brush.taper || 0 : 0));
+    this.endLen = et > 0 ? (et * this.size * 4 + 1) / this.scale : 0;
+    this.tail = []; this.tailHead = 0;
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
     this.speed = 0; this.lastTime = null;
     this.sym = this.symTransforms(o.symmetry);
@@ -211,6 +215,7 @@ export class StrokeEngine {
     let ang = (b.rotation || 0) * Math.PI / 180 + (b.follow ? this.dir : 0) + (Math.random() - 0.5) * TAU * (b.angleJitter || 0);
     if (size < 1) { alpha *= size; size = 1; }
     const pad = size * 0.75 + 2;
+    if (this.endLen) this.logStamp(x, y, size, alpha, ang);
     if (!this.sym) {
       // common case: no symmetry — no arrays, no closures
       if (this.kind === 'smudge') this.smudgeStamp(x, y, size, alpha); else this.drawStamp(x, y, size, alpha, ang);
@@ -224,6 +229,48 @@ export class StrokeEngine {
       growRect(this.bounds, sx, sy, pad); growRect(this.dirty, sx, sy, pad); growRect(this.frame, sx, sy, pad);
     }
     return base;
+  }
+
+  logStamp(x, y, size, alpha, ang) {
+    const d = this.travelNow ?? this.travel, T = this.tail;
+    T.push(x, y, size, alpha, ang, d);
+    // keep only what a lift could still re-draw (taper length + a couple of stamp widths)
+    const keep = d - this.endLen - size * 2 - 4;
+    while (this.tailHead < T.length && T[this.tailHead + 5] < keep) this.tailHead += 6;
+    if (this.tailHead > 6000) { T.splice(0, this.tailHead); this.tailHead = 0; }
+  }
+  // Re-draw the end of the stroke narrowing to a point (called on lift, before the stroke is
+  // committed). Only the area under the tail's stamps is cleared and repainted, so the rest
+  // of the stroke is untouched.
+  taperEnd() {
+    const T = this.tail, total = this.travel, L = this.endLen;
+    if (!L || T.length - this.tailHead < 12) return;
+    const ctx = this.bctx, rr = (i) => T[i + 2] * Math.max(1, this.brush.roundness || 1) * 0.75 + 1.5;
+    let first = -1;
+    for (let i = this.tailHead; i < T.length; i += 6) if (total - T[i + 5] < L) { first = i; break; }
+    if (first < 0) return;
+    const sym = this.sym || [null];
+    const path = new Path2D();
+    for (let i = first; i < T.length; i += 6) for (const f of sym) {
+      const [x, y] = f ? f(T[i], T[i + 1], 0) : [T[i], T[i + 1]];
+      path.moveTo(x + rr(i), y); path.arc(x, y, rr(i), 0, TAU);
+    }
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'destination-out'; ctx.globalAlpha = 1; ctx.fill(path);
+    ctx.restore();
+    ctx.save(); ctx.clip(path);
+    for (let i = this.tailHead; i < T.length; i += 6) {
+      const rem = total - T[i + 5];
+      let size = T[i + 2], alpha = T[i + 3];
+      if (rem < L) { const u = Math.max(0, rem / L); size *= 0.1 + 0.9 * Math.sqrt(u); }
+      if (size < 1) { alpha *= size; size = 1; }
+      for (const f of sym) {
+        if (f) { const [x, y, a] = f(T[i], T[i + 1], T[i + 4]); this.drawStamp(x, y, size, alpha, a); }
+        else this.drawStamp(T[i], T[i + 1], size, alpha, T[i + 4]);
+      }
+    }
+    ctx.restore();
+    this.markFrame();
   }
 
   drawStamp(x, y, size, alpha, ang) {
@@ -356,6 +403,7 @@ export class StrokeEngine {
       const q = this.q, n = q.length;
       this.walk({ x: (q[n - 2].x + q[n - 1].x) / 2, y: (q[n - 2].y + q[n - 1].y) / 2, p: (q[n - 2].p + q[n - 1].p) / 2, t: q[n - 1].t }, q[n - 1]);
     }
+    if (this.kind !== 'smudge') this.taperEnd();
     const rect = clampRect(this.bounds, this.W, this.H);
     // the preview is discarded now; only the selection mask still has to be applied
     if (this.kind !== 'smudge' && this.o.selection && rect.w > 0 && rect.h > 0) {

@@ -82,6 +82,21 @@ function roundTip(hardness) {
   });
 }
 
+// Dry ink nib: a round tip whose edge wobbles a little and thins out in specks, so dense,
+// randomly rotated stamps give the slightly rough, soft-edged line of a real ink pen.
+function inkTip() {
+  const rnd = seeded(11), ph = [rnd() * 6.3, rnd() * 6.3, rnd() * 6.3], R = TIP_RES;
+  const speck = new Float32Array(R * R); for (let i = 0; i < speck.length; i++) speck[i] = rnd();
+  return maskFromFn(R, (x, y) => {
+    const a = Math.atan2(y, x), d = Math.hypot(x, y);
+    const r = 0.9 + 0.035 * Math.sin(3 * a + ph[0]) + 0.025 * Math.sin(7 * a + ph[1]) + 0.02 * Math.sin(13 * a + ph[2]);
+    if (d <= r - 0.16) return 1;
+    const t = clamp((d - (r - 0.16)) / 0.26, 0, 1), soft = (1 - t) * (1 - t) * (1 + 2 * t);
+    const i = Math.min(R - 1, Math.floor((x + 1) / 2 * R)), j = Math.min(R - 1, Math.floor((y + 1) / 2 * R));
+    return soft * (0.55 + 0.45 * speck[j * R + i]); // ragged, slightly speckled edge
+  });
+}
+
 function pencilTip() {
   const rnd = seeded(7);
   const c = makeCanvas(TIP_RES, TIP_RES), x = c.getContext('2d');
@@ -149,7 +164,7 @@ export function getTipMask(brush) {
   }
   const key = brush.tip === 'round' || !brush.tip ? 'round:' + Math.round(brush.hardness * 20) : brush.tip;
   if (!tipCache.has(key)) {
-    const gen = { pencil: pencilTip, chalk: chalkTip, splatter: splatterTip, bristle: bristleTip, star: starTip }[brush.tip];
+    const gen = { ink: inkTip, pencil: pencilTip, chalk: chalkTip, splatter: splatterTip, bristle: bristleTip, star: starTip }[brush.tip];
     tipCache.set(key, gen ? gen() : roundTip(brush.hardness));
   }
   return tipCache.get(key);
@@ -297,7 +312,7 @@ export function strokePreviewPoints(w, h, n = 60) {
 const INK_CATEGORIES = new Set(['Inking', 'ibis Paint', 'ibis Paint style']);
 export function isInkBrush(b) {
   if (b.ink != null) return !!b.ink;
-  if (b.tip && !['round', 'image'].includes(b.tip)) return false; // pencil / chalk / bristle / splatter…
+  if (b.tip && !['round', 'image', 'ink'].includes(b.tip)) return false; // pencil / chalk / bristle / splatter…
   if ((b.flow ?? 1) < 0.9 || (b.hardness ?? 1) < 0.5) return false; // airbrush, watercolor, glow
   return INK_CATEGORIES.has(b.category) || /pen|ink|liner|dip|fude|felt|marker/i.test(b.name || '');
 }
