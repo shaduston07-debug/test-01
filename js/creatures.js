@@ -427,28 +427,28 @@ DEFS.xeno = () => {
   chain(spec, 'tail', 'hips', [[0, 1.02, -0.15], [0, 0.88, -0.45], [0, 0.66, -0.75], [0, 0.42, -1.0], [0, 0.22, -1.2]]);
   const prims = (W) => {
     const body = [
-      S.ell('hips', [0, 1.06, -0.02], [0.13, 0.1, 0.1]),
-      S.cone('spine', [0, 1.1, 0], [0, 1.45, 0.08], 0.085, 0.12, { sx: 0.8, up: [0, 0, 1] }),
-      S.ell('chest', [0, 1.52, 0.1], [0.17, 0.15, 0.13], { rot: [-20, 0, 0] }),
+      S.ell('hips', [0, 1.06, -0.02], [0.15, 0.11, 0.11]),
+      S.cone('spine', [0, 1.1, 0], [0, 1.45, 0.08], 0.1, 0.14, { sx: 0.8, up: [0, 0, 1] }),
+      S.ell('chest', [0, 1.52, 0.1], [0.19, 0.17, 0.14], { rot: [-20, 0, 0] }),
       S.cone('neck', [0, 1.58, 0.12], W('head'), 0.05, 0.04),
     ];
     for (let i = 0; i < 6; i++) body.push(S.ell(i < 3 ? 'chest' : 'spine', [0, 1.6 - i * 0.08, 0.0 - i * 0.012], [0.05, 0.03, 0.05], { rot: [-20, 0, 0] })); // ribbed spine
     for (const [x, s] of SIDES) {
-      for (let k = 0; k < 2; k++) body.push(S.cone('chest', [x * 0.07, 1.6 - k * 0.05, 0.02], [x * (0.13 + k * 0.03), 1.72 - k * 0.1, -0.14], 0.035, 0.022)); // back pipes
+      body.push(S.ell('chest', [x * 0.08, 1.56, 0.02], [0.07, 0.09, 0.08], { rot: [-20, 0, x * 15] }));        // shoulder carapace
       body.push(S.ell('shoulder' + s, W('shoulder' + s), [0.05, 0.05, 0.05]));
     }
     const head = [
-      S.cone('head', [0, 1.8, 0.32], [0, 1.95, -0.25], 0.085, 0.06, { sz: 0.85 }),   // long domed skull
+      S.cone('head', [0, 1.8, 0.3], [0, 1.94, -0.12], 0.085, 0.07, { sz: 0.85 }),    // long domed skull
       S.ell('head', [0, 1.8, 0.33], [0.07, 0.06, 0.09]),
       S.ell('jaw', [0, 1.74, 0.36], [0.055, 0.035, 0.08]),
     ];
     const arms = [], legs = [];
     for (const [x, s] of SIDES) {
-      const A = [S.cone('shoulder' + s, W('shoulder' + s), W('elbow' + s), 0.04, 0.028), S.ell('elbow' + s, W('elbow' + s), [0.03, 0.035, 0.035]), S.cone('elbow' + s, W('elbow' + s), W('hand' + s), 0.032, 0.02), S.ell('hand' + s, add(W('hand' + s), [0, -0.03, 0.01]), [0.025, 0.04, 0.03])];
+      const A = [S.cone('shoulder' + s, W('shoulder' + s), W('elbow' + s), 0.05, 0.034), S.ell('shoulder' + s, W('shoulder' + s), [0.06, 0.06, 0.06]), S.ell('elbow' + s, W('elbow' + s), [0.036, 0.04, 0.04]), S.cone('elbow' + s, W('elbow' + s), W('hand' + s), 0.04, 0.024), S.ell('hand' + s, add(W('hand' + s), [0, -0.03, 0.01]), [0.025, 0.04, 0.03])];
       for (const f of ['f1', 'f2', 'f3']) { limb(A, [f + s + 1, f + s + 2], W, [0.01, 0.008]); hook(A, f + s + 2, W(f + s + 2), add(W(f + s + 2), [0, -0.03, 0.01]), add(W(f + s + 2), [0, -0.05, -0.01]), 0.006); }
       arms.push(S.smooth(0.015, A));
-      legs.push(S.smooth(0.025, [S.cone('hip' + s, W('hip' + s), W('knee' + s), 0.075, 0.042), S.ell('hip' + s, lerp3(W('hip' + s), W('knee' + s), 0.4), [0.06, 0.12, 0.07], { rot: [-25, 0, 0] }), S.cone('knee' + s, W('knee' + s), W('hock' + s), 0.042, 0.026),
-        S.ell('knee' + s, lerp3(W('knee' + s), W('hock' + s), 0.3), [0.04, 0.08, 0.045], { rot: [40, 0, 0] }), S.cone('hock' + s, W('hock' + s), W('foot' + s), 0.025, 0.022),
+      legs.push(S.smooth(0.025, [S.cone('hip' + s, W('hip' + s), W('knee' + s), 0.09, 0.05), S.ell('hip' + s, lerp3(W('hip' + s), W('knee' + s), 0.4), [0.08, 0.15, 0.09], { rot: [-25, 0, 0] }), S.cone('knee' + s, W('knee' + s), W('hock' + s), 0.05, 0.03),
+        S.ell('knee' + s, lerp3(W('knee' + s), W('hock' + s), 0.3), [0.05, 0.1, 0.055], { rot: [40, 0, 0] }), S.cone('hock' + s, W('hock' + s), W('foot' + s), 0.03, 0.026),
         S.ell('foot' + s, add(W('foot' + s), [0, -0.02, 0.04]), [0.03, 0.02, 0.07])]));
     }
     const tail = [];

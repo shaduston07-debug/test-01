@@ -500,6 +500,23 @@ export async function sculptGeometry({ key, parts, mats, boneNames }) {
   if (key) { meshCache.set(key, geo); if (meshCache.size > 12) meshCache.delete(meshCache.keys().next().value); }
   return geo;
 }
+// static (unskinned) sculpted geometry, e.g. weapons; parts: [{ tree, h }]
+export async function sculptStatic({ key, parts }) {
+  if (key && meshCache.has(key)) return meshCache.get(key);
+  const res = await Promise.all(parts.map((part) => runPart({ tree: part.tree, h: part.h, mats: null, boneIndex: {}, skin: {}, smooth: 0 })));
+  const nv = res.reduce((s, r) => s + r.pos.length / 3, 0);
+  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3);
+  const I = new (nv > 65535 ? Uint32Array : Uint16Array)(res.reduce((s, r) => s + r.index.length, 0));
+  let base = 0, k = 0;
+  for (const r of res) { pos.set(r.pos, base * 3); nor.set(r.nor, base * 3); for (let i = 0; i < r.index.length; i++) I[k++] = r.index[i] + base; base += r.pos.length / 3; }
+  const geo = new T.BufferGeometry();
+  geo.setAttribute('position', new T.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new T.BufferAttribute(nor, 3));
+  geo.setIndex(new T.BufferAttribute(I, 1));
+  geo.computeBoundingSphere();
+  if (key) meshCache.set(key, geo);
+  return geo;
+}
 // bind a (cached) geometry to joint objects that are currently in the bind pose
 export function bindSkinned(geo, bones, material, root) {
   const names = Object.keys(bones).filter((n) => n !== '_root');

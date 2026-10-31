@@ -10,10 +10,12 @@ import { insertLayer, structCmd } from './layers.js';
 import * as M from './models3d.js';
 import * as A from './anatomy.js';
 import * as SC from './sculpt.js';
+import * as C from './creatures.js';
+import * as WD from './world3d.js';
 
 let T = null;
 async function three() {
-  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); A.setThree(T); M.setSculptor(A.sculptHuman); }
+  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); A.setThree(T); M.setSculptor(A.sculptHuman); C.setThree(T); WD.setThree(T); }
   return T;
 }
 
@@ -31,11 +33,12 @@ const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', ri
 // built-in library models (generated, no download)
 export const LIBRARY = [
   ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour']]],
-  ['Creatures', [['dragon', 'Dragon (posable)']]],
+  ['Creatures', [['dragon', 'Dragon'], ['werewolf', 'Werewolf'], ['orc', 'Orc brute'], ['demon', 'Winged demon'], ['ghoul', 'Ghoul'], ['xeno', 'Alien'], ['spider', 'Giant spider'], ['golem', 'Stone golem'], ['kraken', 'Kraken']]],
+  ['Weapons', Object.entries(WD.WEAPONS).map(([k, w]) => ['w:' + k, w.label])],
   ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
-  ['Places', [['castle', 'Castle'], ['street', 'City street'], ['district', 'City district']]],
+  ['Places', [['castle', 'Castle'], ['street', 'City street'], ['district', 'City district'], ['cyber', 'Cyberpunk street'], ['ruins', 'Ruined city'], ['mountains', 'Mountains & lake'], ['forest', 'Forest hills'], ['desert', 'Desert dunes']]],
 ];
-const procObject = (gen, x = 0) => ({ id: uid(), kind: 'proc', gen, name: LIBRARY.flatMap((c) => c[1]).find((i) => i[0] === gen)?.[1] || gen, pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: { dragon: '#7f8a84', car: '#3d6fd6', sports: '#e8b21a', moto: '#c72c2c' }[gen] || '#cfcac2' });
+const procObject = (gen, x = 0) => ({ id: uid(), kind: 'proc', gen, name: LIBRARY.flatMap((c) => c[1]).find((i) => i[0] === gen)?.[1] || gen, pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: { car: '#3d6fd6', sports: '#e8b21a', moto: '#c72c2c' }[gen] || (C.CREATURES.includes(gen) && C.creatureDef(gen).color) || '#cfcac2' });
 
 export function create3DLayer(doc) {
   const l = new Layer(doc.width, doc.height, { type: '3d', name: '3D' });
@@ -153,7 +156,9 @@ async function runtimeFor(layer) {
   rt.sun = new T.DirectionalLight(0xffffff, 2.4);
   rt.scene.add(rt.hemi, rt.sun);
   runtimes.set(layer, rt);
-  for (const o of layer.scene3d.objects) await buildObject(layer, rt, o);
+  // figures and creatures mesh in workers, so build them all at once
+  await Promise.all(layer.scene3d.objects.map((o) => buildObject(layer, rt, o)));
+  attachAll(rt);
   return rt;
 }
 
@@ -164,6 +169,16 @@ async function buildObject(layer, rt, o) {
     node = fig.root; joints = fig.joints; figMat = fig.mat; rig = 'human';
   } else if (o.kind === 'figure') {
     const f = buildFigure(o.color); node = f.root; joints = f.joints; figMat = f.mat;
+  } else if (o.kind === 'weapon') {
+    node = (await WD.buildWeapon(o.weapon)).root;
+  } else if (o.kind === 'proc' && ['cyber', 'ruins'].includes(o.gen)) {
+    node = WD.buildDystopia(o.gen).root;
+  } else if (o.kind === 'proc' && ['mountains', 'forest', 'desert'].includes(o.gen)) {
+    node = WD.buildLandscape(o.gen).root;
+  } else if (o.kind === 'proc' && C.CREATURES.includes(o.gen)) {
+    // sculpted, skinned creature (the dragon too — old saved dragons keep their joint names)
+    const built = await C.buildCreature(o.gen, o.color);
+    node = built.root; joints = built.joints; figMat = built.mat; rig = 'creature'; fig = built;
   } else if (o.kind === 'proc') {
     const g = o.gen;
     const built = g === 'dragon' ? M.buildDragon(o.color) : g === 'car' ? M.buildCar('sedan', o.color) : g === 'sports' ? M.buildCar('sports', o.color) : g === 'moto' ? M.buildMotorcycle(o.color)
@@ -192,6 +207,16 @@ async function buildObject(layer, rt, o) {
   syncObject(entry);
 }
 
+// held items (weapons) live inside the holder's hand joint; their pos / quat are relative to it
+function syncAll(rt) { for (const e of rt.objs.values()) syncObject(e); }
+function attachAll(rt) {
+  for (const e of rt.objs.values()) {
+    const a = e.data.attach; if (!a) continue;
+    const host = rt.objs.get(a.to), j = host && host.joints && host.joints['hand' + a.side];
+    const parent = j || rt.scene;
+    if (e.node.parent !== parent) parent.add(e.node);
+  }
+}
 function syncObject(e) {
   const o = e.data;
   e.node.position.set(...o.pos);
@@ -199,6 +224,7 @@ function syncObject(e) {
   e.node.scale.setScalar(o.scale);
   if (e.rig === 'human') M.applyPose(e.joints, o.pose || {}, M.HUMAN_REST, e.fig.H);
   else if (e.rig === 'dragon') M.applyPose(e.joints, o.pose || {}, M.DRAGON_REST, 1);
+  else if (e.rig === 'creature') M.applyPose(e.joints, o.pose || {}, C.creatureRest(o.gen), 1);
   else if (e.joints) applyPose({ joints: e.joints }, o);
 }
 
@@ -511,6 +537,7 @@ export function tool3d(app) {
         cb('＋ Figure', () => this.figureMenu()), cb('＋ Library…', () => this.libraryMenu()), cb('＋ Model…', () => this.importModel()), cb('＋ Shape', () => this.shapeMenu()),
         cb('Light…', () => this.lightDialog()),
       ];
+      if (e && e.data.kind === 'weapon') items.push(sep(), cb('Hold…', () => this.holdMenu()));
       if (this.mode === 'pose') {
         const ikJoint = this.joint && M.IK_CHAINS[this.joint] && e && e.rig === 'human';
         items.push(sep(), h('span', { class: 'three-hint' }, this.joint ? (ikJoint && this.ik ? `${this.jointLabel(this.joint)} · drag to move the limb` : `${this.jointLabel(this.joint)} · drag to bend`) : 'Tap a body part, then drag'));
@@ -557,9 +584,10 @@ export function tool3d(app) {
       const L = this.layer(), n = L.scene3d.objects.length;
       if (gen === 'figure-female' || gen === 'figure-male') return this.addFigure(gen === 'figure-male' ? 'male' : 'female');
       if (gen === 'knight' || gen === 'scifi') { const o = figureObject(n * 0.7, gen === 'knight' ? 'male' : 'female'); o.outfit = gen === 'knight' ? 'medieval' : 'scifi'; o.name = gen === 'knight' ? 'Knight' : 'Sci-fi armour'; return this.addObject(o, 'Add ' + o.name); }
-      const big = ['castle', 'street', 'district'].includes(gen);
+      if (gen.startsWith('w:')) return this.addWeapon(gen.slice(2));
+      const big = ['castle', 'street', 'district', 'cyber', 'ruins', 'mountains', 'forest', 'desert'].includes(gen);
       const o = procObject(gen, big ? 0 : n * 1.2);
-      if (gen === 'dragon') o.pos = [n ? 3 : 0, 0, n ? -3 : 0];
+      if (gen === 'dragon' || gen === 'kraken') o.pos = [n ? 4 : 0, 0, n ? -4 : 0];
       await this.addObject(o, 'Add ' + o.name);
       this.frameObject(o.id, gen);
     },
@@ -567,8 +595,13 @@ export function tool3d(app) {
     frameObject(id, gen) {
       const L = this.layer(), rt = runtimes.get(L), e = rt && rt.objs.get(id); if (!e) return;
       const b = this.snapshot(), s = L.scene3d;
+      // skinned meshes refresh their inverse bind matrix only in updateMatrixWorld — without it
+      // the box would count the object's position twice
+      e.node.updateMatrixWorld(true);
       const box = new T.Box3().setFromObject(e.node), c = box.getCenter(new T.Vector3()), size = box.getSize(new T.Vector3());
-      if (gen === 'street') { s.camera = { pos: [2, 1.6, -60], target: [0, 4, 0], fov: 40 }; }
+      if (gen === 'street' || gen === 'ruins') { s.camera = { pos: [2, 1.6, -60], target: [0, 4, 0], fov: 40 }; }
+      else if (gen === 'cyber') { s.camera = { pos: [1.5, 1.7, -70], target: [0, 9, 0], fov: 50 }; }
+      else if (['mountains', 'forest', 'desert'].includes(gen)) { s.camera = { pos: [-40, gen === 'mountains' ? 22 : 12, 120], target: [0, gen === 'mountains' ? 22 : 4, 0], fov: 45 }; }
       else if (gen === 'district') { s.camera = { pos: [-110, 70, 150], target: [0, 15, 0], fov: 40 }; }
       else {
         const r = size.length() / 2, dist = r / Math.sin((s.camera.fov * Math.PI / 180) / 2) * 0.9;
@@ -579,7 +612,7 @@ export function tool3d(app) {
     },
     cameraMenu() {
       const L = this.layer(), s = L.scene3d, e = this.poseTarget();
-      const at = e ? e.node.position.clone().add(new T.Vector3(0, (e.rig === 'dragon' ? 1.6 : 0.95) * e.data.scale, 0)) : new T.Vector3(...s.camera.target);
+      const at = e ? e.node.position.clone().add(new T.Vector3(0, (e.rig === 'dragon' || (e.rig === 'creature' && e.data.gen === 'dragon') ? 1.8 : e.rig === 'creature' ? 1.0 : 0.95) * e.data.scale, 0)) : new T.Vector3(...s.camera.target);
       const dist = Math.max(1.2, new T.Vector3(...s.camera.pos).distanceTo(new T.Vector3(...s.camera.target)));
       const set = (dirv, fov, dk = 1, dy = 0) => { const b = this.snapshot(); const d = new T.Vector3(...dirv).normalize().multiplyScalar(dist * dk); s.camera = { pos: at.clone().add(d).toArray(), target: [at.x, at.y + dy, at.z], fov }; this.commit('Camera angle', b); this.redraw(1); };
       dialog({ title: 'Camera angle', body: h('p', { class: 'hint' }, 'Dynamic angles like PoseManiacs. Aims at the selected figure.'), actions: [
@@ -590,8 +623,9 @@ export function tool3d(app) {
     },
     poseMenu() {
       const e = this.poseTarget();
-      if (!e) { toast('Add a figure or the dragon first'); return; }
-      const b = this.snapshot(), lib = e.rig === 'dragon' ? { Dragon: M.DRAGON_POSES } : e.rig === 'human' ? M.HUMAN_POSES : null;
+      if (!e) { toast('Add a figure or a creature first'); return; }
+      const cname = e.rig === 'creature' ? e.data.name : 'Dragon';
+      const b = this.snapshot(), lib = e.rig === 'dragon' ? { Dragon: M.DRAGON_POSES } : e.rig === 'creature' ? { [cname]: C.creaturePoses(e.data.gen) } : e.rig === 'human' ? M.HUMAN_POSES : null;
       if (!lib) { toast('This older figure has no pose library — add a new figure'); return; }
       const body = h('div', { class: 'lib3d' });
       let cur = null;
@@ -610,7 +644,7 @@ export function tool3d(app) {
         }
         body.append(grid);
       }
-      dialog({ title: (e.rig === 'dragon' ? 'Dragon' : 'Figure') + ' poses', wide: true, body, actions: [{ label: 'Done', primary: true }], onClose: () => this.commit('Pose preset', b) });
+      dialog({ title: (e.rig === 'human' ? 'Figure' : cname) + ' poses', wide: true, body, actions: [{ label: 'Done', primary: true }], onClose: () => this.commit('Pose preset', b) });
     },
     handMenu() {
       const e = this.poseTarget(); if (!e || e.rig !== 'human') return;
@@ -632,8 +666,9 @@ export function tool3d(app) {
     async rebuild(e) {
       const L = this.layer(), rt = runtimes.get(L);
       rt.scene.remove(e.node);
-      e.node.traverse((m) => { if (m.isMesh && m.geometry && !m.userData.outline) m.geometry.dispose(); });
+      e.node.traverse((m) => { if (m.isMesh && m.geometry && !m.userData.outline && m.userData.objId === e.data.id) m.geometry.dispose(); });
       await buildObject(L, rt, e.data);
+      attachAll(rt);
       this.highlight(null);
     },
     bodyDialog() {
@@ -677,10 +712,36 @@ export function tool3d(app) {
       slider.oninput = () => { k = +slider.value; label.textContent = `Pose ${k + 1} of ${bvh.frames.length}`; show(k); };
       dialog({ title: f.name, body: h('div', {}, h('p', { class: 'hint' }, `${bvh.frames.length} poses · ${info.mapped} joints matched. Scrub to pick one.`), slider, label), actions: [{ label: 'Cancel', onClick: () => { const s0 = JSON.parse(b); e.data.pose = s0.objects.find((x) => x.id === e.data.id)?.pose || {}; syncObject(e); this.redraw(1); } }, { label: 'Use this pose', primary: true, onClick: () => { this.commit('Import BVH pose', b); this.redraw(1); } }] });
     },
+    // weapons go into a figure's hand (shields on the left) with a closed grip; else stand alone
+    async addWeapon(kind) {
+      const L = this.layer(), rt = await runtimeFor(L), def = WD.WEAPONS[kind];
+      const sel = this.selEntry(), host = sel && sel.rig === 'human' ? sel : [...rt.objs.values()].find((x) => x.rig === 'human');
+      const o = { id: uid(), kind: 'weapon', weapon: kind, name: def.label, pos: [L.scene3d.objects.length * 0.5, 0.9, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cccccc' };
+      if (host) {
+        const side = def.grip === 'shield' ? 'L' : 'R';
+        Object.assign(o, { attach: { to: host.data.id, side } }, WD.gripTransform(side, def.grip, host.fig.H * 0.105));
+        host.data.pose = { ...host.data.pose, ...M.poseFromDegrees(M.handPose('Grip', side)) };
+      }
+      await this.addObject(o, 'Add ' + def.label);
+    },
+    holdMenu() {
+      const e = this.selEntry(); if (!e || e.data.kind !== 'weapon') return;
+      const L = this.layer(), rt = runtimes.get(L), def = WD.WEAPONS[e.data.weapon];
+      const fig = (e.data.attach && rt.objs.get(e.data.attach.to)) || [...rt.objs.values()].find((x) => x.rig === 'human');
+      const hold = (side) => {
+        const b = this.snapshot();
+        if (!side || !fig) { const wp = e.node.getWorldPosition(new T.Vector3()); delete e.data.attach; e.data.pos = [wp.x, wp.y, wp.z]; e.data.quat = [0, 0, 0, 1]; }
+        else { Object.assign(e.data, { attach: { to: fig.data.id, side } }, WD.gripTransform(side, def.grip, fig.fig.H * 0.105)); fig.data.pose = { ...fig.data.pose, ...M.poseFromDegrees(M.handPose('Grip', side)) }; }
+        attachAll(rt); syncAll(rt); this.commit('Hold weapon', b); this.redraw(1);
+      };
+      dialog({ title: def.label, body: h('p', { class: 'hint' }, fig ? 'Put it in a hand of ' + (fig.data.name || 'the figure') + ' — it follows every pose. Move / Rotate adjust how it sits.' : 'Add a figure to hold it.'), actions: [
+        ...(fig ? [{ label: 'Right hand', onClick: () => hold('R') }, { label: 'Left hand', onClick: () => hold('L') }] : []), { label: 'Not held', onClick: () => hold(null) }, { label: 'Cancel', primary: true },
+      ] });
+    },
     async addObject(o, label) {
       const L = this.layer(); const b = this.snapshot();
       L.scene3d.objects.push(o);
-      const rt = await runtimeFor(L); await buildObject(L, rt, o);
+      const rt = await runtimeFor(L); await buildObject(L, rt, o); attachAll(rt); syncAll(rt);
       this.sel = o.id; this.commit(label, b); this.redraw(1); app.updateCtxBar();
     },
     addFigure(sex = 'female') { const n = this.layer().scene3d.objects.filter((o) => o.kind === 'figure').length; this.addObject(figureObject(n * 0.7, sex), 'Add figure'); },

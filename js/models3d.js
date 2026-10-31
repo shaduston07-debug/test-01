@@ -980,3 +980,6 @@ export function exportBVH(fig, pose) {
   txt += `MOTION\nFrames: 1\nFrame Time: 0.0333333\n${vals.join(' ')}\n`;
   return txt;
 }
+
+// shared building blocks for world3d.js (environments, weapons)
+export const kit3d = { rng, canvasTex, uvBox, uvCyl, box, cyl, ball, tf, tint, merge, Kit, stdMat, v3: (a) => new T.Vector3(...a) };
