@@ -195,7 +195,7 @@ export function openLayers(app, anchor) {
     } else {
       const tags = [it.private && 'private', it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip'].filter(Boolean).join(' · ');
       const sub = it.type === '3d' ? `3D · ${it.scene3d ? it.scene3d.objects.length : 0} object${it.scene3d && it.scene3d.objects.length === 1 ? '' : 's'}` : it.type === 'frames' ? `${it.panels.length} panels` : it.type === 'balloons' ? `${it.balloons.length} balloons` : it.type === 'track' ? `${it.cels.length} drawings · ${it.keys.length} keys` : (tags || (it.opacity < 1 ? pct(it.opacity) : ''));
-      const blendBtn = h('button', { class: 'layer-blend', onclick: (e) => { e.stopPropagation(); d.active = i; render(); openSheet(it); } }, it.type === 'raster' || it.type === 'track' ? blendShort(it.blend) : '');
+      const blendBtn = h('button', { class: 'layer-blend', title: 'Blend mode & opacity', onclick: (e) => { e.stopPropagation(); d.active = i; render(); openBlend(it); } }, it.type === 'raster' || it.type === 'track' ? blendShort(it.blend) : '');
       row = h('div', { class: 'layer-row' + (on ? ' on' : '') + (it.clip ? ' clip' : '') + (inGroup ? ' member' : '') },
         thumbOf(app, it), h('div', { class: 'layer-name' }, h('b', {}, it.name), sub ? h('small', {}, sub) : null), blendBtn, vis);
     }
@@ -272,18 +272,53 @@ export function openLayers(app, anchor) {
     });
   };
 
+  // ── blend mode & opacity popup (Procreate's "N" button) ──
+  let blendEl = null;
+  const closeBlend = () => { if (blendEl) { blendEl.remove(); document.removeEventListener('pointerdown', blendEl._outside, true); } blendEl = null; };
+  const openBlend = (it) => {
+    closeSheet(); closeBlend();
+    const panel = list.closest('#popover, .float-win');
+    if (!panel) return;
+    const canBlend = it.type === 'raster' || it.type === 'track';
+    const modes = h('div', { class: 'blend-list' });
+    const fill = () => {
+      modes.innerHTML = '';
+      for (const [title, keys] of BLEND_GROUPS) {
+        if (!canBlend) break;
+        if (title) modes.append(h('div', { class: 'blend-group' }, title));
+        for (const k of keys) {
+          const m = BLEND_MODES.find((x) => x[0] === k); if (!m) continue;
+          modes.append(h('button', { class: 'blend-row' + ((it.blend || 'source-over') === k ? ' on' : ''), onclick: () => { structCmd(app, 'Blend mode', () => { it.blend = k; }); fill(); render(); } },
+            h('span', {}, m[1]), h('b', {}, m[2])));
+        }
+      }
+    };
+    fill();
+    blendEl = h('div', { class: 'blend-pop glass' },
+      h('div', { class: 'sheet-head' }, h('b', {}, it.name), h('button', { class: 'float-close', onclick: closeBlend }, '×')),
+      h('div', { class: 'blend-op' }, opacityField(app, it, () => render())),
+      h('div', { class: 'sheet-body' }, modes));
+    $('#overlay-ui').append(blendEl);
+    const r = panel.getBoundingClientRect(), W = Math.min(250, innerWidth - 16);
+    const left = r.left - W - 8 >= 8 ? r.left - W - 8 : Math.min(r.right + 8, innerWidth - W - 8);
+    Object.assign(blendEl.style, { left: left + 'px', top: r.top + 'px', width: W + 'px', maxHeight: Math.max(360, Math.min(innerHeight - r.top - 12, 620)) + 'px' });
+    blendEl.style.zIndex = (parseInt(panel.style.zIndex) || 20) + 1;
+    blendEl._outside = (e) => { if (blendEl && !blendEl.contains(e.target) && !e.target.closest('.layer-blend')) closeBlend(); };
+    setTimeout(() => blendEl && document.addEventListener('pointerdown', blendEl._outside, true), 0);
+  };
+
   // ── options side sheet ──
   let sheetFor = null, sheetEl = null;
   const closeSheet = () => { if (sheetEl) sheetEl.remove(); sheetEl = null; sheetFor = null; };
   const openSheet = (it) => {
-    closeSheet();
+    closeSheet(); closeBlend();
     const i = d.items.indexOf(it);
     if (i < 0) return;
     const panel = list.closest('#popover, .float-win');
     if (!panel) return;
     sheetFor = { it };
     const rerender = () => { render(); if (d.items.includes(it)) openSheet(it); else closeSheet(); };
-    const body = sheetBody(app, it, i, rerender, closeSheet);
+    const body = sheetBody(app, it, i, rerender, closeSheet, () => openBlend(it));
     sheetEl = h('div', { class: 'side-sheet glass' },
       h('div', { class: 'sheet-head' }, h('b', {}, it.name), h('button', { class: 'float-close', onclick: closeSheet }, '×')),
       h('div', { class: 'sheet-body' }, body));
@@ -311,15 +346,38 @@ export function openLayers(app, anchor) {
   const head = [addBtn];
   if (d.mode !== 'animate') head.unshift(h('button', { class: 'icon-btn', title: 'Group the selected layer', html: ICONS.folder, onclick: () => { if (d.activeItem) { newGroupFrom(app, d.active); render(); } } }));
   if (d.mode !== 'animate') head.unshift(h('button', { class: 'icon-btn', title: '3D layer', html: ICONS.cube, onclick: () => app.add3DLayer && app.add3DLayer() }));
-  const p = openPopover(anchor, { title: d.mode === 'animate' ? 'Tracks' : 'Layers', body: list, head, width: 340, key: 'layers', float: true, onClose: () => { closeSheet(); layersOpen = null; } });
+  const p = openPopover(anchor, { title: d.mode === 'animate' ? 'Tracks' : 'Layers', body: list, head, width: 340, key: 'layers', float: true, onClose: () => { closeSheet(); closeBlend(); layersOpen = null; } });
   if (!p) return;
   layersOpen = { render, dragging: false, closeSheet };
   render();
 }
 export function closeLayerSheet() { layersOpen && layersOpen.closeSheet(); }
 
+// Procreate-style grouping of the blend modes
+const BLEND_GROUPS = [
+  ['', ['source-over']],
+  ['Darken', ['multiply', 'darken', 'color-burn']],
+  ['Lighten', ['screen', 'lighten', 'color-dodge', 'lighter']],
+  ['Contrast', ['overlay', 'soft-light', 'hard-light']],
+  ['Difference', ['difference', 'exclusion']],
+  ['Color', ['hue', 'saturation', 'color', 'luminosity']],
+];
+
+// opacity slider: live while dragging, one undo step per drag
+function opacityField(app, it, after) {
+  const d = app.doc;
+  let opStart = null;
+  const op = field('Opacity', { min: 0, max: 1, step: 0.01, value: it.opacity, fmt: pct, onInput: (v) => { if (!opStart) opStart = captureStruct(d); it.opacity = v; app.requestRender(); } });
+  op.querySelector('input').addEventListener('change', () => {
+    if (!opStart) return; const before = opStart; opStart = null; const after2 = captureStruct(d);
+    app.history.push({ label: 'Opacity', undo() { restoreStruct(d, before); app.changed(); }, redo() { restoreStruct(d, after2); app.changed(); } });
+    app.changed(); after && after();
+  });
+  return op;
+}
+
 // ───────── side sheet contents ─────────
-function sheetBody(app, it, i, rerender, close) {
+function sheetBody(app, it, i, rerender, close, openBlend) {
   const d = app.doc;
   const box = h('div', { class: 'sheet-list' });
   const item = (icon, label, fn, cls = '') => h('button', { class: 'sheet-item ' + cls, onclick: () => fn() }, h('span', { html: ICONS[icon] || '' }), label);
@@ -329,21 +387,14 @@ function sheetBody(app, it, i, rerender, close) {
   };
   const section = (t) => h('div', { class: 'sheet-section' }, t);
 
-  // opacity (one undo step per drag)
-  let opStart = null;
-  const op = field('Opacity', { min: 0, max: 1, step: 0.01, value: it.opacity, fmt: pct, onInput: (v) => { if (!opStart) opStart = captureStruct(d); it.opacity = v; app.requestRender(); } });
-  op.querySelector('input').addEventListener('change', () => {
-    if (!opStart) return; const before = opStart; opStart = null; const after = captureStruct(d);
-    app.history.push({ label: 'Opacity', undo() { restoreStruct(d, before); app.changed(); }, redo() { restoreStruct(d, after); app.changed(); } });
-    app.changed();
-  });
-  box.append(item('pencil', 'Rename', async () => { const n = await promptDialog('Rename', it.name); if (n) { structCmd(app, 'Rename', () => { it.name = n; }); rerender(); } }), op);
+  box.append(item('pencil', 'Rename', async () => { const n = await promptDialog('Rename', it.name); if (n) { structCmd(app, 'Rename', () => { it.name = n; }); rerender(); } }));
+  // blend mode & opacity live in their own popup (also on the layer row's letter button)
+  const bm = (BLEND_MODES.find((m) => m[0] === (it.blend || 'source-over')) || BLEND_MODES[0])[1];
+  box.append(h('button', { class: 'sheet-item', onclick: () => openBlend() }, h('span', { html: ICONS.layers || '' }), h('span', { style: { whiteSpace: 'nowrap' } }, 'Blend & Opacity'),
+    h('small', { class: 'sheet-val' }, (it.type === 'raster' || it.type === 'track' ? bm + ' · ' : '') + pct(it.opacity) + ' ›')));
 
   if (it.type === 'raster' || it.type === 'track') {
-    box.append(section('Blend mode'));
-    const blends = h('div', { class: 'blend-grid' });
-    for (const [v, l] of BLEND_MODES) blends.append(h('button', { class: 'blend-chip' + (it.blend === v ? ' on' : ''), onclick: () => { structCmd(app, 'Blend mode', () => { it.blend = v; }); rerender(); } }, l));
-    box.append(blends, section('Layer'));
+    box.append(section('Layer'));
     box.append(toggle('Alpha Lock', 'alphaLock', rerender), toggle('Clipping Mask', 'clip', rerender), toggle('Reference', 'reference'), toggle('Private (hidden from time-lapse)', 'private', rerender));
     if (d.mode === 'webtoon' && it.type === 'raster') box.append(toggle('Mask to panels', 'panelMask'));
     const target = () => (it.type === 'raster' ? it.canvas : (it.celAt(d.playhead) || {}).canvas);

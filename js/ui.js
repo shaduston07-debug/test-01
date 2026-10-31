@@ -109,7 +109,7 @@ export function closePopover() {
 }
 document.addEventListener('pointerdown', (e) => {
   if (!pop) return;
-  if (pop.el.contains(e.target) || pop.anchor.contains(e.target) || e.target.closest('.modal-bg, .side-sheet, .drag-ghost, .float-win')) return;
+  if (pop.el.contains(e.target) || pop.anchor.contains(e.target) || e.target.closest('.modal-bg, .side-sheet, .blend-pop, .drag-ghost, .float-win')) return;
   if (e.target.id === 'view') return; // handled by the canvas (closes too)
   closePopover();
 }, true);

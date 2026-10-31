@@ -42,15 +42,15 @@ svg { display: block; }
 #app, .screen { position: fixed; inset: 0; }
 
 /* ───────── glass material ───────── */
-.glass, #topbar .tb-left, #topbar .tb-right, #sidebar, #ctxbar, #popover, .float-win, .side-sheet, .modal, #timeline, #hud, #toast, #slider-bubble {
+.glass, #topbar .tb-left, #topbar .tb-right, #sidebar, #ctxbar, #popover, .float-win, .side-sheet, .blend-pop, .modal, #timeline, #hud, #toast, #slider-bubble {
   background: var(--glass);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid var(--glass-edge);
   box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 rgba(0, 0, 0, 0.25), 0 12px 40px rgba(0, 0, 0, 0.38);
 }
-#popover, .float-win, .side-sheet, .modal { background: var(--glass-strong); }
+#popover, .float-win, .side-sheet, .blend-pop, .modal { background: var(--glass-strong); }
 body.solid-ui .glass, body.solid-ui #topbar .tb-left, body.solid-ui #topbar .tb-right, body.solid-ui #sidebar, body.solid-ui #ctxbar,
-body.solid-ui #popover, body.solid-ui .float-win, body.solid-ui .side-sheet, body.solid-ui .modal, body.solid-ui #timeline,
+body.solid-ui #popover, body.solid-ui .float-win, body.solid-ui .side-sheet, body.solid-ui .blend-pop, body.solid-ui .modal, body.solid-ui #timeline,
 body.solid-ui #hud, body.solid-ui #toast, body.solid-ui #slider-bubble {
   background: #232328; -webkit-backdrop-filter: none; backdrop-filter: none;
 }
@@ -444,3 +444,15 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .pal-quick .swatches { margin: 10px 0 2px; }
 .pal-quick:empty { display: none; }
 .swatch-big { height: 70px; border-radius: 12px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.15); }
+
+/* Blend mode & opacity popup (the layer row's letter button) */
+.blend-pop { position: absolute; border-radius: var(--radius); display: flex; flex-direction: column; overflow: hidden; animation: sheet-in 0.18s ease-out; }
+.blend-pop .blend-op { padding: 2px 14px 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.blend-list { display: flex; flex-direction: column; padding: 4px 6px 10px; }
+.blend-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 10px 10px 4px; }
+.blend-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-radius: 10px; font-size: 15px; text-align: left; }
+.blend-row b { font-size: 12px; opacity: 0.55; }
+.blend-row:active { background: var(--fill-1); }
+.blend-row.on { background: var(--accent); color: #fff; }
+.blend-row.on b { opacity: 0.85; }
+.sheet-val { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; padding-left: 8px; }
