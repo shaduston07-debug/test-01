@@ -122,15 +122,18 @@ function mapPairs(pairs) {
 // codes and are applied as a best match (all raw fields are kept with the brush).
 const IPBZ_FIELDS = [
   // [offset, setting, convert(value) → engine value | undefined if implausible]
-  [24, 'size', (v) => (v >= 0.5 && v <= 2000 ? v : undefined)],
-  [52, 'opacity', (v) => (v > 0 && v <= 1 ? v : undefined)],
-  [48, 'spacing', (v) => (v > 0 && v <= 10 ? v : undefined)],
-  [28, 'sizePressure', (v) => (v > 1 ? clamp(0.3 + (v - 1) * 0.18, 0, 1) : v === 1 ? 0.3 : undefined)],
-  [36, 'opacityPressure', (v) => (v > 1.5 ? clamp((v - 1) * 0.15, 0, 0.5) : undefined)],
-  [120, 'speedSize', (v) => (v < 0 && v >= -1 ? -v * 0.5 : undefined)],
-  [268, 'speedOpacity', (v) => (v < 0 && v >= -1 ? clamp(-v * 0.5, 0, 1) : undefined)],
-  [296, 'taper', (v) => (v > 0 && v <= 1 ? v * 0.36 : undefined)],
-  [60, 'minSize', (v) => (v > 0 && v < 1 ? v : undefined)],
+  // Confirmed against ibis Paint's own brush panel (Basic + Fade tabs):
+  [20, 'size', (v) => (v >= 0.1 && v <= 2000 ? v : undefined)],           // Thickness (px)
+  [52, 'opacity', (v) => (v > 0 && v <= 1 ? v : undefined)],             // Opacity
+  [48, 'spacing', (v) => (v > 0 && v <= 10 ? v : undefined)],            // Interval
+  [28, 'fadeStartSize', (v) => (v >= 0 && v <= 2 ? v : undefined)],      // Fade · Start Thickness (0–200%)
+  [32, 'fadeEndSize', (v) => (v >= 0 && v <= 2 ? v : undefined)],        // Fade · End Thickness
+  [36, 'fadeStartAlpha', (v) => (v >= 0 && v <= 2 ? v : undefined)],     // Fade · Start Opacity
+  [40, 'fadeEndAlpha', (v) => (v >= 0 && v <= 2 ? v : undefined)],       // Fade · End Opacity
+  // Dynamic tab (pressure / speed, signed −100…100%) — best match, not yet confirmed:
+  [296, 'sizePressure', (v) => (v > 0 && v <= 1 ? v : undefined)],       // Thickness ← pressure
+  [120, 'speedSize', (v) => (v < 0 && v >= -1 ? -v : undefined)],        // Thickness ← speed (thinner when fast)
+  [268, 'speedOpacity', (v) => (v < 0 && v >= -1 ? -v : undefined)],     // Opacity ← speed (lighter when fast)
 ];
 // 16-byte id of ibis Paint's plain (untextured) brush material; anything else is a texture
 const PLAIN_MATERIAL = 'a54f0041a9e15b050f25c463f1db7449';
@@ -156,7 +159,7 @@ export async function decodeIPBZ(bin) {
     // brush tip id (offset 160): the falcon pen's soft, dry-ink nib
     if (rec.length >= 176 && dv.getUint32(156) === 16) {
       const tip = [...rec.slice(160, 176)].map((x) => x.toString(16).padStart(2, '0')).join('');
-      if (tip === 'cd6a30b4772bb79465f02641ee317ec4') { Object.assign(settings, { tip: 'ink', angleJitter: 1, minSize: 0.3, endTaper: settings.taper || 0.25 }); used.push('ink nib'); }
+      void tip; // brush-shape id; ibis' built-in shapes aren't available, the round tip is used
     }
     // texture id (offset 236): a non-plain material makes a grainy, pencil-like stroke
     if (rec.length >= 252 && dv.getUint32(232) === 16) {
@@ -170,6 +173,8 @@ export async function decodeIPBZ(bin) {
     }
     // ibis spaces solid round pens wider than this engine needs; keep them smooth
     if (settings.spacing > 0.08 && !settings.tip) settings.spacing = 0.06;
+    // decoded brushes are drawn exactly as defined (no Steady-ink adjustments)
+    settings.exact = true; settings.fadeStartLen = 1; settings.fadeEndLen = 1;
   }
   const hex = [...rec].map((x) => x.toString(16).padStart(2, '0')).join('');
   return { settings, used, version: (b[4] << 8) | b[5], length: rec.length, raw: 'IPBZ v' + ((b[4] << 8) | b[5]) + ' · ' + rec.length + ' bytes · ' + hex, fields };
@@ -227,13 +232,15 @@ export const IBIS_PRESETS = [
   P({ id: 'ibis-air', name: 'Airbrush (Soft)', ...IBIS_TYPES.air.base, size: 140, maxSize: 600 }),
   P({ id: 'ibis-water', name: 'Watercolor', ...IBIS_TYPES.water.base, size: 70, maxSize: 400 }),
   // decoded from its ibis Paint QR code (shared publicly by @mtd__art)
-  P({ id: 'ibis-pluma-falcon', name: 'Pluma falcon suave (difuminado)', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'ink', hardness: 0.8,
-    angleJitter: 1, size: 13, maxSize: 80, opacity: 1, spacing: 0.05, sizePressure: 0.45, minSize: 0.3, opacityPressure: 0.15, speedSize: 0.31, speedOpacity: 0.3,
-    taper: 0.25, endTaper: 0.25, taperAlways: true, streamline: 0.35, _v: 3 }),
+  P({ id: 'ibis-pluma-falcon', name: 'Pluma falcon suave (difuminado)', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'round', hardness: 0.85,
+    exact: true, size: 1.5, maxSize: 40, opacity: 1, spacing: 0.05, sizePressure: 0.695, speedSize: 0.62, speedOpacity: 0.6, opacityPressure: 0,
+    fadeStartSize: 1.85, fadeEndSize: 1.85, fadeStartAlpha: 2, fadeEndAlpha: 2, fadeStartLen: 1, fadeEndLen: 1,
+    taper: 0, taperAlways: false, streamline: 0.3, _v: 4 }),
   P({ id: 'ibis-ink-pen', name: 'Ink Pen', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'round', hardness: 1,
-    size: 30, maxSize: 120, opacity: 1, spacing: 0.06, sizePressure: 0.95, minSize: 0.1, taper: 0.25, streamline: 0.35 }),
+    size: 3, maxSize: 60, opacity: 1, spacing: 0.06, sizePressure: 0.8, minSize: 0.1, fadeStartSize: 2, fadeEndSize: 2, fadeStartAlpha: 1, fadeEndAlpha: 1,
+    fadeStartLen: 1, fadeEndLen: 1, taper: 0, streamline: 0.35 }),
   P({ id: 'ibis-rough-layout', name: 'Rough Layout Pen (Blurring)', category: 'ibis Paint', source: 'ibis Paint QR', tip: 'pencil', hardness: 0.57,
-    size: 30, maxSize: 160, opacity: 1, spacing: 0.23, sizePressure: 0.5, opacityPressure: 0.35, grain: 'paper', grainDepth: 0.7, angleJitter: 1,
+    size: 3.7, maxSize: 80, opacity: 1, spacing: 0.23, sizePressure: 0.5, opacityPressure: 0.35, grain: 'paper', grainDepth: 0.7, angleJitter: 1,
     sizeJitter: 0.08, taper: 0.2, streamline: 0.2 }),
   P({ id: 'ibis-glow', name: 'Glow Pen', tip: 'round', hardness: 0.35, size: 24, maxSize: 160, sizePressure: 0.5, flow: 0.55, spacing: 0.05, streamline: 0.3 }),
 ];
@@ -244,7 +251,7 @@ export function ibisEditor(app, init = {}, meta = null, onSaved) {
   let typeKey = init.ibisType && Object.keys(IBIS_TYPES).find((k) => new RegExp(IBIS_TYPES[k].label.split(' ')[0], 'i').test(init.ibisType)) || (init.tip === 'pencil' ? 'pencil' : 'pen');
   // decoded settings with no slider of their own (texture, blurred edge, minimum thickness)
   const extra = {};
-  for (const k of ['minSize', 'hardness', 'grain', 'grainDepth', 'endTaper']) if (init[k] != null) extra[k] = init[k];
+  for (const k of ['minSize', 'hardness', 'grain', 'grainDepth', 'endTaper', 'exact', 'fadeStartSize', 'fadeEndSize', 'fadeStartAlpha', 'fadeEndAlpha', 'fadeStartLen', 'fadeEndLen']) if (init[k] != null) extra[k] = init[k];
   const v = {
     name: init.name || 'ibis brush',
     size: clamp(init.size ?? 12, 1, 1000),

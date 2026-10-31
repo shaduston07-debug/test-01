@@ -7,6 +7,9 @@ import { snapshot, getBackup, pixelCmd } from './history.js';
 import { getTintedTip, getTipMask, getGrain, isInkBrush, steadyInk } from './brushes.js';
 
 const TAU = Math.PI * 2;
+const smooth = (u) => { u = u < 0 ? 0 : u > 1 ? 1 : u; return u * u * (3 - 2 * u); };
+// ibis "Duration" 100% ≈ a stretch of about eight brush widths (min a few pixels)
+const fadeLen = (dur, size) => Math.max(4, (dur ?? 1) * 8 * size + 2);
 
 export class StrokeEngine {
   constructor() {
@@ -25,7 +28,7 @@ export class StrokeEngine {
   // target: {canvas, layer, scale, matrix, toLocal}
   // o: {kind, color, size, opacity, symmetry, selection, simTaper, onChange}
   begin(target, brush, o) {
-    if (o.steadyInk && isInkBrush(brush)) brush = steadyInk(brush);
+    if (o.steadyInk && isInkBrush(brush) && !brush.exact) brush = steadyInk(brush);
     this.target = target; this.brush = brush; this.o = o;
     this.kind = o.kind || 'paint';
     const W = target.canvas.width, H = target.canvas.height;
@@ -53,8 +56,15 @@ export class StrokeEngine {
     }
     this.bounds = emptyRect(); this.dirty = emptyRect(); this.frame = emptyRect();
     // end taper: the last stamps are logged so the stroke's end can be re-drawn to a point on lift
+    // ibis-style Fade: thickness / opacity ratios at the start and end of every stroke
+    // (e.g. 185% = the ink swells into a blob), each over a "duration" of the stroke
+    this.fade = brush.fadeStartSize != null || brush.fadeEndSize != null;
     const et = this.kind === 'smudge' ? 0 : (brush.endTaper ?? (brush.taperAlways ? brush.taper || 0 : 0));
-    this.endLen = et > 0 ? (et * this.size * 4 + 1) / this.scale : 0;
+    if (this.fade && this.kind !== 'smudge' && ((brush.fadeEndSize ?? 1) !== 1 || (brush.fadeEndAlpha ?? 1) !== 1)) {
+      this.endLen = fadeLen(brush.fadeEndLen, this.size) / this.scale; this.endSize = brush.fadeEndSize ?? 1; this.endAlpha = brush.fadeEndAlpha ?? 1;
+    } else {
+      this.endLen = et > 0 ? (et * this.size * 4 + 1) / this.scale : 0; this.endSize = null; this.endAlpha = 1;
+    }
     this.tail = []; this.tailHead = 0;
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
     this.speed = 0; this.lastTime = null;
@@ -193,7 +203,10 @@ export class StrokeEngine {
     s = Math.max(s, this.size * (b.minSize || 0));
     s *= 1 + (b.tiltSize || 0) * pt.t;
     if (b.speedSize) s *= 1 - b.speedSize * 0.85 * Math.min(1, (pt.v || 0) / 3);
-    if ((this.o.simTaper || b.taperAlways) && b.taper > 0) {
+    if (this.fade) {
+      const k = (b.fadeStartSize ?? 1); 
+      if (k !== 1) s *= k + (1 - k) * smooth((this.travelNow ?? this.travel) * this.scale / fadeLen(b.fadeStartLen, this.size));
+    } else if ((this.o.simTaper || b.taperAlways) && b.taper > 0) {
       const L = b.taper * this.size * 4 + 1;
       s *= 0.15 + 0.85 * Math.min(1, (this.travelNow ?? this.travel) * this.scale / L);
     }
@@ -210,6 +223,10 @@ export class StrokeEngine {
     const o = (1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - (b.speedOpacity || 0) * 0.85 * Math.min(1, (pt.v || 0) / 3));
     const ao = o >= 0.999 ? 1 : 1 - Math.pow(1 - clamp(o, 0, 0.999), Math.max(0.02, b.spacing));
     let alpha = b.flow * (1 - (b.flowPressure || 0) * (1 - pt.p)) * ao;
+    if (this.fade && (b.fadeStartAlpha ?? 1) !== 1) {
+      const k = b.fadeStartAlpha;
+      alpha = Math.min(1, alpha * (k + (1 - k) * smooth((this.travelNow ?? this.travel) * this.scale / fadeLen(b.fadeStartLen, this.size))));
+    }
     let x = pt.x, y = pt.y;
     if (b.scatter) { x += (Math.random() - 0.5) * 2 * size * b.scatter; y += (Math.random() - 0.5) * 2 * size * b.scatter; }
     let ang = (b.rotation || 0) * Math.PI / 180 + (b.follow ? this.dir : 0) + (Math.random() - 0.5) * TAU * (b.angleJitter || 0);
@@ -245,7 +262,8 @@ export class StrokeEngine {
   taperEnd() {
     const T = this.tail, total = this.travel, L = this.endLen;
     if (!L || T.length - this.tailHead < 12) return;
-    const ctx = this.bctx, rr = (i) => T[i + 2] * Math.max(1, this.brush.roundness || 1) * 0.75 + 1.5;
+    const grow = this.endSize != null ? Math.max(1, this.endSize) : 1;
+    const ctx = this.bctx, rr = (i) => T[i + 2] * grow * Math.max(1, this.brush.roundness || 1) * 0.75 + 1.5;
     let first = -1;
     for (let i = this.tailHead; i < T.length; i += 6) if (total - T[i + 5] < L) { first = i; break; }
     if (first < 0) return;
@@ -254,6 +272,7 @@ export class StrokeEngine {
     for (let i = first; i < T.length; i += 6) for (const f of sym) {
       const [x, y] = f ? f(T[i], T[i + 1], 0) : [T[i], T[i + 1]];
       path.moveTo(x + rr(i), y); path.arc(x, y, rr(i), 0, TAU);
+      growRect(this.bounds, x, y, rr(i) + 2); growRect(this.frame, x, y, rr(i) + 2);
     }
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'destination-out'; ctx.globalAlpha = 1; ctx.fill(path);
@@ -262,7 +281,14 @@ export class StrokeEngine {
     for (let i = this.tailHead; i < T.length; i += 6) {
       const rem = total - T[i + 5];
       let size = T[i + 2], alpha = T[i + 3];
-      if (rem < L) { const u = Math.max(0, rem / L); size *= 0.1 + 0.9 * Math.sqrt(u); }
+      if (rem < L) {
+        const u = Math.max(0, rem / L);
+        if (this.endSize != null) {
+          const f = smooth(u);
+          size *= this.endSize + (1 - this.endSize) * f;
+          alpha = Math.min(1, alpha * (this.endAlpha + (1 - this.endAlpha) * f));
+        } else size *= 0.1 + 0.9 * Math.sqrt(u);
+      }
       if (size < 1) { alpha *= size; size = 1; }
       for (const f of sym) {
         if (f) { const [x, y, a] = f(T[i], T[i + 1], T[i + 4]); this.drawStamp(x, y, size, alpha, a); }
