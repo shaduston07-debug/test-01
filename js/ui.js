@@ -929,6 +929,11 @@ function symmetryDialog(app) {
   });
 }
 
+export function sharePenLog(blob) {
+  dialog({ title: 'Pencil recording ready', body: h('p', {}, 'Share this file so the strokes can be replayed exactly (it only contains pen positions, pressure and timing).'),
+    actions: [{ label: 'Close' }, { label: 'Share recording', primary: true, onClick: () => download(blob, 'inkwell-pencil-recording.json') }] });
+}
+
 export function openSettings(app) {
   const s = app.settings;
   const save = () => app.applySettings();
@@ -940,6 +945,7 @@ export function openSettings(app) {
     switchRow('Brush cursor while painting', s.cursorPaint, (v) => { s.cursorPaint = v; save(); }),
     switchRow('Gestures (pinch / rotate / pan)', s.gestures, (v) => { s.gestures = v; save(); }),
     switchRow('Hold to keep undoing / redoing (2 or 3 fingers, or the undo buttons)', s.holdRepeat !== false, (v) => { s.holdRepeat = v; save(); }),
+    h('button', { class: 'pill', style: { margin: '6px 0' }, onclick: () => { app.recordPen = true; app.penLog = []; dlg.close(); toast('Recording: draw a few strokes with the Apple Pencil', 4000); } }, 'Record Pencil strokes (for support)…'),
     field('Rapid undo delay', { min: 0.15, max: 1.5, step: 0.05, value: s.rapidUndoDelay ?? 0.35, fmt: (v) => v.toFixed(2) + ' s', onInput: (v) => { s.rapidUndoDelay = v; save(); } }),
     h('div', { class: 'menu-section' }, 'Apple Pencil'),
     switchRow('Steady ink — pens stay solid black at any pressure; pressure only changes the width a little', s.steadyInk !== false, (v) => { s.steadyInk = v; save(); }),
@@ -952,7 +958,7 @@ export function openSettings(app) {
     h('p', { class: 'hint' }, 'Sets how many layers you can add. M-series iPads start at 2000 MB (≈115 layers at 2048×2048). Drawing speed does not depend on layer count. If the app ever reloads by itself, lower this.'),
     switchRow('Autosave', s.autosave, (v) => { s.autosave = v; save(); }),
   );
-  dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });
+  const dlg = dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });
 }
 
 function helpDialog() {

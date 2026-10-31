@@ -196,6 +196,7 @@ class App {
 
   async closeDoc() {
     if (!this.doc) return;
+    this.flushStroke();
     this.finishTransient();
     this.timeline.stop();
     UI.closePopover();
@@ -253,6 +254,7 @@ class App {
     return this.brushes.find((b) => b.id === this.toolBrush[key]) || this.brushes[0];
   }
   setBrush(id, tool = this.tool) {
+    this.flushStroke();
     const key = tool === 'smudge' ? 'smudge' : tool === 'eraser' ? 'eraser' : 'brush';
     this.toolBrush[key] = id;
     store.prefs.set('toolBrush', this.toolBrush);
@@ -270,6 +272,7 @@ class App {
   updateSliders() { this.sizeSlider && this.sizeSlider.sync(); this.opSlider && this.opSlider.sync(); }
 
   setTool(name, oneShot = false) {
+    this.flushStroke();
     if (!this.tools[name]) return;
     if (name !== this.tool) {
       this.finishTransient();
@@ -419,6 +422,17 @@ class App {
     try { this.canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     this.lastMoveTime = e.timeStamp;
     const p = this.pt(e);
+    if (this.recordPen) this.logPen('down', e);
+    if (this.pendingStroke) {
+      const ps = this.pendingStroke, lu = ps.lastUp;
+      if (e.pointerType === 'pen' && !this.active && ps === this.tools[this.tool] && performance.now() - lu.t < 70 && dist(p.sx, p.sy, lu.sx, lu.sy) < 24) {
+        this.ptrs.set(e.pointerId, { id: e.pointerId, type: e.pointerType, sx: p.sx, sy: p.sy, x0: p.sx, y0: p.sy, t0: performance.now() });
+        this.active = { id: e.pointerId, tool: this.tool, type: 'pen', t0: performance.now() };
+        ps.resume(p); this.requestRender('active');
+        return;
+      }
+      ps.finish();
+    }
     this.ptrs.set(e.pointerId, { id: e.pointerId, type: e.pointerType, sx: p.sx, sy: p.sy, x0: p.sx, y0: p.sy, t0: performance.now() });
     if (e.pointerType === 'pen' && !this.penSeen) {
       this.penSeen = true; store.prefs.set('penSeen', true);
@@ -460,6 +474,7 @@ class App {
 
   onMove(e) {
     if (!this.doc) return;
+    if (this.recordPen && e.pointerType === 'pen' && e.buttons) this.logPen('move', e);
     const rec = this.ptrs.get(e.pointerId);
     const prevPen = this.penPressure;
     const p = this.pt(e);
@@ -509,6 +524,7 @@ class App {
 
   onUp(e, cancelled) {
     if (!this.doc) return;
+    if (this.recordPen) this.logPen(cancelled ? 'cancel' : 'up', e);
     const rec = this.ptrs.get(e.pointerId);
     this.ptrs.delete(e.pointerId);
     const p = this.pt(e);
@@ -545,6 +561,7 @@ class App {
 
   // ── two+ finger gestures: pinch-zoom, rotate, pan; taps = undo / redo / hide UI ──
   startGesture(keep) {
+    this.flushStroke();
     const ids = [...this.ptrs.values()].filter((p) => p.type === 'touch').map((p) => p.id);
     const prev = this.gesture;
     this.gesture = {
@@ -684,13 +701,37 @@ class App {
     return true;
   }
 
+  // ── Pencil recorder (Settings): raw pointer data of a few strokes, to share for support ──
+  logPen(kind, e) {
+    const L = this.penLog || (this.penLog = []);
+    const row = (ev) => [Math.round(ev.timeStamp * 100) / 100, Math.round(ev.clientX * 100) / 100, Math.round(ev.clientY * 100) / 100, Math.round((ev.pressure || 0) * 1000) / 1000, Math.round((ev.altitudeAngle || 0) * 100) / 100, ev.buttons];
+    const co = kind === 'move' && e.getCoalescedEvents ? e.getCoalescedEvents().map(row) : [];
+    L.push({ k: kind, id: e.pointerId, type: e.pointerType, e: row(e), co });
+    if (kind === 'up' || kind === 'cancel') {
+      clearTimeout(this.penLogT);
+      this.penLogT = setTimeout(() => this.finishPenLog(), 2500);
+    }
+  }
+  finishPenLog() {
+    this.recordPen = false;
+    const data = { ua: navigator.userAgent, dpr: devicePixelRatio, zoom: this.view.zoom, brush: this.brushFor('brush').id, size: this.getSize(), events: this.penLog || [] };
+    this.penLog = [];
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    UI.sharePenLog(blob);
+  }
+
+  // a stroke held open for a possible Pencil re-touch is committed before anything else
+  flushStroke() { if (this.pendingStroke) this.pendingStroke.finish(); }
+
   undo() {
+    this.flushStroke();
     if (this.engine.active) return;
     if (this.transform) { this.tools.transform.cancel(); return; }
     const c = this.history.undo();
     if (c) { this.showHud('Undo ' + (c.label || '')); this.changed(); }
   }
   redo() {
+    this.flushStroke();
     if (this.engine.active || this.transform) return;
     const c = this.history.redo();
     if (c) { this.showHud('Redo ' + (c.label || '')); this.changed(); }
@@ -1020,14 +1061,31 @@ class App {
         app.engine.reshape(pts);
         app.requestRender('active');
       },
-      up() {
+      up(p, e) {
         clearTimeout(this.qs);
+        // Apple Pencil can lose contact for a moment on a light, fast stroke (iPadOS then sends
+        // up + down). Keep the stroke open briefly so it continues instead of starting a new one
+        // (which would add a second start / end fade in the middle of the line).
+        if (e && e.pointerType === 'pen' && !this.shape && app.engine.active && p) {
+          this.lastUp = { sx: p.sx, sy: p.sy, t: performance.now() };
+          clearTimeout(this.joinT);
+          this.joinT = setTimeout(() => this.finish(), 70);
+          app.pendingStroke = this;
+          return;
+        }
+        this.finish();
+      },
+      finish() {
+        clearTimeout(this.joinT); this.joinT = null;
+        if (app.pendingStroke === this) app.pendingStroke = null;
+        if (!app.engine.active) return;
         const cmd = app.engine.end(kind === 'paint' ? 'Stroke' : kind === 'erase' ? 'Erase' : 'Smudge');
         if (cmd) app.history.push(cmd);
         this.shape = null;
         app.changed('active');
       },
-      cancel() { clearTimeout(this.qs); app.engine.cancel(); this.shape = null; app.requestRender('active'); },
+      resume(p) { clearTimeout(this.joinT); this.joinT = null; app.pendingStroke = null; this.move(p); },
+      cancel() { clearTimeout(this.qs); clearTimeout(this.joinT); if (app.pendingStroke === this) app.pendingStroke = null; app.engine.cancel(); this.shape = null; app.requestRender('active'); },
       bar() { return app.doc && app.doc.mode === 'animate' ? null : null; },
     });
 
