@@ -381,7 +381,8 @@ export class StrokeEngine {
     this.dirty = { ...this.bounds }; this.markFrame();
     this.bctx.setTransform(1, 0, 0, 1, 0, 0);
     this.bctx.clearRect(0, 0, this.W, this.H);
-    this.carry = 0; this.travel = 1e9; this.travelNow = 1e9;
+    // redraw like a real stroke of this pen: start fade from 0, end taper on lift (tail)
+    this.carry = 0; this.travel = 0; this.travelNow = 0; this.tail = []; this.tailHead = 0; this.vSm = null;
     for (let i = 1; i < points.length; i++) this.walk(points[i - 1], points[i]);
     this.q = []; this.s = null;
   }
@@ -492,31 +493,100 @@ export class StrokeEngine {
 }
 
 // ── QuickShape detection (doc-space points) ──
-export function detectShape(pts) {
+// Each candidate shape is fitted and scored; a shape is only used when the stroke really is that
+// shape (otherwise the stroke is left alone). zoom = view zoom, so tolerances are in screen terms.
+function resample(pts, n) {
+  const L = [0];
+  for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  const tot = L[L.length - 1], out = [];
+  for (let k = 0, j = 0; k < n; k++) {
+    const d = tot * k / (n - 1);
+    while (j < pts.length - 2 && L[j + 1] < d) j++;
+    const t = L[j + 1] > L[j] ? (d - L[j]) / (L[j + 1] - L[j]) : 0;
+    out.push({ x: pts[j].x + (pts[j + 1].x - pts[j].x) * t, y: pts[j].y + (pts[j + 1].y - pts[j].y) * t });
+  }
+  return { q: out, len: tot };
+}
+const segDist = (p, a, b) => { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)); return Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t); };
+function rdp(q, i0, i1, eps, out) {
+  let best = -1, dm = 0;
+  for (let i = i0 + 1; i < i1; i++) { const d = segDist(q[i], q[i0], q[i1]); if (d > dm) { dm = d; best = i; } }
+  if (dm > eps) { rdp(q, i0, best, eps, out); out.push(best); rdp(q, best, i1, eps, out); }
+}
+const angleAt = (a, b, c) => { const u = [a.x - b.x, a.y - b.y], v = [c.x - b.x, c.y - b.y]; return Math.acos(Math.max(-1, Math.min(1, (u[0] * v[0] + u[1] * v[1]) / ((Math.hypot(...u) * Math.hypot(...v)) || 1)))) * 180 / Math.PI; };
+function circle3(a, b, c) {
+  const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+  if (Math.abs(d) < 1e-9) return null;
+  const a2 = a.x * a.x + a.y * a.y, b2 = b.x * b.x + b.y * b.y, c2 = c.x * c.x + c.y * c.y;
+  const cx = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d, cy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+  return { cx, cy, r: Math.hypot(a.x - cx, a.y - cy) };
+}
+export function detectShape(pts, zoom = 1) {
   if (pts.length < 4) return null;
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, L = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i];
-    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
-    if (i) L += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y);
-  }
-  const a = pts[0], b = pts[pts.length - 1];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
   const diag = Math.hypot(x1 - x0, y1 - y0);
-  if (diag < 8) return null;
-  const gap = Math.hypot(b.x - a.x, b.y - a.y);
-  if (gap < diag * 0.28 && L > diag * 1.6) {
-    // closed: ellipse fitted to the bounding box (good enough & predictable)
-    return { type: 'ellipse', cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, rx: (x1 - x0) / 2, ry: (y1 - y0) / 2 };
+  if (diag * zoom < 24) return null; // too small to mean a shape
+  const { q, len } = resample(pts, 72);
+  const a = q[0], b = q[q.length - 1], gap = Math.hypot(b.x - a.x, b.y - a.y);
+  const closed = gap < diag * 0.22 && len > diag * 1.5;
+  if (!closed) {
+    // straight line: everything close to the chord
+    let dev = 0; for (const p of q) dev = Math.max(dev, segDist(p, a, b));
+    if (dev < Math.max(gap * 0.045, 3 / zoom)) return { type: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    // circular arc: one bend direction, points on a circle through start, middle, end
+    const m = q[q.length >> 1], c = circle3(a, m, b);
+    if (c && c.r < diag * 4) {
+      let rms = 0, sgn = 0, same = 0;
+      for (let i = 0; i < q.length; i++) {
+        rms += ((Math.hypot(q[i].x - c.cx, q[i].y - c.cy) - c.r) / c.r) ** 2;
+        if (i > 0 && i < q.length - 1) { const cr = (q[i].x - q[i - 1].x) * (q[i + 1].y - q[i].y) - (q[i].y - q[i - 1].y) * (q[i + 1].x - q[i].x); if (Math.abs(cr) > 1e-9) { sgn += Math.sign(cr); same++; } }
+      }
+      rms = Math.sqrt(rms / q.length);
+      if (rms < 0.045 && Math.abs(sgn) > same * 0.8) return { type: 'arc', x1: a.x, y1: a.y, x2: b.x, y2: b.y, mx: m.x, my: m.y };
+    }
+    // polyline (e.g. an L or a V): a few straight segments with clear corners
+    // (tight tolerance: a smooth S-curve needs many segments to stay this close, so it's rejected)
+    const idx = [0]; rdp(q, 0, q.length - 1, Math.max(diag * 0.025, 2.5 / zoom), idx); idx.push(q.length - 1);
+    if (idx.length >= 3 && idx.length <= 5) {
+      const v = idx.map((i) => q[i]);
+      if (v.slice(1, -1).every((p, i) => angleAt(v[i], p, v[i + 2]) < 135)) return { type: 'poly', pts: v, closed: false };
+    }
+    return null; // a free curve: keep the stroke as drawn
   }
-  // open: decide line vs. arc by max deviation from the chord
-  let dev = 0, devPt = null;
-  const cl = gap || 1;
-  for (const p of pts) {
-    const d = Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / cl;
-    if (d > dev) { dev = d; devPt = p; }
+  // closed: polygon with sharp corners, else an (optionally rotated) ellipse that fits well
+  const loop = q.slice(0, -1);
+  let far = 0; for (let i = 1; i < loop.length; i++) if (Math.hypot(loop[i].x - a.x, loop[i].y - a.y) > Math.hypot(loop[far].x - a.x, loop[far].y - a.y)) far = i;
+  const idx = [0]; rdp(loop.concat([loop[0]]), 0, far, diag * 0.06, idx); idx.push(far); rdp(loop.concat([loop[0]]), far, loop.length, diag * 0.06, idx);
+  let verts = [...new Set(idx.filter((i) => i < loop.length))].sort((m, n) => m - n).map((i) => loop[i]);
+  // the stroke usually starts mid-edge: drop "corners" that are really straight
+  for (let changed = true; changed && verts.length > 3;) {
+    changed = false;
+    for (let i = 0; i < verts.length; i++) { const n = verts.length; if (angleAt(verts[(i + n - 1) % n], verts[i], verts[(i + 1) % n]) > 158) { verts.splice(i, 1); changed = true; break; } }
   }
-  if (dev > cl * 0.12 && devPt) return { type: 'arc', x1: a.x, y1: a.y, x2: b.x, y2: b.y, mx: devPt.x, my: devPt.y };
-  return { type: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+  if (verts.length >= 3 && verts.length <= 6) {
+    const n = verts.length, ang = verts.map((p, i) => angleAt(verts[(i + n - 1) % n], p, verts[(i + 1) % n]));
+    if (ang.every((x) => x < 150)) {
+      if (n === 4 && ang.every((x) => Math.abs(x - 90) < 18)) return { type: 'poly', pts: verts, closed: true, rect: true };
+      return { type: 'poly', pts: verts, closed: true };
+    }
+  }
+  // ellipse from the second moments of the outline, accepted only if the outline really fits
+  let cx = 0, cy = 0; for (const p of loop) { cx += p.x; cy += p.y; } cx /= loop.length; cy /= loop.length;
+  let sxx = 0, syy = 0, sxy = 0; for (const p of loop) { const dx = p.x - cx, dy = p.y - cy; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+  sxx /= loop.length; syy /= loop.length; sxy /= loop.length;
+  const tr = sxx + syy, det = sxx * syy - sxy * sxy, disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+  const l1 = tr / 2 + disc, l2 = Math.max(1e-9, tr / 2 - disc), rot = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  let rx = Math.sqrt(2 * l1), ry = Math.sqrt(2 * l2);
+  let err = 0; const c0 = Math.cos(-rot), s0 = Math.sin(-rot);
+  for (const p of loop) { const dx = p.x - cx, dy = p.y - cy, u = dx * c0 - dy * s0, v = dx * s0 + dy * c0; err += Math.abs(Math.hypot(u / rx, v / ry) - 1); }
+  err /= loop.length;
+  if (err > 0.1) return null;
+  // nearly round → a circle; nearly axis-aligned → no tilt
+  if (Math.abs(rx - ry) < Math.max(rx, ry) * 0.08) rx = ry = (rx + ry) / 2;
+  const deg = ((rot * 180 / Math.PI) % 180 + 180) % 180;
+  const r2 = Math.min(deg, 180 - deg) < 6 || Math.abs(deg - 90) < 6 ? (Math.abs(deg - 90) < 6 ? Math.PI / 2 : 0) : rot;
+  return { type: 'ellipse', cx, cy, rx, ry, rot: r2 };
 }
 
 export function shapePoints(sh, p = 1) {
@@ -526,16 +596,24 @@ export function shapePoints(sh, p = 1) {
   } else if (sh.type === 'ellipse') {
     const n = Math.max(48, Math.ceil((sh.rx + sh.ry) / 3));
     for (let i = 0; i <= n; i++) {
-      const t = (i / n) * TAU + (sh.rot || 0);
-      out.push({ x: sh.cx + Math.cos(t) * sh.rx, y: sh.cy + Math.sin(t) * sh.ry, p, t: 0 });
+      const t = (i / n) * TAU, cr = Math.cos(sh.rot || 0), sr = Math.sin(sh.rot || 0), ex = Math.cos(t) * sh.rx, ey = Math.sin(t) * sh.ry;
+      out.push({ x: sh.cx + ex * cr - ey * sr, y: sh.cy + ex * sr + ey * cr, p, t: 0 });
     }
   } else if (sh.type === 'arc') {
-    // quadratic bezier through the mid point
-    const cx = 2 * sh.mx - (sh.x1 + sh.x2) / 2, cy = 2 * sh.my - (sh.y1 + sh.y2) / 2;
-    const n = 64;
-    for (let i = 0; i <= n; i++) {
-      const t = i / n, u = 1 - t;
-      out.push({ x: u * u * sh.x1 + 2 * u * t * cx + t * t * sh.x2, y: u * u * sh.y1 + 2 * u * t * cy + t * t * sh.y2, p, t: 0 });
+    // a true circular arc through start, middle and end
+    const A = { x: sh.x1, y: sh.y1 }, M = { x: sh.mx, y: sh.my }, Bp = { x: sh.x2, y: sh.y2 }, c = circle3(A, M, Bp);
+    if (!c) { out.push({ x: sh.x1, y: sh.y1, p, t: 0 }, { x: sh.x2, y: sh.y2, p, t: 0 }); return out; }
+    const a0 = Math.atan2(A.y - c.cy, A.x - c.cx), am = Math.atan2(M.y - c.cy, M.x - c.cx), a1 = Math.atan2(Bp.y - c.cy, Bp.x - c.cx);
+    const norm = (x) => ((x % TAU) + TAU) % TAU;
+    let sweep = norm(a1 - a0);
+    if (norm(am - a0) > sweep) sweep -= TAU; // go the way that passes through the middle point
+    const n = Math.max(24, Math.ceil(Math.abs(sweep) * c.r / 3));
+    for (let i = 0; i <= n; i++) { const t = a0 + sweep * i / n; out.push({ x: c.cx + Math.cos(t) * c.r, y: c.cy + Math.sin(t) * c.r, p, t: 0 }); }
+  } else if (sh.type === 'poly') {
+    const v = sh.closed ? sh.pts.concat([sh.pts[0]]) : sh.pts;
+    for (let i = 0; i + 1 < v.length; i++) {
+      const n = Math.max(2, Math.ceil(Math.hypot(v[i + 1].x - v[i].x, v[i + 1].y - v[i].y) / 4));
+      for (let k = i ? 1 : 0; k <= n; k++) out.push({ x: v[i].x + (v[i + 1].x - v[i].x) * k / n, y: v[i].y + (v[i + 1].y - v[i].y) * k / n, p, t: 0 });
     }
   }
   return out;

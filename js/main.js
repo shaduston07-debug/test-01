@@ -1147,14 +1147,19 @@ class App {
       },
       snap() {
         if (!app.engine.active || this.shape) return;
-        const sh = detectShape(this.raw);
+        const sh = detectShape(this.raw, app.view.zoom);
         if (!sh) return;
         this.shape = sh; this.base = { ...sh };
         this.pressure = app.engine.avgPressure();
         const last = this.raw[this.raw.length - 1];
         this.grab = { x: last.x, y: last.y };
         this.redrawShape();
-        app.showHud({ line: 'Line', ellipse: 'Ellipse', arc: 'Arc' }[sh.type] + ' — keep holding & drag to adjust', 1400);
+        // the drawn stroke's pressure along its length, replayed along the clean shape
+        const L = [0]; for (let i = 1; i < this.raw.length; i++) L.push(L[i - 1] + dist(this.raw[i].x, this.raw[i].y, this.raw[i - 1].x, this.raw[i - 1].y));
+        const tot = L[L.length - 1] || 1;
+        this.profile = this.raw.map((q, i) => [L[i] / tot, q.pressure ?? this.pressure]);
+        const name = sh.type === 'poly' ? (sh.closed ? (sh.rect ? 'Rectangle' : sh.pts.length === 3 ? 'Triangle' : 'Polygon') : 'Polyline') : sh.type === 'ellipse' ? (sh.rx === sh.ry ? 'Circle' : 'Ellipse') : sh.type === 'arc' ? 'Arc' : 'Line';
+        app.showHud(name + ' — keep holding & drag to adjust', 1400);
       },
       adjustShape(p) {
         const sh = this.shape, b = this.base, constrain = app.touchesDown() > 0;
@@ -1166,6 +1171,11 @@ class App {
             x2 = b.x1 + Math.cos(sa) * L; y2 = b.y1 + Math.sin(sa) * L;
           }
           sh.x2 = x2; sh.y2 = y2;
+        } else if (sh.type === 'poly') {
+          // scale about the centre (the corner under the pen follows it)
+          const cx = b.pts.reduce((a, q) => a + q.x, 0) / b.pts.length, cy = b.pts.reduce((a, q) => a + q.y, 0) / b.pts.length;
+          const k = Math.hypot(p.x - cx, p.y - cy) / (Math.hypot(this.grab.x - cx, this.grab.y - cy) || 1);
+          sh.pts = b.pts.map((q) => ({ x: cx + (q.x - cx) * k, y: cy + (q.y - cy) * k }));
         } else if (sh.type === 'ellipse') {
           const k0 = Math.hypot(this.grab.x - b.cx, this.grab.y - b.cy) || 1;
           const k = Math.hypot(p.x - b.cx, p.y - b.cy) / k0;
@@ -1175,7 +1185,9 @@ class App {
         this.redrawShape();
       },
       redrawShape() {
-        const pts = shapePoints(this.shape, this.pressure).map((q) => ({ ...this.target.toLocal(q.x, q.y), p: q.p, t: 0 }));
+        const raw = shapePoints(this.shape, this.pressure), prof = this.profile || [[0, this.pressure], [1, this.pressure]];
+        const pAt = (f) => { let i = 0; while (i < prof.length - 2 && prof[i + 1][0] < f) i++; const a = prof[i], b = prof[i + 1] || a, t = b[0] > a[0] ? (f - a[0]) / (b[0] - a[0]) : 0; return a[1] + (b[1] - a[1]) * Math.max(0, Math.min(1, t)); };
+        const pts = raw.map((q, i) => ({ ...this.target.toLocal(q.x, q.y), p: pAt(i / Math.max(1, raw.length - 1)), t: 0 }));
         app.engine.reshape(pts);
         app.requestRender('active');
       },
