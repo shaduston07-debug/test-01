@@ -71,3 +71,8 @@ export const prefs = {
   get(k, d) { try { const v = localStorage.getItem('inkwell:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('inkwell:' + k, JSON.stringify(v)); } catch { /* ignore */ } },
 };
+
+// whole-store access for backup / restore
+export const dumpStore = (name) => tx(name, 'readonly', (s) => req(s.getAll()));
+export const putAll = (name, records) => tx(name, 'readwrite', (s) => { for (const r of records) s.put(r); });
+export const STORES = ['docs', 'meta', 'brushes', 'fonts', 'timelapse'];

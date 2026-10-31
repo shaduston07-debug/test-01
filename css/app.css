@@ -456,3 +456,14 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .blend-row.on { background: var(--accent); color: #fff; }
 .blend-row.on b { opacity: 0.85; }
 .sheet-val { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; padding-left: 8px; }
+
+/* Brush save points */
+.points .hint { margin: 0 0 8px; }
+.point-grid { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.point { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 12px; background: var(--fill-1); font-size: 14px; text-align: left; }
+.point i { display: inline-block; border-radius: 50%; background: currentColor; flex: none; }
+.point span { flex: 1; }
+.point.on { background: var(--accent); color: #fff; }
+.point-add { width: 100%; margin-top: 10px; }
+.point-add:disabled { opacity: 0.5; }
+#btn-points svg { width: 20px; height: 20px; }

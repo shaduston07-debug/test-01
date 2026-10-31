@@ -13,6 +13,7 @@ import { importBrushFiles } from './importers.js';
 import * as Ibis from './ibis.js';
 import * as Media from './media.js';
 import * as Pal from './palettes.js';
+import * as Backup from './backup.js';
 import * as X from './exporters.js';
 import { encodeVideo, hevcSupported } from './video.js';
 import { QUALITIES as TL_QUALITIES } from './timelapse.js';
@@ -930,6 +931,65 @@ function symmetryDialog(app) {
   });
 }
 
+// ───────── brush save points: remembered size + opacity per brush ─────────
+const pointKey = (app) => app.sizeKey();
+export function openPoints(app, anchor) {
+  const all = store.prefs.get('brushPoints', {});
+  const body = h('div', { class: 'points' });
+  const render = () => {
+    body.innerHTML = '';
+    const k = pointKey(app), list = all[k] || [], b = app.brushFor(app.paintToolName());
+    const cur = { size: Math.round(app.getSize() * 10) / 10, opacity: Math.round(app.getOpacity() * 100) / 100 };
+    const label = (p) => `${p.size >= 10 ? Math.round(p.size) : p.size} px · ${Math.round(p.opacity * 100)}%`;
+    body.append(h('p', { class: 'hint' }, b.name + ' — tap a point to go back to it, hold to delete'));
+    const grid = h('div', { class: 'point-grid' });
+    list.forEach((p, i) => {
+      const dot = Math.max(4, Math.min(30, 4 + Math.sqrt(p.size / b.maxSize) * 26));
+      const btn = h('button', { class: 'point' + (p.size === cur.size && p.opacity === cur.opacity ? ' on' : '') },
+        h('i', { style: { width: dot + 'px', height: dot + 'px', opacity: Math.max(0.15, p.opacity) } }), h('span', {}, label(p)));
+      let t = null;
+      btn.addEventListener('pointerdown', () => { t = setTimeout(async () => { t = null; if (await confirmDialog(`Delete the save point ${label(p)}?`, 'Delete', true)) { list.splice(i, 1); all[k] = list; store.prefs.set('brushPoints', all); render(); } }, 550); });
+      btn.addEventListener('pointerup', () => { if (!t) return; clearTimeout(t); t = null; app.setSize(p.size); app.setOpacity(p.opacity); app.updateSliders(); app.showHud(label(p)); render(); });
+      btn.addEventListener('pointerleave', () => { if (t) { clearTimeout(t); t = null; } });
+      grid.append(btn);
+    });
+    if (!list.length) grid.append(h('p', { class: 'hint' }, 'No save points for this brush yet.'));
+    const exists = list.some((p) => p.size === cur.size && p.opacity === cur.opacity);
+    body.append(grid, h('button', { class: 'pill primary point-add', disabled: exists || list.length >= 16, onclick: () => {
+      list.push(cur); list.sort((a, c) => a.size - c.size || a.opacity - c.opacity); all[k] = list; store.prefs.set('brushPoints', all); render();
+    } }, exists ? 'Current size is saved' : `＋ Save current · ${label(cur)}`));
+  };
+  render();
+  openPopover(anchor, { title: 'Save points', body, width: 300, key: 'points', float: true });
+}
+
+// ───────── backup / restore ─────────
+export function backupDialog(app) {
+  let withTL = false;
+  const status = h('p', { class: 'hint' }, '');
+  const body = h('div', {},
+    h('p', {}, 'Saves all your canvases, brushes, fonts, palettes and settings in one file. Keep it in Files (or iCloud Drive) before deleting the app, then restore it after installing.'),
+    switchRow('Include time-lapse recordings (much bigger file)', false, (v) => (withTL = v)), status);
+  const run = async (fn) => { try { await fn(); } catch (e) { console.error(e); status.textContent = 'Failed: ' + e.message; return false; } };
+  dialog({ title: 'Backup & Restore', body, actions: [
+    { label: 'Close' },
+    { label: 'Restore from backup…', onClick: () => run(async () => {
+      const [f] = await pickFile(Backup.BACKUP_ACCEPT); if (!f) return false;
+      if (!(await confirmDialog('Restore this backup? Canvases and brushes in it are added (ones with the same name are replaced), then the app reloads.', 'Restore'))) return false;
+      toast('Restoring…', 60000);
+      const r = await Backup.importBackup(f, { onProgress: (m) => toast(m, 60000) });
+      toast(`Restored ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'} — reloading…`, 3000);
+      setTimeout(() => location.reload(), 1200);
+    }) },
+    { label: 'Back up everything', primary: true, onClick: () => run(async () => {
+      await app.saveNow(true);
+      toast('Preparing backup…', 60000);
+      const r = await Backup.exportBackup({ timelapse: withTL, onProgress: (m) => toast(m, 60000) });
+      toast(`Backup ready: ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'}, ${(r.bytes / 1e6).toFixed(1)} MB`, 4000);
+    }) },
+  ] });
+}
+
 export function sharePenLog(blob) {
   dialog({ title: 'Pencil recording ready', body: h('p', {}, 'Share this file so the strokes can be replayed exactly (it only contains pen positions, pressure and timing).'),
     actions: [{ label: 'Close' }, { label: 'Share recording', primary: true, onClick: () => download(blob, 'inkwell-pencil-recording.json') }] });
@@ -946,6 +1006,7 @@ export function openSettings(app) {
     switchRow('Brush cursor while painting', s.cursorPaint, (v) => { s.cursorPaint = v; save(); }),
     switchRow('Gestures (pinch / rotate / pan)', s.gestures, (v) => { s.gestures = v; save(); }),
     switchRow('Hold to keep undoing / redoing (2 or 3 fingers, or the undo buttons)', s.holdRepeat !== false, (v) => { s.holdRepeat = v; save(); }),
+    h('button', { class: 'pill', style: { margin: '6px 6px 6px 0' }, onclick: () => { dlg.close(); backupDialog(app); } }, 'Backup & Restore…'),
     h('button', { class: 'pill', style: { margin: '6px 0' }, onclick: () => { app.recordPen = true; app.penLog = []; dlg.close(); toast('Recording: draw a few strokes with the Apple Pencil', 4000); } }, 'Record Pencil strokes (for support)…'),
     field('Rapid undo delay', { min: 0.15, max: 1.5, step: 0.05, value: s.rapidUndoDelay ?? 0.35, fmt: (v) => v.toFixed(2) + ' s', onInput: (v) => { s.rapidUndoDelay = v; save(); } }),
     h('div', { class: 'menu-section' }, 'Apple Pencil'),

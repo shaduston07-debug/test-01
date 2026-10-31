@@ -114,6 +114,10 @@ python3 -m http.server 8000      # then open http://localhost:8000
 
 **Styluses without pressure** (Apple Pencil USB-C, Logitech Crayon, most other pens): detected automatically after a couple of strokes — tilt then sets the line width (lean = thicker). Settings › Pen pressure from: Auto, Pencil pressure, Tilt, Speed or Off.
 
+**Brush save points**: the bookmark button under the sliders saves the current size + opacity for each brush; tap a point to jump back to it, hold to delete.
+
+**Backup & Restore** (Gallery › Backup): one `.inkwellbackup` file with every canvas, brush, font, palette and setting (time-lapses optional). Updating the iPad app: install the new .ipa over the old one without deleting it and everything stays; the backup is the safety net.
+
 **Rapid undo / redo**: hold two fingers on the canvas to keep undoing, three to keep redoing (or hold the undo / redo buttons) — it starts after a short delay (adjustable, like Procreate's Rapid Undo Delay) and speeds up from 15 to 120 steps a second, with a step counter. Up to 250 undo steps.
 
 **Reference window**: Actions › Canvas › Reference toggles a floating, resizable companion window — *Canvas* shows a live overview of the whole artwork, *Image* shows a reference picture you import. Pinch / scroll to zoom, drag to pan, double-tap to reset, touch and hold to pick a colour.

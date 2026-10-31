@@ -136,6 +136,9 @@ class App {
     this.opSlider = UI.vslider(this, $('#sl-opacity'), 'opacity');
     $('#gal-new').onclick = () => UI.newDocDialog(this);
     $('#gal-import').onclick = () => UI.importAny(this);
+    $('#gal-backup').onclick = () => UI.backupDialog(this);
+    $('#btn-points').innerHTML = ICONS.bookmark;
+    $('#btn-points').onclick = () => UI.openPoints(this, $('#btn-points'));
     $('#gal-folder').onclick = () => UI.createFolderFlow(this);
     $('#gal-settings').onclick = () => UI.openSettings(this);
     for (const c of $$('.mode-card')) c.onclick = () => UI.newDocDialog(this, c.dataset.mode);
