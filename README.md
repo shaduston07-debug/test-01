@@ -80,14 +80,20 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - Adjustments with live preview: HSB, color balance, levels, blur, sharpen, noise, posterize, threshold, gradient map, *brightness → opacity* (clean up scanned line art), *change line color*
 
 **3D layers** (Clip Studio-style):
-- **Drawing figures**: female and male mannequins with ~60 joints, including the clavicles, spine, neck and every finger. In *Body…* set the sex, height, head-to-body ratio and build, and add **medieval** or **futuristic armour**. In *Pose* mode, tap a body part and drag to bend it. Dragging a hand or foot moves the whole limb (**IK**, toggle it off with the *IK* button). *Mirror* swaps left and right.
+- **Drawing figures**: natural female and male bodies, sculpted from about 120 anatomical forms (muscles, bones under the skin, a face, fingers) into one continuous skinned surface that bends smoothly at every joint. There are ~60 joints, including the clavicles, spine, neck and every finger. *Body…* sets the sex, height, head-to-body ratio and build.
+- **Armour**: *Body…* can add fitted **medieval plate** or **sci-fi** armour. The plates are grown from the body's own surface and bend with it.
+- **Posing**: in *Pose* mode, tap a body part and drag to bend it. Dragging a hand or foot moves the whole limb (**IK**, toggle it off with the *IK* button). *Mirror* swaps left and right.
 - **Poses…**: 44 built-in poses (standing, action and dynamic, sitting and floor, expressive, riding, driving). *Hands…* gives 8 hand shapes.
 - **BVH…**: import poses from BVH motion files (Mixamo, CMU, Daz and VRM skeletons, with a frame slider) and export the current pose as BVH. BVH is the pose format Clip Studio Paint 3.1+ imports.
-- **＋ Library…**: dragon (posable neck, tail, legs, jaw and wings, with 6 poses), knight, sci-fi trooper, sedan, sports car, motorcycle, castle, city street, city district.
+- **＋ Library…**
+  - **Creatures** (each one sculpted, posable and with its own poses): dragon, werewolf, orc brute, winged demon, ghoul, alien, giant spider, stone golem, kraken.
+  - **Weapons**: longsword, katana, dagger, battle axe, war hammer, spear, kite and round shields, longbow, pistol, assault rifle, plasma rifle, energy sword. They go straight into a figure's hand (shields on the forearm) and follow every pose. *Hold…* switches hands or drops the weapon.
+  - **Vehicles**: sedan, sports car, motorcycle.
+  - **Places**: castle, city street, city district, cyberpunk street, ruined city, mountains & lake, forest hills, desert dunes.
 - **Camera…**: front, three-quarter, side, back, high, low, dramatic and top-down presets.
 - **Imported models**: glTF/GLB/VRM, FBX and OBJ, the open formats Clip Studio Paint imports. Clip Studio's own files (`.cs3c`, `.cs3o`, `.cs3s`, `.cmo`, …) are closed formats. They are searched for an embedded FBX, glTF or OBJ (including inside zip or SQLite containers), so only some of them load.
 - **Also**: primitive shapes, orbit / pan / zoom camera, move / rotate / scale, lighting and outlines. *Rasterize* turns the layer into pixels so you can draw over it.
-- three.js loads only when a 3D layer is used.
+- three.js loads only when a 3D layer is used. Bodies are meshed in background workers (about 1–2 s, then cached), so the app stays responsive.
 
 PoseManiacs' direct link is a private Clip Studio feature. Poses come in through BVH files instead.
 

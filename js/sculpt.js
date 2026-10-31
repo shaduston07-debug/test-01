@@ -530,7 +530,66 @@ export function bindSkinned(geo, bones, material, root) {
   mesh.userData.boneOf = (v) => { let b = 0, w = -1; for (let k = 0; k < 4; k++) if (sw[v * 4 + k] > w) { w = sw[v * 4 + k]; b = si[v * 4 + k]; } return names[b]; };
   mesh.userData.boneNames = names;
   mesh.userData.skinned = true;
+  mesh.raycast = fastSkinnedRaycast;
   return mesh;
+}
+
+// three.js re-skins every triangle on each raycast (~100 ms for a body). Instead: triangles are
+// grouped by the joint they follow, each group has a bounding sphere in the bind pose; a ray only
+// tests (and skins) the groups whose moved sphere it passes through. ~1–3 ms.
+function pickGroups(mesh) {
+  const g = mesh.geometry;
+  if (g.userData.pick) return g.userData.pick;
+  const P = g.attributes.position.array, si = g.attributes.skinIndex.array, sw = g.attributes.skinWeight.array, idx = g.index.array;
+  const dom = (v) => { let b = 0, w = -1; for (let k = 0; k < 4; k++) if (sw[v * 4 + k] > w) { w = sw[v * 4 + k]; b = si[v * 4 + k]; } return b; };
+  const groups = new Map();
+  for (let t = 0; t < idx.length; t += 3) { const b = dom(idx[t]); if (!groups.has(b)) groups.set(b, []); groups.get(b).push(t); }
+  const out = [];
+  for (const [b, tris] of groups) {
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (const t of tris) for (let k = 0; k < 3; k++) { const v = idx[t + k] * 3; x0 = Math.min(x0, P[v]); x1 = Math.max(x1, P[v]); y0 = Math.min(y0, P[v + 1]); y1 = Math.max(y1, P[v + 1]); z0 = Math.min(z0, P[v + 2]); z1 = Math.max(z1, P[v + 2]); }
+    const c = [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2];
+    out.push({ b, tris: Int32Array.from(tris), c, r: Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 });
+  }
+  return (g.userData.pick = out);
+}
+let _V = null;
+function fastSkinnedRaycast(raycaster, intersects) {
+  if (!_V) _V = { m: new T.Matrix4(), a: new T.Vector3(), b: new T.Vector3(), c: new T.Vector3(), hit: new T.Vector3(), cen: new T.Vector3() };
+  const mesh = this, g = mesh.geometry, P = g.attributes.position.array, si = g.attributes.skinIndex.array, sw = g.attributes.skinWeight.array, idx = g.index.array;
+  const bones = mesh.skeleton.bones, inv = mesh.skeleton.boneInverses, ray = raycaster.ray;
+  const mats = bones.map((bn, i) => new T.Matrix4().multiplyMatrices(bn.matrixWorld, inv[i]).multiply(mesh.bindMatrix));
+  const nv = P.length / 3, done = new Uint8Array(nv), W = new Float32Array(nv * 3);
+  const skin = (v) => {
+    if (done[v]) return;
+    done[v] = 1;
+    const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+    let ox = 0, oy = 0, oz = 0;
+    for (let k = 0; k < 4; k++) {
+      const w = sw[v * 4 + k]; if (!w) continue;
+      const e = mats[si[v * 4 + k]].elements;
+      ox += w * (e[0] * x + e[4] * y + e[8] * z + e[12]); oy += w * (e[1] * x + e[5] * y + e[9] * z + e[13]); oz += w * (e[2] * x + e[6] * y + e[10] * z + e[14]);
+    }
+    W[v * 3] = ox; W[v * 3 + 1] = oy; W[v * 3 + 2] = oz;
+  };
+  let best = null;
+  for (const grp of pickGroups(mesh)) {
+    const M = mats[grp.b], sc = M.getMaxScaleOnAxis();
+    _V.cen.set(...grp.c).applyMatrix4(M);
+    const r = grp.r * sc * 1.35 + 0.03 * sc;
+    if (ray.distanceSqToPoint(_V.cen) > r * r) continue;
+    const tr = grp.tris;
+    for (let i = 0; i < tr.length; i++) {
+      const t = tr[i], a = idx[t], b = idx[t + 1], c = idx[t + 2];
+      skin(a); skin(b); skin(c);
+      _V.a.set(W[a * 3], W[a * 3 + 1], W[a * 3 + 2]); _V.b.set(W[b * 3], W[b * 3 + 1], W[b * 3 + 2]); _V.c.set(W[c * 3], W[c * 3 + 1], W[c * 3 + 2]);
+      if (!ray.intersectTriangle(_V.a, _V.b, _V.c, false, _V.hit)) continue;
+      const d = ray.origin.distanceTo(_V.hit);
+      if (d < raycaster.near || d > raycaster.far || (best && d >= best.distance)) continue;
+      best = { distance: d, point: _V.hit.clone(), face: { a, b, c, normal: new T.Vector3(), materialIndex: 0 }, faceIndex: t / 3, object: mesh };
+    }
+  }
+  if (best) intersects.push(best);
 }
 
 // Triangles mostly driven by one joint, as a separate skinned overlay (selection highlight).
