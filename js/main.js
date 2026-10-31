@@ -27,7 +27,7 @@ const SETTINGS_VERSION = 2;
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 550,
   fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
-  gestures: true, autosave: true, cursor: true, cursorPaint: true,
+  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true,
 };
 
 class App {
@@ -925,6 +925,7 @@ class App {
         app.engine.begin(target, app.brushFor(toolName), {
           kind, color: app.color, size: app.getSize(), opacity: app.getOpacity(), symmetry: app.symmetry,
           selection: app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen', viewZoom: app.view.zoom,
+          steadyInk: kind === 'paint' && app.settings.steadyInk !== false,
           onChange: () => app.changed(),
         });
         this.target = target; this.raw = [p]; this.shape = null; this.anchor = p;

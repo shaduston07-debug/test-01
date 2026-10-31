@@ -288,3 +288,32 @@ export function strokePreviewPoints(w, h, n = 60) {
   }
   return pts;
 }
+
+// ───────── steady ink ─────────
+// Pens should give clean, solid lineart at any pressure (Procreate / CSP style): with
+// "Steady ink" on (the default) an ink brush never fades with pressure or speed, keeps a
+// minimum width on a light touch, follows a soft pressure curve, and keeps crisp edges.
+// Pencils, chalk, airbrushes and paint brushes keep their own pressure behaviour.
+const INK_CATEGORIES = new Set(['Inking', 'ibis Paint', 'ibis Paint style']);
+export function isInkBrush(b) {
+  if (b.ink != null) return !!b.ink;
+  if (b.tip && !['round', 'image'].includes(b.tip)) return false; // pencil / chalk / bristle / splatter…
+  if ((b.flow ?? 1) < 0.9 || (b.hardness ?? 1) < 0.5) return false; // airbrush, watercolor, glow
+  return INK_CATEGORIES.has(b.category) || /pen|ink|liner|dip|fude|felt|marker/i.test(b.name || '');
+}
+const steadyCache = new WeakMap();
+export function steadyInk(b) {
+  let s = steadyCache.get(b);
+  if (s && s._srcV === (b._v || 0)) return s;
+  s = {
+    ...b, _srcV: b._v || 0,
+    opacityPressure: 0, speedOpacity: 0, flowPressure: 0, tiltOpacity: 0,
+    sizePressure: Math.min(b.sizePressure || 0, 0.6),
+    minSize: Math.max(b.minSize || 0, (b.sizePressure || 0) > 0.7 ? 0.3 : 0.45),
+    speedSize: Math.min(b.speedSize || 0, 0.25),
+    hardness: Math.max(b.hardness ?? 1, 0.92),
+    pressureCurve: 0.6,
+  };
+  steadyCache.set(b, s);
+  return s;
+}

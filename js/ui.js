@@ -793,6 +793,7 @@ export function openActions(app, anchor) {
     prefs: () => [
       h('div', {}, switchRow('Right-hand interface', app.settings.rightHanded, (v) => { app.settings.rightHanded = v; app.applySettings(); })),
       h('div', {}, switchRow('Reduce transparency', app.settings.solidUI, (v) => { app.settings.solidUI = v; app.applySettings(); })),
+      h('div', {}, switchRow('Steady ink (pens stay solid at any pressure)', app.settings.steadyInk !== false, (v) => { app.settings.steadyInk = v; app.applySettings(); })),
       h('div', {}, switchRow('Brush cursor', app.settings.cursor, (v) => { app.settings.cursor = v; app.applySettings(); })),
       h('div', {}, switchRow('Brush cursor while painting', app.settings.cursorPaint, (v) => { app.settings.cursorPaint = v; app.applySettings(); })),
       menuItem('settings', 'All settings…', () => openSettings(app)),
@@ -938,6 +939,7 @@ export function openSettings(app) {
     switchRow('Brush cursor while painting', s.cursorPaint, (v) => { s.cursorPaint = v; save(); }),
     switchRow('Gestures (pinch / rotate / pan)', s.gestures, (v) => { s.gestures = v; save(); }),
     h('div', { class: 'menu-section' }, 'Apple Pencil'),
+    switchRow('Steady ink — pens stay solid black at any pressure; pressure only changes the width a little', s.steadyInk !== false, (v) => { s.steadyInk = v; save(); }),
     h('div', { class: 'stack' }, h('label', {}, 'Finger behaviour'), seg([['auto', 'Auto (pencil only once detected)'], ['on', 'Pencil only'], ['off', 'Fingers draw']], s.penOnly, (v) => { s.penOnly = v; save(); })),
     field('Pressure curve (lower = softer touch)', { min: 0.3, max: 2.5, step: 0.05, value: s.pressureGamma, fmt: (v) => v.toFixed(2), onInput: (v) => { s.pressureGamma = v; save(); } }),
     switchRow('QuickShape (hold at end of a stroke)', s.quickShape, (v) => { s.quickShape = v; save(); }),

@@ -4,7 +4,7 @@
 // Smudge works directly on the layer.
 import { makeCanvas, emptyRect, growRect, clampRect, clamp } from './util.js';
 import { snapshot, getBackup, pixelCmd } from './history.js';
-import { getTintedTip, getTipMask, getGrain } from './brushes.js';
+import { getTintedTip, getTipMask, getGrain, isInkBrush, steadyInk } from './brushes.js';
 
 const TAU = Math.PI * 2;
 
@@ -25,6 +25,7 @@ export class StrokeEngine {
   // target: {canvas, layer, scale, matrix, toLocal}
   // o: {kind, color, size, opacity, symmetry, selection, simTaper, onChange}
   begin(target, brush, o) {
+    if (o.steadyInk && isInkBrush(brush)) brush = steadyInk(brush);
     this.target = target; this.brush = brush; this.o = o;
     this.kind = o.kind || 'paint';
     const W = target.canvas.width, H = target.canvas.height;
@@ -183,7 +184,8 @@ export class StrokeEngine {
 
   sizeAt(pt) {
     const b = this.brush;
-    let s = this.size * (1 - b.sizePressure * (1 - pt.p));
+    const pr = b.pressureCurve ? Math.pow(pt.p, b.pressureCurve) : pt.p;
+    let s = this.size * (1 - b.sizePressure * (1 - pr));
     s = Math.max(s, this.size * (b.minSize || 0));
     s *= 1 + (b.tiltSize || 0) * pt.t;
     if (b.speedSize) s *= 1 - b.speedSize * 0.85 * Math.min(1, (pt.v || 0) / 3);
