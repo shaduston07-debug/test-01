@@ -1784,6 +1784,30 @@ async function recoverInto(doc, m) {
   return `Couldn’t read: ${names}. The last picture from the ${from} was added as the layer “Recovered” (Multiply) so you can keep working or trace over it.`;
 }
 
+// Copy a canvas. Fast path: copy the stored record. If that fails (images saved by older versions
+// can be unreadable as-is on iPad), decode the drawing layer by layer and save it fresh.
+async function duplicateDoc(app, m) {
+  toast('Duplicating…', 8000);
+  const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name = m.name + ' copy';
+  const meta = { ...m, id, name, updated: Date.now(), created: Date.now() };
+  try {
+    const data = await store.loadDoc(m.id);
+    if (!data) throw new Error('Canvas not found');
+    try {
+      await store.saveDoc({ ...data, id, name, timelapse: data.timelapse ? { ...data.timelapse, count: 0 } : null }, meta);
+    } catch (e) {
+      console.warn('fast duplicate failed, re-encoding', e);
+      const doc = await Doc.deserialize(data);
+      doc.id = id; doc.name = name; doc.timelapse = doc.timelapse ? { ...doc.timelapse, count: 0 } : null;
+      const out = await doc.serialize(); out.id = id; out.name = name;
+      let thumb = null; try { thumb = m.thumb ? new Blob([await m.thumb.arrayBuffer()], { type: m.thumb.type }) : null; } catch { /* no preview */ }
+      await store.saveDoc(out, { ...meta, thumb });
+    }
+    toast('Duplicated as “' + name + '”', 2000);
+  } catch (e) { console.error(e); toast('Couldn’t duplicate: ' + (e && e.message || e)); }
+  renderGallery(app);
+}
+
 async function openSaved(app, m) {
   toast('Opening…', 6000);
   try {
@@ -1805,8 +1829,8 @@ function galleryMenu(app, m) {
     title: m.name, body: '',
     actions: [
       { label: 'Move to folder…', onClick: () => { setTimeout(() => moveDialog(app, m), 0); } },
-      { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename', m.name); if (!n) return; const data = await store.loadDoc(m.id); data.name = n; await store.saveDoc(data, { ...m, name: n }); renderGallery(app); } },
-      { label: 'Duplicate', onClick: async () => { const data = await store.loadDoc(m.id); const id = 'd' + Date.now().toString(36); await store.saveDoc({ ...data, id, name: m.name + ' copy', timelapse: data.timelapse ? { ...data.timelapse, count: 0 } : null }, { ...m, id, name: m.name + ' copy', updated: Date.now() }); renderGallery(app); } },
+      { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename', m.name); if (!n) return; try { const data = await store.loadDoc(m.id); data.name = n; await store.saveDoc(data, { ...m, name: n }); } catch (e) { console.error(e); toast('Couldn’t rename: ' + (e && e.message || e)); } renderGallery(app); } },
+      { label: 'Duplicate', onClick: () => duplicateDoc(app, m) },
       { label: 'Export project', onClick: async () => { const doc = await Doc.deserialize(await store.loadDoc(m.id)); download(await doc.toFile(), safeName(m.name) + '.inkwell'); } },
       { label: 'Delete', danger: true, onClick: async () => { if (await confirmDialog(`Delete "${m.name}"? This can't be undone.`, 'Delete', true)) { await store.deleteDoc(m.id); store.deleteTimelapse(m.id).catch(() => {}); renderGallery(app); } } },
       { label: 'Close', primary: true },
