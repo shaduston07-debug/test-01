@@ -233,9 +233,12 @@ export class StrokeEngine {
     let size = base;
     if (b.sizeJitter) size *= 1 - b.sizeJitter * Math.random();
     // "opacity" dynamics are converted to per-stamp alpha so their steady state matches
-    const o = Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - Math.min(0.15, (b.speedOpacity || 0) * 0.35) * Math.min(1, (pt.v || 0) / 6));
+    // Solid colour (default): pressure / tilt / speed change the size only — a stroke is always
+    // the full colour, so overlapping strokes of one colour don't darken (like Procreate / CSP pens)
+    const solid = this.o.solidColor;
+    const o = solid ? 1 : Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - Math.min(0.15, (b.speedOpacity || 0) * 0.35) * Math.min(1, (pt.v || 0) / 6));
     const ao = o >= 0.999 ? 1 : 1 - Math.pow(1 - clamp(o, 0, 0.999), Math.max(0.02, b.spacing));
-    let alpha = b.flow * Math.max(0.3, 1 - (b.flowPressure || 0) * (1 - pt.p)) * ao;
+    let alpha = b.flow * (solid ? 1 : Math.max(0.3, 1 - (b.flowPressure || 0) * (1 - pt.p))) * ao;
     if (this.fade && (b.fadeStartAlpha ?? 1) !== 1) {
       let k = b.fadeStartAlpha;
       if (k > 1) k = 1 + (k - 1) * this.blobK;

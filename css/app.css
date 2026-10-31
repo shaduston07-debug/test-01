@@ -491,3 +491,8 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .lib3d-item.on { background: var(--accent); color: #fff; }
 
 #btn-gallery.busy { opacity: 0.5; pointer-events: none; }
+
+/* colour panel: recent colours under the wheel, palette chooser */
+.color-panel .hist-quick { margin: 6px 0 2px; }
+.color-panel .hist-quick button { width: 22px; height: 22px; }
+.pal-quick .pal-pick { display: block; margin: 6px 0 4px; padding: 2px 8px; border-radius: 10px; background: var(--fill-1); color: inherit; font-size: 12px; font-weight: 600; }

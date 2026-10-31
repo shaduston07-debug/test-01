@@ -378,7 +378,7 @@ class App {
     this.color = hex;
     store.prefs.set('color', hex);
     if (remember) {
-      this.colorHistory = [hex, ...this.colorHistory.filter((c) => c !== hex)].slice(0, 10);
+      this.colorHistory = [hex, ...this.colorHistory.filter((c) => c !== hex)].slice(0, 16);
       store.prefs.set('colorHistory', this.colorHistory);
     }
     this.updateColorChip();
@@ -1126,7 +1126,7 @@ class App {
         app.engine.begin(target, app.brushFor(toolName), {
           kind, color: app.color, size: app.getSize(), opacity: app.getOpacity(), symmetry: app.symmetry,
           selection: app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen', viewZoom: app.view.zoom,
-          steadyInk: kind === 'paint' && app.settings.steadyInk !== false, liftAmount: app.settings.liftAmount ?? (app.settings.liftEffects ? 1 : 0), blobAmount: app.settings.blobAmount ?? 0,
+          steadyInk: kind === 'paint' && app.settings.steadyInk !== false, solidColor: app.settings.solidColor !== false, liftAmount: app.settings.liftAmount ?? (app.settings.liftEffects ? 1 : 0), blobAmount: app.settings.blobAmount ?? 0,
           onChange: () => app.changed(),
         });
         this.target = target; this.raw = [p]; this.shape = null; this.anchor = p;
@@ -1316,4 +1316,18 @@ window.addEventListener('unhandledrejection', oom);
 
 const app = new App();
 window.inkwell = app;
+// files opened from outside the app (iPad: Files, Safari downloads, "Open in…") — see SceneDelegate
+async function drainOpened() {
+  const list = window.__inkwellOpen || [];
+  window.__inkwellOpen = [];
+  const files = [];
+  for (const it of list) {
+    try { const blob = await (await fetch(it.url)).blob(); files.push(new File([blob], it.name, { type: blob.type })); }
+    catch (e) { toast(`Couldn’t open ${it.name}`); }
+  }
+  if (files.length) { toast('Importing ' + files.map((f) => f.name).join(', ') + '…', 2500); await UI.handleFiles(app, files); }
+}
+window.addEventListener('inkwellopen', drainOpened);
+window.inkwellReady = true;
+drainOpened();
 app.init();

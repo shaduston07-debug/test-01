@@ -238,7 +238,7 @@ export function bindColorButton(app, btn) {
 export function openColor(app, anchor) {
   let [hh, s, v] = rgbToHsv(...hexToRgb(app.color));
   const prev = app.color;
-  let tab = store.prefs.get('colorTab', 'triangle');
+  let tab = store.prefs.get('colorTab', 'ring');
   let selfSet = false;
   const body = h('div', { class: 'color-panel' });
   const head = h('div', { class: 'color-chips' });
@@ -247,7 +247,8 @@ export function openColor(app, anchor) {
   const tabsEl = h('div', { class: 'pop-tabs' });
   const view = h('div', { class: 'color-view' });
   const bars = h('div', { class: 'hsb-bars' });
-  body.append(view, bars, tabsEl);
+  const histQuick = h('div', { class: 'swatches hist-quick' });
+  body.append(view, histQuick, bars, tabsEl);
 
   const hex = () => rgbToHex(...hsvToRgb(hh, s, v));
   const commit = () => { app.setColor(hex(), true); };
@@ -278,8 +279,10 @@ export function openColor(app, anchor) {
   // ── triangle ──
   const TS = 280, R = TS / 2 - 2, RI = R - 24, RT = RI - 5;
   let tri = null;
-  const buildTriangle = () => {
+  const buildTriangle = (shape = 'triangle') => {
     const c = h('canvas', { class: 'color-tri', width: TS * 2, height: TS * 2 });
+    // inner square (Ring + square mode): saturation left → right, brightness bottom → top
+    const SQ = (RI - 6) * Math.SQRT1_2, sq = { x0: TS / 2 - SQ, y0: TS / 2 - SQ, w: SQ * 2 };
     const ring = makeCanvas(TS * 2, TS * 2), rx = ring.getContext('2d'), rid = rx.createImageData(TS * 2, TS * 2);
     for (let y = 0; y < TS * 2; y++) for (let x = 0; x < TS * 2; x++) {
       const dx = x / 2 - TS / 2, dy = y / 2 - TS / 2, d = Math.hypot(dx, dy);
@@ -307,6 +310,18 @@ export function openColor(app, anchor) {
       const x = c.getContext('2d');
       x.clearRect(0, 0, TS * 2, TS * 2);
       x.drawImage(ring, 0, 0);
+      const a0 = (hh - 90) * Math.PI / 180, mr0 = (R + RI) / 2;
+      const marker = (px, py) => { x.beginPath(); x.arc(px * 2, py * 2, 15, 0, Math.PI * 2); x.lineWidth = 5; x.strokeStyle = '#fff'; x.stroke(); x.lineWidth = 2; x.strokeStyle = 'rgba(0,0,0,.55)'; x.stroke(); };
+      if (shape === 'square') {
+        const X = sq.x0 * 2, Y = sq.y0 * 2, Wd = sq.w * 2;
+        x.fillStyle = rgbToHex(...hsvToRgb(hh, 1, 1)); x.fillRect(X, Y, Wd, Wd);
+        let gr = x.createLinearGradient(X, 0, X + Wd, 0); gr.addColorStop(0, '#fff'); gr.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = gr; x.fillRect(X, Y, Wd, Wd);
+        gr = x.createLinearGradient(0, Y, 0, Y + Wd); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, '#000'); x.fillStyle = gr; x.fillRect(X, Y, Wd, Wd);
+        x.lineWidth = 2; x.strokeStyle = 'rgba(255,255,255,0.35)'; x.strokeRect(X + 1, Y + 1, Wd - 2, Wd - 2);
+        marker(TS / 2 + Math.cos(a0) * mr0, TS / 2 + Math.sin(a0) * mr0);
+        marker(sq.x0 + s * sq.w, sq.y0 + (1 - v) * sq.w);
+        return;
+      }
       const V = verts();
       if (triHue !== hh) {
         // re-shade the triangle only when the hue changes
@@ -337,8 +352,9 @@ export function openColor(app, anchor) {
     drag(c, (e, first) => {
       const r = c.getBoundingClientRect(), p = { x: (e.clientX - r.left) * TS / r.width, y: (e.clientY - r.top) * TS / r.height };
       const d = Math.hypot(p.x - TS / 2, p.y - TS / 2);
-      if (first) mode = d > RI - 3 ? 'ring' : 'tri';
+      if (first) mode = d > RI - 3 ? 'ring' : shape;
       if (mode === 'ring') hh = ((Math.atan2(p.y - TS / 2, p.x - TS / 2) * 180 / Math.PI + 90) % 360 + 360) % 360;
+      else if (mode === 'square') { s = clamp((p.x - sq.x0) / sq.w, 0, 1); v = clamp(1 - (p.y - sq.y0) / sq.w, 0, 1); }
       else {
         let [wh, ww, wb] = bary(p, verts());
         wh = Math.max(0, wh); ww = Math.max(0, ww); wb = Math.max(0, wb);
@@ -464,20 +480,28 @@ export function openColor(app, anchor) {
     return { el: box, draw: () => {} };
   };
   // the default palette, compact, under the other color modes (like Procreate)
+  // under the wheel: recent colours, then the chosen palette (tap its name to pick another)
   const quick = h('div', { class: 'pal-quick' });
   quick.render = () => {
-    quick.innerHTML = '';
-    if (tab === 'palettes') return;
+    quick.innerHTML = ''; histQuick.innerHTML = '';
+    if (tab === 'palettes') { histQuick.hidden = true; return; }
+    histQuick.hidden = !app.colorHistory.length;
+    for (const c of app.colorHistory.slice(0, 16)) histQuick.append(swatchBtn(c));
     const list = pals(), pal = list.find((x) => x.id === Pal.defaultPaletteId(list));
-    if (pal) quick.append(swatchGrid(pal));
+    if (!pal) return;
+    const pick = h('button', { class: 'pal-pick', title: 'Choose the palette shown here', onclick: () => dialog({ title: 'Palette under the wheel', body: '', actions: [
+      ...list.map((p2) => ({ label: (p2.id === pal.id ? '✓ ' : '') + p2.name, onClick: () => { Pal.setDefaultPalette(p2.id); quick.render(); renderSw && renderSw(); } })),
+      { label: 'Cancel', primary: true },
+    ] }) }, pal.name + ' ▾');
+    quick.append(pick, swatchGrid(pal));
   };
-  body.insertBefore(quick, tabsEl);
+  body.insertBefore(quick, bars);
 
-  const builders = { triangle: buildTriangle, square: buildSquare, values: buildValues, palettes: buildPalettes };
+  const builders = { ring: () => buildTriangle('square'), triangle: () => buildTriangle('triangle'), square: buildSquare, values: buildValues, palettes: buildPalettes };
   let cur = null;
   const renderTab = () => {
     tabsEl.innerHTML = '';
-    for (const [k, l] of [['triangle', 'Triangle'], ['square', 'Classic'], ['values', 'Value'], ['palettes', 'Palettes']]) {
+    for (const [k, l] of [['ring', 'Square'], ['triangle', 'Triangle'], ['square', 'Classic'], ['values', 'Value'], ['palettes', 'Palettes']]) {
       tabsEl.append(h('button', { class: tab === k ? 'on' : '', onclick: () => { tab = k; store.prefs.set('colorTab', k); renderTab(); } }, l));
     }
     cur = builders[tab]();
@@ -493,7 +517,12 @@ export function openColor(app, anchor) {
     raf = requestAnimationFrame(() => { raf = 0; cur && cur.draw(); });
   };
   // keep in sync when the color changes elsewhere (eyedropper, ColorDrop…)
-  const listener = (c) => { if (selfSet) return; [hh, s, v] = rgbToHsv(...hexToRgb(c)); refresh(); renderSw && renderSw(); };
+  let histKey = app.colorHistory.join();
+  const listener = (c) => {
+    if (!selfSet) { [hh, s, v] = rgbToHsv(...hexToRgb(c)); refresh(); }
+    // swatch rows only change when the history does (not on every drag step)
+    if (app.colorHistory.join() !== histKey) { histKey = app.colorHistory.join(); renderSw && renderSw(); quick.render(); }
+  };
   app.colorListeners.add(listener);
   renderTab();
   openPopover(anchor, { title: 'Colors', body, head: [head], width: 330, key: 'color', float: true, onClose: () => app.colorListeners.delete(listener) });
@@ -1058,6 +1087,7 @@ export function openSettings(app) {
     h('div', { class: 'menu-section' }, 'Apple Pencil'),
     h('div', { class: 'stack' }, h('label', {}, 'Pen pressure from'),
       seg([['auto', app.penHasPressure ? 'Auto (pressure found)' : 'Auto (full strength)'], ['pressure', 'Pencil pressure'], ['tilt', 'Tilt'], ['speed', 'Speed'], ['off', 'Off (full strength)']], s.pressureSource || 'auto', (v) => { s.pressureSource = v; save(); }),
+      switchRow('Solid colour — pressure, tilt and speed change the size only (overlapping strokes don’t darken)', s.solidColor !== false, (v) => { s.solidColor = v; save(); }),
       h('p', { class: 'hint' }, 'Every brush is made to look right at full strength; pressure is a bonus. Auto uses pressure only once your pen shows it really senses it. Optional extras for pens without pressure: Tilt — lean the pen for a thicker, darker line; Speed — slow strokes are heavier, fast ones lighter.')),
     switchRow('Steady ink — pens stay solid black at any pressure; pressure only changes the width a little', s.steadyInk !== false, (v) => { s.steadyInk = v; save(); }),
     h('div', { class: 'stack' }, h('label', {}, 'Finger behaviour'), seg([['auto', 'Auto (pencil only once detected)'], ['on', 'Pencil only'], ['off', 'Fingers draw']], s.penOnly, (v) => { s.penOnly = v; save(); })),
@@ -1892,9 +1922,29 @@ export function newDocDialog(app, mode = 'paint') {
 }
 
 export async function importAny(app) {
-  const files = await pickFile('.inkwell,.json,image/*,.sut,.brush,.brushset', true);
-  if (!files.length) return;
-  const brushFiles = files.filter((f) => /\.(sut|brush|brushset)$/i.test(f.name));
+  const files = await pickFile('.inkwell,.json,image/*,.sut,.brush,.brushset,.abr,' + Pal.PALETTE_ACCEPT + ',.inkwellbackup', true);
+  if (files.length) await handleFiles(app, files);
+}
+
+// Any file handed to the app — from Import, or opened from Files / Safari / "Open in…" on iPad:
+// brushes (Clip Studio .sut, Procreate .brush/.brushset), palettes, backups, projects, images.
+export async function handleFiles(app, files) {
+  const ext = (f) => (f.name.split('.').pop() || '').toLowerCase();
+  // palettes
+  const pals = files.filter((f) => ['swatches', 'aco', 'ase', 'gpl', 'hex', 'txt'].includes(ext(f)));
+  for (const f of pals) {
+    try {
+      const list = Pal.loadPalettes();
+      for (const pl of await Pal.importPaletteFile(f)) list.push({ id: uid(), name: pl.name, colors: pl.colors });
+      Pal.savePalettes(list); toast(`Palette “${f.name.replace(/\.[^.]+$/, '')}” added`, 2500);
+    } catch (e) { toast(`${f.name}: ${e.message || e}`, 3500); }
+  }
+  // a full backup
+  for (const f of files.filter((f) => ext(f) === 'inkwellbackup')) {
+    if (!(await confirmDialog(`Restore “${f.name}”? Canvases, brushes and settings in it are added back (nothing is deleted).`, 'Restore'))) continue;
+    try { const r = await Backup.importBackup(f); toast(`Restored ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'}`, 3000); if (!app.doc) renderGallery(app); } catch (e) { toast('Couldn’t restore: ' + (e.message || e), 4000); }
+  }
+  const brushFiles = files.filter((f) => /\.(sut|brush|brushset|abr)$/i.test(f.name));
   if (brushFiles.length) {
     const { brushes, notes } = await importBrushFiles(brushFiles);
     for (const b of brushes) { await preloadBrush(b); app.brushes.push(b); await store.saveBrush(b); }
