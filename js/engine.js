@@ -65,7 +65,9 @@ export class StrokeEngine {
     } else {
       this.endLen = et > 0 ? (et * this.size * 4 + 1) / this.scale : 0; this.endSize = null; this.endAlpha = 1;
     }
-    if (!o.liftEffects) this.endLen = 0; // strokes stay exactly as drawn
+    // post-correction amount (0 = strokes stay exactly as drawn … 1 = the brush's full end effect)
+    this.liftK = clamp(o.liftAmount ?? (o.liftEffects ? 1 : 0), 0, 1);
+    if (!this.liftK) this.endLen = 0;
     this.tail = []; this.tailHead = 0;
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
     this.speed = 0; this.lastTime = null;
@@ -284,11 +286,12 @@ export class StrokeEngine {
       let size = T[i + 2], alpha = T[i + 3];
       if (rem < L) {
         const u = Math.max(0, rem / L);
+        const k = this.liftK;
         if (this.endSize != null) {
-          const f = smooth(u);
-          size *= this.endSize + (1 - this.endSize) * f;
-          alpha = Math.min(1, alpha * (this.endAlpha + (1 - this.endAlpha) * f));
-        } else size *= 0.1 + 0.9 * Math.sqrt(u);
+          const f = smooth(u), es = 1 + (this.endSize - 1) * k, ea = 1 + (this.endAlpha - 1) * k;
+          size *= es + (1 - es) * f;
+          alpha = Math.min(1, alpha * (ea + (1 - ea) * f));
+        } else size *= 1 - k * 0.9 * (1 - Math.sqrt(u));
       }
       if (size < 1) { alpha *= size; size = 1; }
       for (const f of sym) {
@@ -430,7 +433,7 @@ export class StrokeEngine {
       const q = this.q, n = q.length;
       this.walk({ x: (q[n - 2].x + q[n - 1].x) / 2, y: (q[n - 2].y + q[n - 1].y) / 2, p: (q[n - 2].p + q[n - 1].p) / 2, t: q[n - 1].t }, q[n - 1]);
     }
-    if (this.kind !== 'smudge' && this.o.liftEffects) this.taperEnd();
+    if (this.kind !== 'smudge' && this.liftK > 0) this.taperEnd();
     const rect = clampRect(this.bounds, this.W, this.H);
     // the preview is discarded now; only the selection mask still has to be applied
     if (this.kind !== 'smudge' && this.o.selection && rect.w > 0 && rect.h > 0) {
