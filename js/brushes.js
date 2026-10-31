@@ -305,15 +305,22 @@ const steadyCache = new WeakMap();
 export function steadyInk(b) {
   let s = steadyCache.get(b);
   if (s && s._srcV === (b._v || 0)) return s;
-  s = {
-    ...b, _srcV: b._v || 0,
-    opacityPressure: 0, speedOpacity: 0, flowPressure: 0, tiltOpacity: 0,
-    sizePressure: Math.min(b.sizePressure || 0, 0.6),
-    minSize: Math.max(b.minSize || 0, (b.sizePressure || 0) > 0.7 ? 0.3 : 0.45),
-    speedSize: Math.min(b.speedSize || 0, 0.25),
-    hardness: Math.max(b.hardness ?? 1, 0.92),
-    pressureCurve: 0.6,
-  };
+  // never fade: pressure / speed / tilt only ever change the width
+  const solid = { opacityPressure: 0, speedOpacity: 0, flowPressure: 0, tiltOpacity: 0 };
+  // Expressive pens (fast-flick thinning or a long built-in taper, e.g. Pluma falcon, fude,
+  // dip pens) keep their full thick-thin range, softness and tapers: they only get solid ink
+  // and a hairline minimum so a light touch never vanishes.
+  const expressive = (b.speedSize || 0) >= 0.2 || (b.taperAlways && (b.taper || 0) >= 0.3);
+  s = expressive
+    ? { ...b, ...solid, _srcV: b._v || 0, minSize: Math.max(b.minSize || 0, 0.1), pressureCurve: 0.85 }
+    : {
+      ...b, ...solid, _srcV: b._v || 0,
+      sizePressure: Math.min(b.sizePressure || 0, 0.6),
+      minSize: Math.max(b.minSize || 0, (b.sizePressure || 0) > 0.7 ? 0.3 : 0.45),
+      speedSize: Math.min(b.speedSize || 0, 0.25),
+      hardness: Math.max(b.hardness ?? 1, 0.92),
+      pressureCurve: 0.6,
+    };
   steadyCache.set(b, s);
   return s;
 }
