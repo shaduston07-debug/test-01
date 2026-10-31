@@ -105,7 +105,7 @@ class Kit {
 }
 // joints from [name, parent, world position] — bind orientation is identity everywhere,
 // so a joint's local rotation is simply its rotation relative to its parent
-function makeJoints(spec, root) {
+export function makeJoints(spec, root) {
   const joints = { _root: root }, world = {};
   for (const [name, parent, wp] of spec) {
     const g = new T.Group(); g.name = name;
@@ -120,7 +120,7 @@ function makeJoints(spec, root) {
   const L = (name, p) => v3(p).sub(world[name]).toArray();
   return { joints, world, L };
 }
-function stdMat(color, o = {}) { return new T.MeshStandardMaterial({ color, roughness: 0.72, metalness: 0, ...o }); }
+export function stdMat(color, o = {}) { return new T.MeshStandardMaterial({ color, roughness: 0.72, metalness: 0, ...o }); }
 
 // ───────── drawing figure (female / male) ─────────
 // Clip-Studio-like proportions; built in T-pose (arms along ±X, facing +Z), shown in an
@@ -136,10 +136,10 @@ export function humanJointNames() {
   return n;
 }
 
-export function buildHuman(body = HUMAN_DEFAULT, color = '#c9c6c1') {
+// skeleton (world positions in the T-pose bind) shared by every human body
+export function humanSpec(body = HUMAN_DEFAULT) {
   const b = { ...HUMAN_DEFAULT, ...body };
-  const F = b.sex === 'female', H = b.height, hd = H / b.heads, k = 0.85 + b.build * 0.35; // limb thickness
-  const root = new T.Group();
+  const F = b.sex === 'female', H = b.height, hd = H / b.heads;
   // ── skeleton (world positions in bind / T-pose) ──
   const hipY = H * 0.53, waistY = hipY + H * 0.07, chestY = waistY + H * 0.115, neckY = H - hd * 1.18, headY = neckY + hd * 0.22;
   const shW = F ? H * 0.105 : H * 0.122, hipW = F ? H * 0.062 : H * 0.056;
@@ -177,6 +177,24 @@ export function buildHuman(body = HUMAN_DEFAULT, color = '#c9c6c1') {
       spec.push([f + s + 3, f + s + 2, [base[0] + x * (L1 + L2), base[1], base[2] + dirz * (L1 + L2)]]);
     }
   }
+  return { b, F, H, hd, spec, dims: { hipY, waistY, chestY, neckY, headY, shW, hipW, upArm, foreArm, handL, thigh, shin, ankleY, kneeY, footLen } };
+}
+
+// Natural sculpted body (one continuous skinned mesh): see anatomy.js. The old mannequin made of
+// separate parts is kept as buildHumanParts for very slow devices / fallback.
+let sculptHuman = null;
+export function setSculptor(fn) { sculptHuman = fn; }
+export function buildHuman(body = HUMAN_DEFAULT, color = '#c9c6c1') {
+  if (sculptHuman) {
+    try { return sculptHuman(body, color); } catch (e) { console.error('sculpted body failed, using the simple one', e); }
+  }
+  return buildHumanParts(body, color);
+}
+export function buildHumanParts(body = HUMAN_DEFAULT, color = '#c9c6c1') {
+  const { b, F, H, hd, spec, dims } = humanSpec(body);
+  const k = 0.85 + b.build * 0.35; // limb thickness
+  const { hipY, waistY, chestY, neckY, headY, handL, ankleY, footLen } = dims;
+  const root = new T.Group();
   const { joints, world, L } = makeJoints(spec, root);
   const W = (n) => world[n].toArray();
   const mats = { skin: stdMat(color, { roughness: 0.78 }) };
