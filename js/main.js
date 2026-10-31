@@ -22,12 +22,12 @@ function defaultMemoryMB() {
   const cores = navigator.hardwareConcurrency || 4;
   return cores >= 8 ? 2000 : cores >= 6 ? 1000 : 600;
 }
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 const DEFAULT_SETTINGS = {
-  rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 550,
+  rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 800,
   fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
-  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35, pressureSource: 'auto',
+  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35, pressureSource: 'auto', liftEffects: false,
 };
 
 class App {
@@ -39,6 +39,8 @@ class App {
     if ((this.settings.v || 1) < SETTINGS_VERSION) {
       // older builds stored a 700 MB budget; move up to the device-appropriate default
       if (this.settings.memoryMB <= 700) this.settings.memoryMB = defaultMemoryMB();
+      // QuickShape used to fire after a 0.55 s pause, often when just lifting the pen
+      if (this.settings.quickShapeDelay === 550) this.settings.quickShapeDelay = 800;
       this.settings.v = SETTINGS_VERSION;
     }
     this.history = new History(() => this.updateUndoButtons());
@@ -1051,7 +1053,7 @@ class App {
         app.engine.begin(target, app.brushFor(toolName), {
           kind, color: app.color, size: app.getSize(), opacity: app.getOpacity(), symmetry: app.symmetry,
           selection: app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen', viewZoom: app.view.zoom,
-          steadyInk: kind === 'paint' && app.settings.steadyInk !== false,
+          steadyInk: kind === 'paint' && app.settings.steadyInk !== false, liftEffects: !!app.settings.liftEffects,
           onChange: () => app.changed(),
         });
         this.target = target; this.raw = [p]; this.shape = null; this.anchor = p;

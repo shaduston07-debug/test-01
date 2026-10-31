@@ -955,6 +955,7 @@ export function openSettings(app) {
     h('div', { class: 'stack' }, h('label', {}, 'Finger behaviour'), seg([['auto', 'Auto (pencil only once detected)'], ['on', 'Pencil only'], ['off', 'Fingers draw']], s.penOnly, (v) => { s.penOnly = v; save(); })),
     field('Pressure curve (lower = softer touch)', { min: 0.3, max: 2.5, step: 0.05, value: s.pressureGamma, fmt: (v) => v.toFixed(2), onInput: (v) => { s.pressureGamma = v; save(); } }),
     switchRow('QuickShape (hold at end of a stroke)', s.quickShape, (v) => { s.quickShape = v; save(); }),
+    switchRow('Brush end effects when lifting (ibis fade-out / taper re-drawn on lift)', !!s.liftEffects, (v) => { s.liftEffects = v; save(); }),
     field('QuickShape delay', { min: 250, max: 1500, step: 50, value: s.quickShapeDelay, fmt: (v) => v + ' ms', onInput: (v) => { s.quickShapeDelay = v; save(); } }),
     h('div', { class: 'menu-section' }, 'Performance'),
     field('Memory budget for layers', { min: 300, max: 4000, step: 50, value: s.memoryMB, fmt: (v) => v + ' MB', onInput: (v) => { s.memoryMB = v; save(); } }),

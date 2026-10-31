@@ -65,6 +65,7 @@ export class StrokeEngine {
     } else {
       this.endLen = et > 0 ? (et * this.size * 4 + 1) / this.scale : 0; this.endSize = null; this.endAlpha = 1;
     }
+    if (!o.liftEffects) this.endLen = 0; // strokes stay exactly as drawn
     this.tail = []; this.tailHead = 0;
     this.q = []; this.s = null; this.carry = 0; this.travel = 0; this.travelNow = 0; this.dir = 0; this.lastRaw = null;
     this.speed = 0; this.lastTime = null;
@@ -429,7 +430,7 @@ export class StrokeEngine {
       const q = this.q, n = q.length;
       this.walk({ x: (q[n - 2].x + q[n - 1].x) / 2, y: (q[n - 2].y + q[n - 1].y) / 2, p: (q[n - 2].p + q[n - 1].p) / 2, t: q[n - 1].t }, q[n - 1]);
     }
-    if (this.kind !== 'smudge') this.taperEnd();
+    if (this.kind !== 'smudge' && this.o.liftEffects) this.taperEnd();
     const rect = clampRect(this.bounds, this.W, this.H);
     // the preview is discarded now; only the selection mask still has to be applied
     if (this.kind !== 'smudge' && this.o.selection && rect.w > 0 && rect.h > 0) {
