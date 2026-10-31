@@ -196,7 +196,7 @@ export class StrokeEngine {
       // speed effects change gradually along the line (over ~2 brush widths), so uneven pen
       // sample timing can never show up as beads or dashes
       const vRaw = av + dv * t, step = Math.max(0.5, this.carry || 1);
-      this.vSm = this.vSm == null ? vRaw : this.vSm + (vRaw - this.vSm) * Math.min(1, step / (this.size / this.scale * 2 + 6));
+      this.vSm = this.vSm == null ? vRaw : this.vSm + (vRaw - this.vSm) * Math.min(1, step / (this.size / this.scale * 4 + 10));
       pt.v = this.vSm;
       this.travelNow = this.travel + pos;
       // stampAt returns the un-jittered size so spacing needn't recompute it
@@ -214,7 +214,7 @@ export class StrokeEngine {
     s = Math.max(s, this.size * (b.minSize || 0));
     s *= 1 + (b.tiltSize || 0) * pt.t;
     // speed can thin a line a little (≤ 35 %), never make long fast lines vanish
-    if (b.speedSize) s *= 1 - Math.min(0.35, b.speedSize * 0.6) * Math.min(1, (pt.v || 0) / 5);
+    if (b.speedSize) s *= 1 - Math.min(0.18, b.speedSize * 0.4) * Math.min(1, (pt.v || 0) / 6);
     if (this.fade) {
       let k = (b.fadeStartSize ?? 1);
       if (k > 1) k = 1 + (k - 1) * this.blobK; // ink blob at the start (0 = none)
@@ -233,7 +233,7 @@ export class StrokeEngine {
     let size = base;
     if (b.sizeJitter) size *= 1 - b.sizeJitter * Math.random();
     // "opacity" dynamics are converted to per-stamp alpha so their steady state matches
-    const o = Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - Math.min(0.25, (b.speedOpacity || 0) * 0.45) * Math.min(1, (pt.v || 0) / 5));
+    const o = Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - Math.min(0.15, (b.speedOpacity || 0) * 0.35) * Math.min(1, (pt.v || 0) / 6));
     const ao = o >= 0.999 ? 1 : 1 - Math.pow(1 - clamp(o, 0, 0.999), Math.max(0.02, b.spacing));
     let alpha = b.flow * Math.max(0.3, 1 - (b.flowPressure || 0) * (1 - pt.p)) * ao;
     if (this.fade && (b.fadeStartAlpha ?? 1) !== 1) {
@@ -412,9 +412,12 @@ export class StrokeEngine {
     if (sel) {
       const b = this.bctx;
       b.save();
+      // 'destination-in' is an unbounded operator: without the clip it would erase everything
+      // outside this rectangle (the rest of the stroke painted in earlier frames)
+      b.setTransform(1, 0, 0, 1, 0, 0); // the stroke context may carry a stamp transform
+      b.beginPath(); b.rect(x, y, w, h); b.clip();
       b.globalCompositeOperation = 'destination-in'; b.globalAlpha = 1;
       if (this.target.matrix) {
-        b.beginPath(); b.rect(x, y, w, h); b.clip();
         const m = this.target.matrix.inverse(); b.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
         b.drawImage(sel, 0, 0);
       } else b.drawImage(sel, x, y, w, h, x, y, w, h);
@@ -451,9 +454,8 @@ export class StrokeEngine {
     if (this.kind !== 'smudge' && this.o.selection && rect.w > 0 && rect.h > 0) {
       this.dirty = { ...this.bounds };
       const b = this.bctx;
-      b.save(); b.globalCompositeOperation = 'destination-in';
+      b.save(); b.setTransform(1, 0, 0, 1, 0, 0); b.globalAlpha = 1; b.beginPath(); b.rect(rect.x, rect.y, rect.w, rect.h); b.clip(); b.globalCompositeOperation = 'destination-in';
       if (this.target.matrix) {
-        b.beginPath(); b.rect(rect.x, rect.y, rect.w, rect.h); b.clip();
         const m = this.target.matrix.inverse(); b.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
         b.drawImage(this.o.selection, 0, 0);
       } else b.drawImage(this.o.selection, rect.x, rect.y, rect.w, rect.h, rect.x, rect.y, rect.w, rect.h);

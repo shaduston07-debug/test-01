@@ -26,7 +26,7 @@ const SETTINGS_VERSION = 3;
 
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 800,
-  fillTolerance: 0.12, fillGap: 0, fillExpand: 1, fillRef: 'layer', memoryMB: defaultMemoryMB(), fingerSmudge: false,
+  fillTolerance: 0.12, fillGap: 2, fillExpand: 2, fillRef: 'all', memoryMB: defaultMemoryMB(), fingerSmudge: false,
   gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35, pressureSource: 'auto', liftAmount: 0, blobAmount: 0,
 };
 
@@ -36,6 +36,12 @@ class App {
     this.ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
     this.contentVer = 0;
     this.settings = { ...DEFAULT_SETTINGS, ...store.prefs.get('settings', {}) };
+    // one-time: fill reads all layers (line art on its own layer), closes hairline gaps and
+    // tucks 2 px under anti-aliased edges, so it no longer floods the canvas or leaves halos
+    if (!store.prefs.get('mig.fill2', false)) {
+      Object.assign(this.settings, { fillRef: 'all', fillGap: Math.max(2, this.settings.fillGap || 0), fillExpand: Math.max(2, this.settings.fillExpand || 0) });
+      store.prefs.set('settings', this.settings); store.prefs.set('mig.fill2', true);
+    }
     if ((this.settings.v || 1) < SETTINGS_VERSION) {
       // older builds stored a 700 MB budget; move up to the device-appropriate default
       if (this.settings.memoryMB <= 700) this.settings.memoryMB = defaultMemoryMB();
@@ -252,6 +258,7 @@ class App {
       const r = await within(job, 6000);
       clearTimeout(slow);
       if (r === 'timeout') { toast('Still saving in the background…', 3000); job.then(() => { if (!this.doc) UI.renderGallery(this); }); }
+      else toast(this.dirtySave ? 'Couldn’t save — try again from the gallery menu' : 'Saved ✓', 1400);
       await within(this.tlapse.detach(), 3000);
     } finally {
       step(() => { this.doc = null; this.dropCaches(); });
@@ -270,7 +277,8 @@ class App {
     this.tlapse.schedule();
     this.reference.changed();
     clearTimeout(this.saveTimer);
-    if (this.settings.autosave) this.saveTimer = setTimeout(() => this.saveNow(), 9000);
+    // autosave: soon after drawing stops, and a safety save even with the setting off
+    this.saveTimer = setTimeout(() => this.saveNow(), this.settings.autosave ? 9000 : 30000);
   }
 
   async saveNow(force) {
@@ -528,7 +536,8 @@ class App {
     if (this.recordPen) this.logPen('down', e);
     if (this.pendingStroke) {
       const ps = this.pendingStroke, lu = ps.lastUp;
-      if (e.pointerType === 'pen' && !this.active && ps === this.tools[this.tool] && performance.now() - lu.t < 70 && dist(p.sx, p.sy, lu.sx, lu.sy) < 24) {
+      const gapT = performance.now() - lu.t, reach = 24 + Math.min(400, (lu.v || 0) * gapT * 1.6);
+      if (e.pointerType === 'pen' && !this.active && ps === this.tools[this.tool] && gapT < 110 && dist(p.sx, p.sy, lu.sx, lu.sy) < reach) {
         this.ptrs.set(e.pointerId, { id: e.pointerId, type: e.pointerType, sx: p.sx, sy: p.sy, x0: p.sx, y0: p.sy, t0: performance.now() });
         this.active = { id: e.pointerId, tool: this.tool, type: 'pen', t0: performance.now() };
         ps.resume(p); this.requestRender('active');
@@ -1068,7 +1077,7 @@ class App {
   selectionChanged() { this.requestRender('view'); }
 
   // ───────── fill ─────────
-  async fillAt(x, y, color = this.color) {
+  async fillAt(x, y, color = this.color, tolerance = null) {
     const d = this.doc;
     const target = d.getTarget(true);
     if (!target) { toast('Pick a raster layer to fill'); return; }
@@ -1086,8 +1095,8 @@ class App {
     const w = ref.width, hh = ref.height;
     const src = ref.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, hh).data;
     const sel = this.selection.active ? this.selection.mask : null;
-    const region = await fillRegionAsync(src, w, hh, x, y, { tolerance: s.fillTolerance, gap: s.fillGap, expand: s.fillExpand });
-    if (!region || this.doc !== d) return;
+    const region = await fillRegionAsync(src, w, hh, x, y, { tolerance: tolerance ?? s.fillTolerance, gap: s.fillGap, expand: s.fillExpand });
+    if (!region || this.doc !== d) return false;
     const fill = regionToCanvas(region, w, hh, color, sel);
     withUndo(this.history, target.canvas, 'Fill', (c) => {
       c.save();
@@ -1096,6 +1105,7 @@ class App {
       c.drawImage(fill, 0, 0); c.restore();
     }, () => this.requestRender(), target.matrix ? null : fill.bbox);
     this.changed('active');
+    return true;
   }
 
   // ───────── tools ─────────
@@ -1175,9 +1185,10 @@ class App {
         // up + down). Keep the stroke open briefly so it continues instead of starting a new one
         // (which would add a second start / end fade in the middle of the line).
         if (e && e.pointerType === 'pen' && !this.shape && app.engine.active && p) {
-          this.lastUp = { sx: p.sx, sy: p.sy, t: performance.now() };
+          // remember how fast the pen was going: a quick stroke covers a lot of ground in the gap
+          this.lastUp = { sx: p.sx, sy: p.sy, t: performance.now(), v: app.engine.speed || 0 };
           clearTimeout(this.joinT);
-          this.joinT = setTimeout(() => this.finish(), 70);
+          this.joinT = setTimeout(() => this.finish(), 110);
           app.pendingStroke = this;
           return;
         }
@@ -1210,8 +1221,37 @@ class App {
         },
         cancel() { $('#loupe').hidden = true; },
       },
+      // tap to fill; keep holding and slide sideways to change the threshold live (like
+      // Procreate's ColorDrop) — each step replaces the previous fill
       fill: {
-        down(p) { app.fillAt(p.x, p.y); },
+        down(p) {
+          this.p0 = p; this.tol = app.settings.fillTolerance; this.cur = this.tol; this.dragged = false;
+          this.job = app.fillAt(p.x, p.y).then((ok) => { this.filled = !!ok; });
+        },
+        move(p) {
+          if (!this.p0) return;
+          const dx = p.sx - this.p0.sx;
+          if (!this.dragged && Math.abs(dx) < 10) return;
+          this.dragged = true;
+          this.want = clamp(this.tol + dx / 500, 0, 1);
+          app.showHud('Threshold ' + Math.round(this.want * 100) + '%');
+          if (this.running) return;
+          const step = async () => {
+            this.running = true;
+            await this.job;
+            while (this.want != null && Math.abs(this.want - this.cur) > 0.004) {
+              const t = this.want; this.cur = t;
+              if (this.filled) { app.history.undo(); }
+              this.filled = await app.fillAt(this.p0.x, this.p0.y, app.color, t);
+            }
+            this.running = false;
+          };
+          this.job = step();
+        },
+        async up() {
+          if (this.dragged) { await this.job; app.settings.fillTolerance = this.cur; app.applySettings(); }
+          this.p0 = null; this.want = null;
+        },
         bar() { return UI.fillBar(app); },
       },
       select: UI.selectTool(app),

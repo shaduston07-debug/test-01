@@ -1218,7 +1218,8 @@ export function selectTool(app) {
   const t = {
     mode: store.prefs.get('selMode', 'freehand'), op: 'replace', wandRef: 'layer', wandTol: 0.2,
     poly: null, // lasso in progress: [{x,y}]
-    exit() { this.poly = null; this.drag = null; this.wand = null; },
+    // leaving the tool closes an open lasso (like Procreate) instead of throwing it away
+    exit() { if (this.poly && this.poly.length >= 3) this.closeLasso(); this.poly = null; this.drag = null; this.wand = null; },
     screenDist(a, b) { const p = app.docToScreen(a.x, a.y), q = app.docToScreen(b.x, b.y); return Math.hypot(p.x - q.x, p.y - q.y); },
     down(p) {
       this.p0 = p; this.p1 = p; this.moved = false;
@@ -1245,9 +1246,12 @@ export function selectTool(app) {
       if (this.mode === 'freehand') {
         const poly = this.poly;
         if (this.moved) {
-          // a single drag closes itself (lasso); a drag inside a polygon continues it
+          // like Procreate: lifting leaves the lasso open (dotted line back to the start) —
+          // draw more, tap to add straight edges, tap the start dot (or Close) to finish.
+          // Ending a drag on the start dot closes it right away.
           const nearStart = poly.length > 3 && this.screenDist(poly[0], p) < 28;
-          if (this.fresh || nearStart) this.closeLasso();
+          if (nearStart) this.closeLasso();
+          else if (this.fresh) app.showHud('Draw more or tap to add points · tap the start dot to close', 1800);
         } else {
           if (poly.length >= 3 && this.screenDist(poly[0], p) < 26) this.closeLasso();
           else if (!this.fresh) poly.push({ x: p.x, y: p.y });
@@ -1329,6 +1333,12 @@ export function selectTool(app) {
         if (hover) ctx.lineTo(hover.x, hover.y);
         ctx.strokeStyle = '#fff'; ctx.setLineDash([]); ctx.lineWidth = 3 * px; ctx.stroke();
         ctx.strokeStyle = '#3d8bff'; ctx.lineWidth = 1.6 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.stroke();
+        // how it will close: a light dotted line from the last point back to the start
+        if (pts.length > 1) {
+          const last = hover || pts[pts.length - 1];
+          ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(pts[0].x, pts[0].y);
+          ctx.strokeStyle = 'rgba(61,139,255,0.55)'; ctx.lineWidth = 1.4 * px; ctx.setLineDash([2 * px, 5 * px]); ctx.stroke();
+        }
         ctx.setLineDash([]);
         // start point: tap it to close
         ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, (pts.length >= 3 ? 11 : 7) * px, 0, Math.PI * 2);
