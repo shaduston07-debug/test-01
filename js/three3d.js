@@ -18,7 +18,10 @@ import * as store from './storage.js';
 
 let T = null;
 async function three() {
-  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); A.setThree(T); MH.setThree(T); M.setSculptor(async (b, c) => { try { return await MH.buildHumanMH(b, c); } catch (e) { console.warn('realistic body unavailable, sculpting one', e); return A.sculptHuman(b, c); } }); C.setThree(T); WD.setThree(T); }
+  if (!T) { T = await import('../vendor/three.bundle.js'); M.setThree(T); A.setThree(T); MH.setThree(T); M.setSculptor(async (b, c) => {
+    try { return await MH.buildHumanGLB(b, c); } catch (e) { console.warn('figure model unavailable, using the base mesh', e); }
+    try { return await MH.buildHumanMH(b, c); } catch (e) { console.warn('realistic body unavailable, sculpting one', e); return A.sculptHuman(b, c); }
+  }); C.setThree(T); WD.setThree(T); }
   return T;
 }
 
@@ -184,8 +187,9 @@ async function buildObject(layer, rt, o) {
     node = built.root; joints = built.joints; figMat = built.mat; rig = 'creature'; fig = built;
   } else if (o.kind === 'proc') {
     const g = o.gen;
-    const built = g === 'dragon' ? M.buildDragon(o.color) : g === 'car' ? M.buildCar('sedan', o.color) : g === 'sports' ? M.buildCar('sports', o.color) : g === 'moto' ? M.buildMotorcycle(o.color)
-      : g === 'castle' ? M.buildCastle() : g === 'street' ? M.buildCity('street') : g === 'district' ? M.buildCity('district') : null;
+    const make = { car: () => M.buildCar('sedan', o.color), sports: () => M.buildCar('sports', o.color), moto: () => M.buildMotorcycle(o.color),
+      castle: () => M.buildCastle(), street: () => M.buildCity('street'), district: () => M.buildCity('district') }[g];
+    const built = g === 'dragon' ? M.buildDragon(o.color) : make ? await M.propOr(g, make, o.color) : null;
     if (!built) return;
     node = built.root;
     if (g === 'dragon') { joints = built.joints; figMat = built.mat; rig = 'dragon'; fig = built; }
@@ -199,6 +203,11 @@ async function buildObject(layer, rt, o) {
   }
   if (!node) return;
   if (o.mat) { try { await applyMaterial(node, o.mat, layer); } catch (e) { console.warn('material', e); } }
+  // metals and clear-coated paint need something to reflect, or they render near black
+  node.traverse((c) => {
+    if (!c.isMesh || c.userData.outline) return;
+    for (const m of [].concat(c.material)) if (m && !m.envMap && (m.metalness > 0.3 || m.clearcoat > 0)) { m.envMap = studioEnv(); m.needsUpdate = true; }
+  });
   node.userData.objId = o.id;
   node.traverse((c) => { c.userData.objId = o.id; });
   // outlines double the geometry drawn: skip them on very heavy models
@@ -406,9 +415,7 @@ export async function render3D(layer, doc, scale = 1) {
   return rt;
 }
 
-// Synchronous render once the scene exists (used for live dragging).
-function renderNow(layer, doc, rt, scale = 1, live = false) {
-  applySceneSettings(layer, rt, doc);
+function getRenderer() {
   if (!renderer) {
     renderer = new T.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
     renderer.outputColorSpace = T.SRGBColorSpace;
@@ -416,6 +423,26 @@ function renderNow(layer, doc, rt, scale = 1, live = false) {
     renderer.setPixelRatio(1);
     renderer.setClearColor(0x000000, 0);
   }
+  return renderer;
+}
+// a soft photo-studio room (big top light, warm key, cool fill, dark floor) as a reflection map
+let envTex = null;
+function studioEnv() {
+  if (envTex) return envTex;
+  const pm = new T.PMREMGenerator(getRenderer()), sc = new T.Scene();
+  sc.add(new T.Mesh(new T.BoxGeometry(10, 10, 10), new T.MeshBasicMaterial({ color: 0x6f6b66, side: T.BackSide })));
+  const panel = (w, h, p, c, k) => { const m = new T.Mesh(new T.PlaneGeometry(w, h), new T.MeshBasicMaterial({ color: new T.Color(c).multiplyScalar(k), side: T.DoubleSide })); m.position.set(...p); m.lookAt(0, 0, 0); sc.add(m); };
+  panel(6, 6, [0, 4.9, 0], '#ffffff', 3); panel(4, 3, [4.9, 1.5, 2], '#fff2e0', 2.2); panel(3, 3, [-4.9, 2, -1], '#e3ecff', 1.4);
+  const floor = new T.Mesh(new T.PlaneGeometry(10, 10), new T.MeshBasicMaterial({ color: 0x2a2826 })); floor.rotation.x = -Math.PI / 2; floor.position.y = -4.9; sc.add(floor);
+  envTex = pm.fromScene(sc, 0.04).texture;
+  pm.dispose();
+  return envTex;
+}
+
+// Synchronous render once the scene exists (used for live dragging).
+function renderNow(layer, doc, rt, scale = 1, live = false) {
+  applySceneSettings(layer, rt, doc);
+  getRenderer();
   const max = renderer.capabilities.maxRenderbufferSize || 8192;
   let w = Math.max(1, Math.round(doc.width * scale)), hh = Math.max(1, Math.round(doc.height * scale));
   const k = Math.min(1, max / Math.max(w, hh));

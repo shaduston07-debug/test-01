@@ -536,18 +536,67 @@ export function creatureDef(kind) { return (defCache[kind] ||= DEFS[kind] && DEF
 export const creaturePoses = (kind) => (creatureDef(kind) || {}).poses || {};
 export const creatureRest = (kind) => (creatureDef(kind) || {}).rest || {};
 
+// Blender-finished creatures (vendor/models/creature-<kind>.glb): the same skeleton and joint names
+// as the sculpt below, with a detailed, textured skin. Missing or broken files fall back to the sculpt.
+const glbP = {};
+function loadCreatureGLB(kind) {
+  return (glbP[kind] ||= (async () => {
+    const r = await fetch(new URL(`../vendor/models/creature-${kind}.glb`, import.meta.url));
+    if (!r.ok) throw new Error('creature model missing');
+    const buf = await r.arrayBuffer();
+    const gltf = await new Promise((res, rej) => new T.GLTFLoader().parse(buf, '', res, rej));
+    const x = gltf.parser.json.scenes[0].extras || {};
+    let mesh = null;
+    gltf.scene.traverse((o) => { if (o.isSkinnedMesh && !mesh) mesh = o; });
+    if (!mesh || x.inkwell !== 'creature') throw new Error('not a creature model');
+    const g = mesh.geometry, nv = g.attributes.position.count;
+    const names = mesh.skeleton.bones.map((b, i) => (x.joints && x.joints[i]) || b.name);
+    const wi = g.attributes.skinWeight, sw = new Float32Array(nv * 4);
+    for (let i = 0; i < nv * 4; i++) sw[i] = wi.normalized ? wi.array[i] / 255 : wi.array[i];
+    // creatures built on another body carry their own joint positions (same names and parents)
+    // bindQ: the mesh was bound with the joints rotated this way (e.g. arms in an open A-pose)
+    return { g, names, sw, mat: mesh.material, spec: x.spec || null, bindQ: x.bindQ || null };
+  })());
+}
+function creatureGeometry(D, boneNames) {
+  const geo = new T.BufferGeometry();
+  for (const k of ['position', 'normal', 'uv', 'tangent']) if (D.g.attributes[k]) geo.setAttribute(k, D.g.attributes[k]);
+  geo.setIndex(D.g.index);
+  // joint order of the file → ours (by name)
+  const map = D.names.map((n) => Math.max(0, boneNames.indexOf(n))), src = D.g.attributes.skinIndex.array, si = new Uint16Array(src.length);
+  for (let i = 0; i < si.length; i++) si[i] = map[src[i]];
+  geo.setAttribute('skinIndex', new T.BufferAttribute(si, 4));
+  geo.setAttribute('skinWeight', new T.BufferAttribute(D.sw, 4));
+  geo.computeBoundingSphere();
+  return { geo, mat: D.mat };
+}
+
 export async function buildCreature(kind, color) {
   const def = creatureDef(kind);
   if (!def) throw new Error('Unknown creature ' + kind);
+  let D = null;
+  try { D = await loadCreatureGLB(kind); } catch (e) { console.warn('creature model unavailable, sculpting it', e); }
+  const spec = D && D.spec && D.spec.length === def.spec.length && D.spec.every((s, i) => s[0] === def.spec[i][0] && s[1] === def.spec[i][1]) ? D.spec : def.spec;
   const root = new T.Group();
-  const { joints, world } = makeJoints(def.spec, root);
-  const W = (n) => world[n].toArray();
-  const tree = def.prims(W);
+  const { joints, world } = makeJoints(spec, root);
   root.updateMatrixWorld(true);
   const boneNames = Object.keys(joints).filter((n) => n !== '_root');
-  const geo = await S.sculptGeometry({ key: 'creature|' + kind, parts: [{ tree, h: def.h, skin: { falloff: 0.45, maxDist: def.h * 16, maxS: def.h * 4 } }], mats: null, boneNames });
-  const mat = stdMat(color || def.color, { roughness: 0.7 });
+  let geo = null, mat = null;
+  if (D) {
+    const m = creatureGeometry(D, boneNames);
+    geo = m.geo; mat = m.mat.clone();
+    // the textures carry the colours; a colour other than the default tints them
+    if (color && color.toLowerCase() !== def.color.toLowerCase()) mat.color.set(color);
+  }
+  if (!geo) {
+    const W = (n) => world[n].toArray();
+    geo = await S.sculptGeometry({ key: 'creature|' + kind, parts: [{ tree: def.prims(W), h: def.h, skin: { falloff: 0.45, maxDist: def.h * 16, maxS: def.h * 4 } }], mats: null, boneNames });
+    mat = stdMat(color || def.color, { roughness: 0.7 });
+  }
+  const bindQ = D && geo && spec !== def.spec ? D.bindQ : null;
+  if (bindQ) { for (const [n, q] of Object.entries(bindQ)) if (joints[n]) joints[n].quaternion.set(...q); root.updateMatrixWorld(true); }
   const mesh = S.bindSkinned(geo, joints, mat, root);
+  if (bindQ) { for (const n of Object.keys(bindQ)) if (joints[n]) joints[n].quaternion.identity(); root.updateMatrixWorld(true); }
   mesh.name = kind;
   return { root, joints, mat, world, H: 1, mesh, kind };
 }

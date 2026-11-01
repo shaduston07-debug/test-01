@@ -89,7 +89,7 @@ const cyl = (p, rt, rb, h, r = [0, 0, 0], n = 24, open = false) => tf(new T.Cyli
 
 // Collects geometry per (joint, material) and turns each bin into ONE mesh at the end.
 class Kit {
-  constructor(joints, mats) { this.joints = joints; this.mats = mats; this.bins = new Map(); }
+  constructor(joints, mats) { this.joints = joints; this.mats = mats; this.bins = new Map(); for (const [k, m] of Object.entries(mats)) m.name ||= k; }
   add(joint, mat, geo) {
     const k = joint + '|' + mat;
     if (!this.bins.has(k)) this.bins.set(k, { joint, mat, geos: [] });
@@ -650,6 +650,36 @@ export function buildMotorcycle(color = '#c72c2c') {
   return { root, joints: null, mat: mats.paint };
 }
 
+// ───────── Blender-finished props (vendor/models/<name>.glb) ─────────
+// The same models, bevelled and given PBR materials in Blender. `make` builds the generated
+// version when the file is missing or broken (and for old devices without it cached).
+const propP = {};
+function loadProp(name) {
+  return (propP[name] ||= (async () => {
+    const r = await fetch(new URL(`../vendor/models/${name}.glb`, import.meta.url));
+    if (!r.ok) throw new Error('model missing');
+    const buf = await r.arrayBuffer();
+    const gltf = await new Promise((res, rej) => new T.GLTFLoader().parse(buf, '', res, rej));
+    return gltf.scene;
+  })());
+}
+export async function propOr(name, make, color) {
+  try {
+    const scene = await loadProp(name), root = new T.Group(), model = scene.clone(true);
+    let paint = null;
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = o.material.clone();
+      if (o.material.name === 'paint') { paint = o.material; if (color) o.material.color.set(color); }
+    });
+    root.add(model);
+    return { root, joints: null, mat: paint };
+  } catch (e) {
+    console.warn(name + ': using the generated model', e);
+    return make();
+  }
+}
+
 // ───────── buildings ─────────
 // seeded random so a scene rebuilds identically after reloading
 function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
@@ -982,4 +1012,4 @@ export function exportBVH(fig, pose) {
 }
 
 // shared building blocks for world3d.js (environments, weapons)
-export const kit3d = { rng, canvasTex, uvBox, uvCyl, box, cyl, ball, tf, tint, merge, Kit, stdMat, v3: (a) => new T.Vector3(...a) };
+export const kit3d = { rng, canvasTex, uvBox, uvCyl, box, cyl, ball, tf, tint, merge, Kit, stdMat, propOr, v3: (a) => new T.Vector3(...a) };

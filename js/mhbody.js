@@ -21,6 +21,76 @@ function loadAsset() {
   }));
 }
 
+// ───────── Blender-built figures (vendor/models/figure-*.glb) ─────────
+// The body is shaped with MakeHuman's own female / male, muscle, weight and proportion targets,
+// subdivided, rigged with artist-made weights already merged onto our joint names, and carries
+// baked ambient occlusion in its vertex colours. Two morph targets (slim, strong) drive Build;
+// the scene extras hold the joint positions for each, so the skeleton follows the body.
+const glbP = {};
+function loadFigureGLB(sex) {
+  return (glbP[sex] ||= (async () => {
+    const r = await fetch(new URL(`../vendor/models/figure-${sex}.glb`, import.meta.url));
+    if (!r.ok) throw new Error('figure model missing');
+    const buf = await r.arrayBuffer();
+    const gltf = await new Promise((res, rej) => new T.GLTFLoader().parse(buf, '', res, rej));
+    const x = gltf.parser.json.scenes[0].extras;
+    if (!x || x.inkwell !== 'figure') throw new Error('not a figure model');
+    let mesh = null;
+    gltf.scene.traverse((o) => { if (o.isSkinnedMesh && !mesh) mesh = o; });
+    const g = mesh.geometry, nv = g.attributes.position.count;
+    // skin: glTF joint order → our joint order, weights as floats
+    const names = mesh.skeleton.bones.map((bn, i) => x.joints[i] || bn.name);
+    const ji = g.attributes.skinIndex.array, wi = g.attributes.skinWeight;
+    const si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4);
+    for (let i = 0; i < nv * 4; i++) { si[i] = ji[i]; sw[i] = wi.normalized ? wi.array[i] / 255 : wi.array[i]; }
+    const col = g.attributes.color, colors = new Float32Array(nv * 3);
+    for (let i = 0; i < nv; i++) for (let k = 0; k < 3; k++) colors[i * 3 + k] = col ? col.getComponent(i, k) : 1;
+    const morph = Object.fromEntries((x.morphs || []).map((n, i) => [n, g.morphAttributes.position[i].array]));
+    return { x, names, base: g.attributes.position.array, idx: g.index.array, si, sw, colors, morph, nv };
+  })());
+}
+
+export async function buildHumanGLB(body, color = '#c9c6c1') {
+  const b = { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, ...body };
+  const D = await loadFigureGLB(b.sex === 'male' ? 'male' : 'female');
+  const { x, nv } = D;
+  // build: 0.5 is the base body; below blends towards slim, above towards strong
+  const w = { slim: Math.max(0, (0.5 - b.build) * 2), strong: Math.max(0, (b.build - 0.5) * 2) };
+  const P = new Float32Array(D.base);
+  for (const [n, k] of Object.entries(w)) if (k && D.morph[n]) { const d = D.morph[n]; for (let i = 0; i < P.length; i++) P[i] += d[i] * k; }
+  const mix = (get) => { const a = get(x.variants.base).slice(); for (const [n, k] of Object.entries(w)) if (k) { const v = get(x.variants[n]), b0 = get(x.variants.base); for (let i = 0; i < 3; i++) a[i] += (v[i] - b0[i]) * k; } return a; };
+  const J = Object.fromEntries(x.joints.map((n) => [n, mix((v) => v.joints[n])]));
+  const eyes = [mix((v) => v.eyes.L), mix((v) => v.eyes.R)];
+  // head ratio: measure this body's (top of head → chin), then scale the head about the neck
+  let top = 0, chin = Infinity;
+  for (let i = 0; i < x.eyeStart; i++) {
+    const y = P[i * 3 + 1]; top = Math.max(top, y);
+    if (Math.abs(P[i * 3]) < 0.012 && y > J.neck[1] && P[i * 3 + 2] > J.head[2] + 0.06) chin = Math.min(chin, y);
+  }
+  const heads = top / Math.max(0.12, top - chin);
+  const kh = heads / b.heads, nk = J.neck, hy0 = nk[1] + 0.01, hy1 = nk[1] + 0.07;
+  const headF = (p) => { const t = sstep(hy0, hy1, p[1]), k = 1 + (kh - 1) * t; return [nk[0] + (p[0] - nk[0]) * k, hy0 + (p[1] - hy0) * k, nk[2] + (p[2] - nk[2]) * k]; };
+  for (let i = 0; i < nv; i++) { const q = headF([P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]); P[i * 3] = q[0]; P[i * 3 + 1] = q[1]; P[i * 3 + 2] = q[2]; }
+  for (const k of Object.keys(J)) if (J[k][1] > hy0) J[k] = headF(J[k]);
+  for (let e = 0; e < 2; e++) eyes[e] = headF(eyes[e]);
+  // overall height (feet stay on the floor)
+  top = 0; for (let i = 0; i < nv; i++) top = Math.max(top, P[i * 3 + 1]);
+  const ks = b.height / top;
+  for (let i = 0; i < P.length; i++) P[i] *= ks;
+  for (const k of Object.keys(J)) J[k] = J[k].map((v) => v * ks);
+  const eyeY = (eyes[0][1] + eyes[1][1]) / 2 * ks;
+  // weights are stored for the glTF joint order: re-index them for ours once the joints exist
+  const weights = (joints) => {
+    const ours = Object.keys(joints).filter((n) => n !== '_root'), map = D.names.map((n) => Math.max(0, ours.indexOf(n)));
+    const si = new Uint16Array(D.si.length);
+    for (let i = 0; i < si.length; i++) si[i] = map[D.si[i]];
+    return { si, sw: D.sw.slice() };
+  };
+  const idx = D.idx;
+  return rigFigure({ P, idx: idx.constructor === Uint32Array ? idx : Uint32Array.from(idx), AP: J, weights, color, colors: new T.BufferAttribute(D.colors, 3), body, H: b.height, ks,
+    guides: { eyeY, neckY: J.neck[1], pelvisY: J.pelvis[1] - 0.06 * ks }, eyeStart: x.eyeStart });
+}
+
 // MakeHuman joint helpers → our joint names
 const MAP = { pelvis: 'pelvis', spine: 'spine-3', chest: 'spine-2', neck: 'neck', head: 'head' };
 const SIDE = (s) => ({ clav: `${s}-clavicle`, shoulder: `${s}-shoulder`, elbow: `${s}-elbow`, hand: `${s}-hand`, hip: `${s}-upper-leg`, knee: `${s}-knee`, foot: `${s}-ankle`, toe: `${s}-foot-1` });
@@ -87,8 +157,6 @@ export async function buildHumanMH(body, color = '#c9c6c1') {
   for (let i = 0; i < P.length; i++) P[i] *= ks;
   for (const k of Object.keys(J)) J[k] = J[k].map((v) => v * ks);
 
-  // ── skeleton: A-pose positions from the mesh's joint helpers; T-pose reference + bind rotations ──
-  const v = (a) => new T.Vector3(...a);
   const AP = {}; // our joint → A-pose world position
   for (const [ours, mh] of Object.entries(MAP)) AP[ours] = J[mh];
   for (const s of ['L', 'R']) {
@@ -96,14 +164,59 @@ export async function buildHumanMH(body, color = '#c9c6c1') {
     for (const [ours, mh] of Object.entries(SIDE(m))) AP[ours + s] = J[mh];
     for (const [f, n] of Object.entries(FING)) for (let k = 1; k <= 3; k++) AP[f + s + k] = J[`${m}-finger-${n}-${k}`];
   }
+  const idx = new Uint32Array(A.quads.length / 4 * 6);
+  for (let q = 0, k = 0; q < A.quads.length; q += 4) { const [a, bb, c, d] = [A.quads[q], A.quads[q + 1], A.quads[q + 2], A.quads[q + 3]]; idx[k++] = a; idx[k++] = bb; idx[k++] = c; idx[k++] = a; idx[k++] = c; idx[k++] = d; }
+  // skin weights from distances to bone capsules (in the A-pose)
+  const weights = (joints) => {
+    const W = (n) => joints[n].getWorldPosition(new T.Vector3()).toArray();
+    const u = b.height / 1.7, prims = [];
+    const seg = (bone, a, c, r1, r2 = r1) => prims.push(S.cone(bone, a, c, r1, r2));
+    seg('pelvis', W('pelvis'), W('spine'), 0.12 * u); prims.push(S.ell('pelvis', [0, W('pelvis')[1] - 0.04 * u, -0.02 * u], [0.15 * u, 0.1 * u, 0.12 * u]));
+    seg('spine', W('spine'), W('chest'), 0.12 * u); seg('chest', W('chest'), W('neck'), 0.13 * u, 0.1 * u);
+    seg('neck', W('neck'), W('head'), 0.05 * u); prims.push(S.ell('head', add3(W('head'), [0, 0.1 * u, 0.02 * u]), [0.09 * u, 0.12 * u, 0.11 * u]));
+    for (const s of ['L', 'R']) {
+      seg('clav' + s, W('clav' + s), W('shoulder' + s), 0.05 * u);
+      seg('shoulder' + s, W('shoulder' + s), W('elbow' + s), 0.05 * u, 0.04 * u);
+      seg('elbow' + s, W('elbow' + s), W('hand' + s), 0.038 * u, 0.028 * u);
+      seg('hand' + s, W('hand' + s), W('middle' + s + 1), 0.03 * u);
+      seg('hip' + s, W('hip' + s), W('knee' + s), 0.08 * u, 0.055 * u);
+      seg('knee' + s, W('knee' + s), W('foot' + s), 0.05 * u, 0.035 * u);
+      seg('foot' + s, W('foot' + s), W('toe' + s), 0.04 * u, 0.035 * u);
+      const m = s === 'L' ? 'l' : 'r';
+      seg('toe' + s, W('toe' + s), J[`${m}-foot-2`], 0.03 * u);
+      for (const fn of Object.keys(FING)) {
+        const r = (fn === 'thumb' ? 0.011 : 0.0085) * u, n = FING[fn];
+        seg(fn + s + 1, W(fn + s + 1), W(fn + s + 2), r * 1.1); seg(fn + s + 2, W(fn + s + 2), W(fn + s + 3), r);
+        seg(fn + s + 3, W(fn + s + 3), J[`${m}-finger-${n}-4`], r * 0.9);
+      }
+    }
+    const leaves = [];
+    S._test.compile(S.union(prims), null, leaves, 1e9);
+    const boneNames = Object.keys(joints).filter((n) => n !== '_root'), boneIndex = Object.fromEntries(boneNames.map((n, i) => [n, i]));
+    const { si, sw } = S.skinWeights(P, leaves, boneIndex, { falloff: 0.45, maxDist: 0.35, maxS: 0.03 });
+    S.smoothWeights(idx, nv, si, sw, 3);
+    // eyes follow the head only
+    for (const g of ['helper-l-eye', 'helper-r-eye']) {
+      const [start, count] = A.meta.parts[g];
+      for (let q = start * 4; q < (start + count) * 4; q++) { const vi = A.quads[q]; si[vi * 4] = boneIndex.head; sw[vi * 4] = 1; for (let k = 1; k < 4; k++) { si[vi * 4 + k] = 0; sw[vi * 4 + k] = 0; } }
+    }
+    return { si, sw };
+  };
+  const eyeY = (J['l-eye'][1] + J['r-eye'][1]) / 2;
+  return rigFigure({ P, idx, AP, weights, color, body, H: b.height, ks, guides: { eyeY, neckY: J.neck[1], pelvisY: J.pelvis[1] - 0.06 * ks } });
+}
+
+// Shared by both bodies: T-pose skeleton with the app's joint names, the mesh bound in its own
+// A-pose, skin weights, material with the drawing guide lines, armour.
+function rigFigure({ P, idx, AP, weights, color, colors, body, H, ks, guides, eyeStart = 0 }) {
+  const v = (a) => new T.Vector3(...a);
   const bindQ = {}, TP = {};
   for (const k of ['pelvis', 'spine', 'chest', 'neck', 'head']) TP[k] = AP[k];
   for (const s of ['L', 'R']) for (const k of ['hip', 'knee', 'foot', 'toe', 'clav', 'shoulder']) TP[k + s] = AP[k + s];
   const frame = (X, Y) => { const x = X.clone().normalize(), z = new T.Vector3().crossVectors(x, Y).normalize(), y = new T.Vector3().crossVectors(z, x); return new T.Matrix4().makeBasis(x, y, z); };
   for (const [s, sx] of [['L', 1], ['R', -1]]) {
-    const m = s === 'L' ? 'l' : 'r';
     const Sh = v(AP['shoulder' + s]), El = v(AP['elbow' + s]), Wr = v(AP['hand' + s]);
-    const Ib = v(J[`${m}-finger-2-1`]), Mb = v(J[`${m}-finger-3-1`]), Pb = v(J[`${m}-finger-5-1`]);
+    const Ib = v(AP['index' + s + 1]), Mb = v(AP['middle' + s + 1]), Pb = v(AP['pinky' + s + 1]);
     const u = El.clone().sub(Sh).normalize(), f = Wr.clone().sub(El).normalize();
     let bend = f.clone().sub(u.clone().multiplyScalar(f.dot(u)));
     if (bend.lengthSq() < 1e-4) bend = new T.Vector3(0, 0, 1).sub(u.clone().multiplyScalar(u.z));
@@ -142,57 +255,22 @@ export async function buildHumanMH(body, color = '#c9c6c1') {
   for (const [n, qq] of Object.entries(bindQ)) joints[n].quaternion.copy(qq);
   root.updateMatrixWorld(true);
 
-  // ── skin weights from distances to bone capsules (in the A-pose) ──
-  const W = (n) => joints[n].getWorldPosition(new T.Vector3()).toArray();
-  const H = b.height, u = H / 1.7, prims = [];
-  const seg = (bone, a, c, r1, r2 = r1) => prims.push(S.cone(bone, a, c, r1, r2));
-  seg('pelvis', W('pelvis'), W('spine'), 0.12 * u); prims.push(S.ell('pelvis', [0, W('pelvis')[1] - 0.04 * u, -0.02 * u], [0.15 * u, 0.1 * u, 0.12 * u]));
-  seg('spine', W('spine'), W('chest'), 0.12 * u); seg('chest', W('chest'), W('neck'), 0.13 * u, 0.1 * u);
-  seg('neck', W('neck'), W('head'), 0.05 * u); prims.push(S.ell('head', add3(W('head'), [0, 0.1 * u, 0.02 * u]), [0.09 * u, 0.12 * u, 0.11 * u]));
-  for (const s of ['L', 'R']) {
-    seg('clav' + s, W('clav' + s), W('shoulder' + s), 0.05 * u);
-    seg('shoulder' + s, W('shoulder' + s), W('elbow' + s), 0.05 * u, 0.04 * u);
-    seg('elbow' + s, W('elbow' + s), W('hand' + s), 0.038 * u, 0.028 * u);
-    seg('hand' + s, W('hand' + s), W('middle' + s + 1), 0.03 * u);
-    seg('hip' + s, W('hip' + s), W('knee' + s), 0.08 * u, 0.055 * u);
-    seg('knee' + s, W('knee' + s), W('foot' + s), 0.05 * u, 0.035 * u);
-    seg('foot' + s, W('foot' + s), W('toe' + s), 0.04 * u, 0.035 * u);
-    const m = s === 'L' ? 'l' : 'r', tip = (n) => J[`${m}-foot-2`].map((x) => x);
-    seg('toe' + s, W('toe' + s), tip(), 0.03 * u);
-    for (const fn of Object.keys(FING)) {
-      const r = (fn === 'thumb' ? 0.011 : 0.0085) * u, n = FING[fn];
-      seg(fn + s + 1, W(fn + s + 1), W(fn + s + 2), r * 1.1); seg(fn + s + 2, W(fn + s + 2), W(fn + s + 3), r);
-      const t4 = J[`${m}-finger-${n}-4`];
-      seg(fn + s + 3, W(fn + s + 3), t4, r * 0.9);
-    }
-  }
-  const leaves = [];
-  S._test.compile(S.union(prims), null, leaves, 1e9);
-  const boneNames = Object.keys(joints).filter((n) => n !== '_root'), boneIndex = Object.fromEntries(boneNames.map((n, i) => [n, i]));
-  const { si, sw } = S.skinWeights(P, leaves, boneIndex, { falloff: 0.45, maxDist: 0.35, maxS: 0.03 });
-  const idx = new Uint32Array(A.quads.length / 4 * 6);
-  for (let q = 0, k = 0; q < A.quads.length; q += 4) { const [a, bb, c, d] = [A.quads[q], A.quads[q + 1], A.quads[q + 2], A.quads[q + 3]]; idx[k++] = a; idx[k++] = bb; idx[k++] = c; idx[k++] = a; idx[k++] = c; idx[k++] = d; }
-  S.smoothWeights(idx, nv, si, sw, 3);
-  // eyes follow the head only
-  const eyeParts = A.meta.parts;
-  for (const g of ['helper-l-eye', 'helper-r-eye']) {
-    const [start, count] = eyeParts[g];
-    for (let q = start * 4; q < (start + count) * 4; q++) { const vi = A.quads[q]; si[vi * 4] = boneIndex.head; sw[vi * 4] = 1; for (let k = 1; k < 4; k++) { si[vi * 4 + k] = 0; sw[vi * 4 + k] = 0; } }
-  }
+  const { si, sw } = weights(joints);
+  const nv = P.length / 3;
   const geo = new T.BufferGeometry();
   geo.setAttribute('position', new T.BufferAttribute(P, 3));
   geo.setIndex(new T.BufferAttribute(nv > 65535 ? idx : new Uint16Array(idx), 1));
   geo.computeVertexNormals();
   geo.setAttribute('skinIndex', new T.BufferAttribute(si, 4));
   geo.setAttribute('skinWeight', new T.BufferAttribute(sw, 4));
+  if (colors) geo.setAttribute('color', colors);
   geo.computeBoundingSphere();
-  const mat = stdMat(color, { roughness: 0.7 });
+  const mat = stdMat(color, { roughness: colors ? 0.62 : 0.7, vertexColors: !!colors });
   // drawing guide lines (like Clip Studio's figures): centre line of the face and torso and the eye
   // line around the head. Drawn from the bind-pose position, so they stay on the body in any pose.
-  const eyeY = (J['l-eye'][1] + J['r-eye'][1]) / 2;
   const guide = { value: body.guides === false ? 0 : 1 };
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, { guideOn: guide, gEyeY: { value: eyeY }, gNeckY: { value: J.neck[1] }, gPelvisY: { value: J.pelvis[1] - 0.06 * ks }, gW: { value: 0.0016 * ks } });
+    Object.assign(sh.uniforms, { guideOn: guide, gEyeY: { value: guides.eyeY }, gNeckY: { value: guides.neckY }, gPelvisY: { value: guides.pelvisY }, gW: { value: 0.0016 * ks } });
     sh.vertexShader = 'varying vec3 vBind;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvBind = position;');
     sh.fragmentShader = 'varying vec3 vBind;\nuniform float guideOn, gEyeY, gNeckY, gPelvisY, gW;\n' + sh.fragmentShader.replace('#include <dithering_fragment>', `#include <dithering_fragment>
       if (guideOn > 0.5) {
@@ -205,6 +283,7 @@ export async function buildHumanMH(body, color = '#c9c6c1') {
   };
   const mesh = S.bindSkinned(geo, joints, mat, root);
   mesh.userData.setGuides = (on) => { guide.value = on ? 1 : 0; };
+  if (eyeStart) mesh.userData.eyeStart = eyeStart;
   mesh.name = 'body';
   for (const n of Object.keys(bindQ)) joints[n].quaternion.identity();
   root.updateMatrixWorld(true);
@@ -247,16 +326,18 @@ function armorMH(fig, style) {
     if (/^clav/.test(n)) return 0.02;
     return 0;
   };
-  const keep = new Uint8Array(nv), off = new Float32Array(nv);
-  for (let i = 0; i < nv; i++) { const n = dom(i), t = plate(n); if (t && domW(i) > (n === 'head' ? 0.55 : 0.62)) { keep[i] = 1; off[i] = t; } }
-  // smooth the helmet (no face details showing through)
+  const keep = new Uint8Array(nv), off = new Float32Array(nv), body = mesh.userData.eyeStart || nv; // no plates on the eyeballs
+  for (let i = 0; i < body; i++) { const n = dom(i), t = plate(n); if (t && domW(i) > (n === 'head' ? 0.55 : 0.62)) { keep[i] = 1; off[i] = t; } }
   const Q = new Float32Array(P);
   for (let i = 0; i < nv; i++) if (keep[i]) { Q[i * 3] += N[i * 3] * off[i]; Q[i * 3 + 1] += N[i * 3 + 1] * off[i]; Q[i * 3 + 2] += N[i * 3 + 2] * off[i]; }
-  const headI = names.indexOf('head');
-  for (let it = 0; it < 6; it++) {
-    const acc = new Float32Array(nv * 3), cnt = new Uint16Array(nv);
-    for (let t = 0; t < idx.length; t += 3) for (let k = 0; k < 3; k++) { const a = idx[t + k], b = idx[t + (k + 1) % 3]; for (const [x, y] of [[a, b], [b, a]]) { acc[x * 3] += Q[y * 3]; acc[x * 3 + 1] += Q[y * 3 + 1]; acc[x * 3 + 2] += Q[y * 3 + 2]; cnt[x]++; } }
-    for (let i = 0; i < nv; i++) if (keep[i] && si[i * 4] === headI && cnt[i]) { const k = 0.6; Q[i * 3] += (acc[i * 3] / cnt[i] - Q[i * 3]) * k; Q[i * 3 + 1] += (acc[i * 3 + 1] / cnt[i] - Q[i * 3 + 1]) * k; Q[i * 3 + 2] += (acc[i * 3 + 2] / cnt[i] - Q[i * 3 + 2]) * k; }
+  // helmet: a smooth egg around the head (no nose, lips or ears showing through)
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  const helm = (i) => keep[i] && dom(i) === 'head';
+  for (let i = 0; i < nv; i++) if (helm(i)) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], P[i * 3 + k]); hi[k] = Math.max(hi[k], P[i * 3 + k]); }
+  const hc = lo.map((v, k) => (v + hi[k]) / 2), hr = lo.map((v, k) => (hi[k] - v) / 2 + 0.012);
+  for (let i = 0; i < nv; i++) if (helm(i)) {
+    const d = [0, 1, 2].map((k) => (P[i * 3 + k] - hc[k]) / hr[k]), l = Math.hypot(...d) || 1;
+    for (let k = 0; k < 3; k++) Q[i * 3 + k] = hc[k] + d[k] / l * hr[k];
   }
   const tri = [];
   for (let t = 0; t < idx.length; t += 3) {

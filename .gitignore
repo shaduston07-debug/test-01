@@ -6,3 +6,5 @@ ios/App/App/public/
 ios/DerivedData/
 *.ipa
 downloads/
+.claude/
+__pycache__/

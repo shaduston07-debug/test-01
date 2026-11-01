@@ -95,6 +95,9 @@ export const WEAPONS = {
 };
 export async function buildWeapon(kind) {
   const def = WEAPONS[kind]; if (!def) throw new Error('Unknown weapon ' + kind);
+  // Blender-finished version (PBR materials) when available, else sculpt it
+  const fin = await K().propOr('w-' + kind, () => null);
+  if (fin) return { root: fin.root, grip: def.grip };
   const root = new T.Group();
   const list = def.parts();
   const geos = await Promise.all(list.map(([, prims], i) => S.sculptStatic({ key: 'weapon|' + kind + '|' + i, parts: [{ tree: S.union(prims), h: def.h }] })));
