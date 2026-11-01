@@ -532,3 +532,7 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .sheet-seg button { padding: 4px 9px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .sheet-seg button.on { background: rgba(255, 255, 255, 0.18); color: var(--text); }
 .sheet-item input[type=color] { margin-left: auto; }
+/* rounder colour tiles */
+.hist-tiles, .pal-tiles { gap: 4px; background: none; border-radius: 0; overflow: visible; }
+.hist-tiles > *, .pal-tiles > * { border-radius: 7px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
+.hist-tiles .empty, .pal-tiles .empty { background: rgba(255, 255, 255, 0.06); }
