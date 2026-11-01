@@ -1289,7 +1289,7 @@ export function selectTool(app) {
           else if (!this.fresh) poly.push({ x: p.x, y: p.y });
           else app.showHud('Tap to add points · tap the first point to close', 1800);
         }
-        if (this.poly && this.poly.length > this.stepStart) (this.steps ||= []).push(this.stepStart);
+        if (this.poly && this.poly.length > this.stepStart) { (this.steps ||= []).push(this.stepStart); this.redoSteps = []; }
         app.updateCtxBar(); app.requestRender('view');
         return;
       }
@@ -1303,13 +1303,24 @@ export function selectTool(app) {
     undoStep() {
       if (!this.poly) return false;
       const start = (this.steps || []).pop() ?? 0;
+      // keep what was removed so redo can put it back
+      (this.redoSteps ||= []).push({ start, pts: this.poly.slice(start) });
       this.poly.length = Math.max(0, start);
       if (this.poly.length === 0) { this.poly = null; this.steps = []; }
       app.showHud('Undo lasso', 600); app.updateCtxBar(); app.requestRender('view');
       return true;
     },
+    redoStep() {
+      const r = this.redoSteps && this.redoSteps.pop();
+      if (!r) return false;
+      if (!this.poly) { this.poly = []; this.steps = []; }
+      if (r.start > 0) this.steps.push(r.start);
+      this.poly.length = r.start; this.poly.push(...r.pts);
+      app.showHud('Redo lasso', 600); app.updateCtxBar(); app.requestRender('view');
+      return true;
+    },
     closeLasso() {
-      const pts = this.poly; this.poly = null;
+      const pts = this.poly; this.poly = null; this.redoSteps = [];
       if (!pts || pts.length < 3) { app.updateCtxBar(); return; }
       selCmd('Lasso', () => app.selection.apply({ type: 'poly', pts }, this.op));
     },

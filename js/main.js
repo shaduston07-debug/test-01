@@ -146,9 +146,18 @@ class App {
       b.innerHTML = ICONS[b.dataset.tool] || '';
       b.addEventListener('click', () => {
         const t = b.dataset.tool;
+        if (b._held) { b._held = false; return; } // a long press already acted
         if (this.tool === t && ['brush', 'smudge', 'eraser'].includes(t)) UI.openBrushLibrary(this, b);
+        // like Procreate: tapping Selection again drops the selection
+        else if (t === 'select' && this.tool === 'select' && this.selection.active) this.selectionCmd('Deselect', () => this.selection.clear(), 'Deselected');
         else this.setTool(t);
       });
+      // like Procreate: long-press Selection to bring back the last selection
+      if (b.dataset.tool === 'select') {
+        let hold = null;
+        b.addEventListener('pointerdown', () => { clearTimeout(hold); hold = setTimeout(() => { b._held = true; this.reselect(); }, 500); });
+        for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, () => clearTimeout(hold));
+      }
     }
     // pointerup as well as click: on iPad a click can be dropped when the finger/pencil moves a
     // little or another touch is still down, which made Gallery sometimes do nothing
@@ -208,6 +217,7 @@ class App {
 
   // ───────── documents ─────────
   async openDoc(doc) {
+    this.lastSelection = null; this._lastSelVer = null;
     this.doc = doc;
     this.selection = new Selection(doc.width, doc.height);
     this.history.clear();
@@ -853,6 +863,8 @@ class App {
     if (c) { this.showHud('Undo ' + (c.label || '')); this.changed(); }
   }
   redo() {
+    const tl = this.tools && this.tools[this.tool];
+    if (tl && tl.redoStep && tl.redoStep()) return;
     this.flushStroke();
     if (this.engine.active || this.transform) return;
     const c = this.history.redo();
@@ -1083,7 +1095,28 @@ class App {
     }
     ctx.restore();
   }
-  selectionChanged() { this.requestRender('view'); }
+  selectionChanged() {
+    // remember the latest selection, so a long press on Selection can bring it back after deselecting
+    const S = this.selection;
+    if (S.active && S.ver !== this._lastSelVer) { this._lastSelVer = S.ver; this.lastSelection = S.snapshot(); }
+    this.requestRender('view');
+  }
+  // undoable change of the selection
+  selectionCmd(label, fn, hud) {
+    const S = this.selection, before = S.snapshot();
+    fn();
+    const after = S.snapshot(), app = this;
+    this.history.push({ label, bytes: S.w * S.h * 8, undo() { S.restore(before); app.selectionChanged(); app.updateCtxBar(); }, redo() { S.restore(after); app.selectionChanged(); app.updateCtxBar(); } });
+    this.selectionChanged(); this.updateCtxBar();
+    if (hud) this.showHud(hud, 700);
+  }
+  reselect() {
+    if (!this.doc) return;
+    if (!this.lastSelection || !this.lastSelection.mask) { toast('No earlier selection to bring back'); return; }
+    const snap = this.lastSelection;
+    this.selectionCmd('Reselect', () => this.selection.restore(snap), 'Reselected');
+    if (this.tool !== 'select') this.setTool('select');
+  }
 
   // ───────── fill ─────────
   async fillAt(x, y, color = this.color, tolerance = null) {
