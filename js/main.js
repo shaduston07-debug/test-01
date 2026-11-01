@@ -27,7 +27,7 @@ const SETTINGS_VERSION = 3;
 const DEFAULT_SETTINGS = {
   rightHanded: false, penOnly: 'auto', pressureGamma: 1, quickShape: true, quickShapeDelay: 800,
   fillTolerance: 0.12, fillGap: 2, fillExpand: 2, fillRef: 'all', memoryMB: defaultMemoryMB(), fingerSmudge: false,
-  gestures: true, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35, pressureSource: 'auto', liftAmount: 0, blobAmount: 0,
+  gestures: true, pinchFit: false, pinchFitAmount: 0.5, pinchFitTime: 0.35, rotateSnap: true, rotateSnapDeg: 4, autosave: true, cursor: true, cursorPaint: true, steadyInk: true, holdRepeat: true, rapidUndoDelay: 0.35, pressureSource: 'auto', liftAmount: 0, blobAmount: 0,
 };
 
 class App {
@@ -742,7 +742,7 @@ class App {
       let rot = g.view.rot + (a1 - a0);
       // snap to right angles when close
       const snap = Math.round(rot / (Math.PI / 2)) * (Math.PI / 2);
-      if (Math.abs(rot - snap) < 0.07) rot = snap;
+      if (this.settings.rotateSnap !== false && Math.abs(rot - snap) < (this.settings.rotateSnapDeg ?? 4) * Math.PI / 180) rot = snap;
       this.view.rot = rot;
     }
     g.travelNow = dist(cx, cy, cx0, cy0); g.travel = Math.max(g.travel || 0, (g.base || 0) + g.travelNow); g.lastC = { x: cx, y: cy };
@@ -760,7 +760,7 @@ class App {
       if (g.maxTouches === 2) this.undo();
       else if (g.maxTouches === 3) this.redo();
       else if (g.maxTouches >= 4) document.body.classList.toggle('ui-hidden');
-    } else if (dt < 400 && this.view.zoom < g.zoom0 * 0.65 && (g.travel || 0) < 160) {
+    } else if (this.settings.pinchFit && dt < (this.settings.pinchFitTime ?? 0.35) * 1000 && this.view.zoom < g.zoom0 * (this.settings.pinchFitAmount ?? 0.5) && (g.travel || 0) < 160) {
       // quick pinch → fit (only a real pinch: a fast two-finger scroll whose fingers drift
       // together must not count). Long webtoon canvases stay where you are.
       this.fitView({ keepPlace: this.doc.mode === 'webtoon', at: g.lastC });
