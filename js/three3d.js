@@ -13,6 +13,8 @@ import * as SC from './sculpt.js';
 import * as C from './creatures.js';
 import * as WD from './world3d.js';
 import * as MH from './mhbody.js';
+import * as AS from './assets3d.js';
+import * as store from './storage.js';
 
 let T = null;
 async function three() {
@@ -196,6 +198,7 @@ async function buildObject(layer, rt, o) {
     node = await loadModel(layer.models.get(o.modelId));
   }
   if (!node) return;
+  if (o.mat) { try { await applyMaterial(node, o.mat, layer); } catch (e) { console.warn('material', e); } }
   node.userData.objId = o.id;
   node.traverse((c) => { c.userData.objId = o.id; });
   // outlines double the geometry drawn: skip them on very heavy models
@@ -227,6 +230,45 @@ function syncObject(e) {
   else if (e.rig === 'dragon') M.applyPose(e.joints, o.pose || {}, M.DRAGON_REST, 1);
   else if (e.rig === 'creature') M.applyPose(e.joints, o.pose || {}, C.creatureRest(o.gen), 1);
   else if (e.joints) applyPose({ joints: e.joints }, o);
+}
+
+// ───────── PBR materials from the asset library ─────────
+// Meshes without texture coordinates (the sculpted figures, shapes) get box-projected UVs.
+function boxUV(geo, tile) {
+  const p = geo.attributes.position, n = geo.attributes.normal; if (!p) return;
+  if (!n) geo.computeVertexNormals();
+  const N = geo.attributes.normal, uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) {
+    const ax = Math.abs(N.getX(i)), ay = Math.abs(N.getY(i)), az = Math.abs(N.getZ(i));
+    const x = p.getX(i) / tile, y = p.getY(i) / tile, z = p.getZ(i) / tile;
+    if (ax >= ay && ax >= az) { uv[i * 2] = z; uv[i * 2 + 1] = y; } else if (ay >= az) { uv[i * 2] = x; uv[i * 2 + 1] = z; } else { uv[i * 2] = x; uv[i * 2 + 1] = y; }
+  }
+  geo.setAttribute('uv', new T.BufferAttribute(uv, 2));
+}
+const texCache = new Map();
+async function texFrom(layer, key, srgb) {
+  const m = layer.models.get(key); if (!m || !m.blob) return null;
+  let t = texCache.get(m.blob);
+  if (!t) {
+    const bmp = await createImageBitmap(m.blob, { imageOrientation: 'flipY' }).catch(() => createImageBitmap(m.blob));
+    t = new T.Texture(bmp); t.flipY = false; t.wrapS = t.wrapT = T.RepeatWrapping; t.anisotropy = 4;
+    if (srgb) t.colorSpace = T.SRGBColorSpace;
+    t.needsUpdate = true; capTexture(t); texCache.set(m.blob, t);
+  }
+  return t;
+}
+async function applyMaterial(node, mat, layer) {
+  const base = mat.asset, tile = mat.tile || 0.5;
+  const [map, normal, rough, ao] = await Promise.all([texFrom(layer, base + ':map', true), texFrom(layer, base + ':normal'), texFrom(layer, base + ':rough'), texFrom(layer, base + ':ao')]);
+  if (!map) return;
+  node.traverse((c) => {
+    if (!c.isMesh || c.userData.outline) return;
+    if (!c.geometry.attributes.uv || mat.project) { c.geometry = c.geometry.clone(); boxUV(c.geometry, tile); }
+    const old = [].concat(c.material)[0] || {};
+    const nm = new T.MeshStandardMaterial({ map, normalMap: normal || null, roughnessMap: rough || null, aoMap: ao || null, roughness: 1, metalness: 0, side: old.side ?? T.FrontSide });
+    if (mat.tint) nm.color.set(mat.tint);
+    c.material = nm;
+  });
 }
 
 // Big textures cost memory and upload time on every layer; 2048 px is plenty for drawing.
@@ -331,9 +373,11 @@ async function loadModel(m) {
     if (c.isMesh) for (const m of [].concat(c.material || [])) m.side = T.DoubleSide;
     if (c.isMesh && (!c.material || c.material.type === 'MeshPhongMaterial' && m.ext === 'obj')) c.material = new T.MeshStandardMaterial({ color: '#cfcac2', roughness: 0.7 });
   });
-  // normalise: feet on the ground, ~1.7 units tall, centred
+  // normalise: feet on the ground, ~1.7 units tall, centred (asset-library models keep their
+  // real-world size in metres, so a chair stays chair-sized next to the figures)
   const box = new T.Box3().setFromObject(root), size = box.getSize(new T.Vector3());
-  const k = 1.7 / Math.max(size.y, size.x * 0.6, size.z * 0.6, 1e-6);
+  const big = Math.max(size.x, size.y, size.z);
+  const k = m.real && big > 0.02 && big < 200 ? 1 : 1.7 / Math.max(size.y, size.x * 0.6, size.z * 0.6, 1e-6);
   const wrap = new T.Group();
   root.scale.multiplyScalar(k);
   const c = box.getCenter(new T.Vector3());
@@ -535,10 +579,11 @@ export function tool3d(app) {
       const items = [
         ...[['orbit', 'Orbit'], ['pan', 'Pan'], ['zoom', 'Zoom']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), cb('Camera…', () => this.cameraMenu()), sep(),
         ...[['move', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale'], ['pose', 'Pose']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), sep(),
-        cb('＋ Figure', () => this.figureMenu()), cb('＋ Library…', () => this.libraryMenu()), cb('＋ Model…', () => this.importModel()), cb('＋ Shape', () => this.shapeMenu()),
+        cb('＋ Figure', () => this.figureMenu()), cb('＋ Library…', () => this.libraryMenu()), cb('＋ Model…', () => this.importModel()), cb('＋ Assets…', () => this.assetMenu()), cb('＋ Shape', () => this.shapeMenu()),
         cb('Light…', () => this.lightDialog()),
       ];
       if (e && e.data.kind === 'weapon') items.push(sep(), cb('Hold…', () => this.holdMenu()));
+      if (e) items.push(cb('Material…', () => this.materialDialog()));
       if (this.mode === 'pose') {
         const ikJoint = this.joint && M.IK_CHAINS[this.joint] && e && e.rig === 'human';
         items.push(sep(), h('span', { class: 'three-hint' }, this.joint ? (ikJoint && this.ik ? `${this.jointLabel(this.joint)} · drag to move the limb` : `${this.jointLabel(this.joint)} · drag to bend`) : 'Tap a body part, then drag'));
@@ -754,8 +799,21 @@ export function tool3d(app) {
       ] });
     },
     async importModel() {
-      const [f] = await pickFile('.glb,.gltf,.vrm,.fbx,.obj,.cs3c,.cs3o,.cs3s,.cmo,.csmf,.c2fc');
-      if (!f) return;
+      const picked = await pickFile('.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.zip,.blend,.vrm,.fbx,.obj,.cs3c,.cs3o,.cs3s,.cmo,.csmf,.c2fc', true);
+      if (!picked.length) return;
+      // Blender exports: .glb, .gltf with its .bin / textures, or a .zip of the export folder
+      let f = picked[0];
+      if (picked.length > 1 || /\.(gltf|zip|blend\d*)$/i.test(f.name)) {
+        try {
+          const r = await AS.modelFromFiles(picked);
+          if (!r) { toast('No 3D model among those files', 4000); return; }
+          f = new File([r.blob], r.name);
+        } catch (e) {
+          if (e.message === 'BLEND') dialog({ title: 'Blender file', body: h('p', {}, AS.BLEND_HELP), actions: [{ label: 'OK', primary: true }] });
+          else toast('Could not read that model: ' + e.message, 6000);
+          return;
+        }
+      }
       let ext = f.name.split('.').pop().toLowerCase(), blob = f, note = '';
       if (!['glb', 'gltf', 'vrm', 'fbx', 'obj'].includes(ext)) {
         // Clip Studio (or unknown) file: look for a standard model embedded inside it
@@ -773,6 +831,46 @@ export function tool3d(app) {
       toast('Loading ' + f.name + '…', 6000);
       try { await this.addObject({ id: uid(), kind: 'model', modelId: id, name: f.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Import model'); toast('Model added' + note + ' — use Move / Rotate / Scale', 4000); }
       catch (e) { console.error(e); L.models.delete(id); toast('Could not read that model: ' + e.message, 4500); }
+    },
+    assetMenu() {
+      AS.openAssetBrowser({
+        onModel: (rec) => this.addAssetModel(rec),
+        onMaterial: (rec) => { if (!this.sel) return false; this.setMaterial(rec); return true; },
+      });
+    },
+    async addAssetModel(rec) {
+      const L = this.layer(); if (!L) return;
+      const id = uid();
+      L.models.set(id, { id, ext: rec.ext || 'glb', name: rec.name, real: true, blob: new Blob([rec.bytes]) });
+      toast('Adding ' + rec.name + '…', 5000);
+      try { await this.addObject({ id: uid(), kind: 'model', modelId: id, name: rec.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Add asset'); toast(rec.name + ' added — use Move / Rotate / Scale', 3500); }
+      catch (e) { console.error(e); L.models.delete(id); toast('Could not load that model: ' + e.message, 4500); }
+    },
+    async setMaterial(rec, tile) {
+      const L = this.layer(), rt = runtimes.get(L), e = rt && rt.objs.get(this.sel); if (!e) return;
+      const b = this.snapshot();
+      // the maps travel with the document (so it opens anywhere, offline)
+      for (const [k, bytes] of Object.entries(rec.maps || {})) if (!L.models.has(rec.id + ':' + k)) L.models.set(rec.id + ':' + k, { id: rec.id + ':' + k, ext: 'tex', name: rec.name + ' ' + k, blob: new Blob([bytes], { type: 'image/jpeg' }) });
+      e.data.mat = { asset: rec.id, name: rec.name, tile: tile || (e.data.mat && e.data.mat.tile) || 0.5 };
+      await this.rebuildSel();
+      this.commit('Material', b); toast(rec.name + ' applied — Material… to change tile size or remove', 3500);
+    },
+    async rebuildSel() {
+      const L = this.layer(), rt = runtimes.get(L), e = rt && rt.objs.get(this.sel); if (!e) return;
+      rt.scene.remove(e.node); rt.objs.delete(this.sel);
+      await buildObject(L, rt, e.data);
+      attachAll(rt); this.redraw(1);
+    },
+    materialDialog() {
+      const e = this.selEntry(); if (!e) return;
+      const m = e.data.mat;
+      const body = h('div', {}, h('p', { class: 'hint' }, m ? `Material: ${m.name}` : 'No material yet — pick one from the asset library (wood, metal, fabric, stone, brick…).'));
+      if (m) body.append(field('Tile size', { min: 0.05, max: 4, step: 0.05, value: m.tile || 0.5, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => { m.tile = v; clearTimeout(this._mt); this._mt = setTimeout(() => this.rebuildSel(), 200); } }));
+      dialog({ title: 'Material', body, actions: [
+        { label: 'Browse materials…', onClick: () => { store.prefs.set('assetTab', 'textures'); this.assetMenu(); } },
+        m && { label: 'Remove material', onClick: async () => { const b = this.snapshot(); delete e.data.mat; await this.rebuildSel(); this.commit('Remove material', b); } },
+        { label: 'Done', primary: true },
+      ].filter(Boolean) });
     },
     deleteSel() {
       const L = this.layer(), rt = runtimes.get(L), e = rt && rt.objs.get(this.sel);

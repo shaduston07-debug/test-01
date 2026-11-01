@@ -1,5 +1,5 @@
 // IndexedDB persistence: documents (with thumbnails) and user brushes.
-const DB_NAME = 'inkwell', VERSION = 3;
+const DB_NAME = 'inkwell', VERSION = 4;
 let dbp = null;
 
 function open() {
@@ -12,6 +12,8 @@ function open() {
       if (!db.objectStoreNames.contains('brushes')) db.createObjectStore('brushes', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('fonts')) db.createObjectStore('fonts', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('timelapse')) db.createObjectStore('timelapse', { keyPath: 'id' });
+      // downloaded 3D assets (models / materials) kept for offline use
+      if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -103,6 +105,10 @@ export const prefs = {
 };
 
 // whole-store access for backup / restore
+export const listAssets = () => tx('assets', 'readonly', (s) => req(s.getAll()));
+export const getAsset = (id) => tx('assets', 'readonly', (s) => req(s.get(id)));
+export const putAsset = (a) => tx('assets', 'readwrite', (s) => req(s.put(a)));
+export const deleteAsset = (id) => tx('assets', 'readwrite', (s) => req(s.delete(id)));
 export const dumpStore = (name) => tx(name, 'readonly', (s) => req(s.getAll()));
 export const putAll = (name, records) => tx(name, 'readwrite', (s) => { for (const r of records) s.put(r); });
 export const STORES = ['docs', 'meta', 'brushes', 'fonts', 'timelapse'];
