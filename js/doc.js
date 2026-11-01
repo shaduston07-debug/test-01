@@ -118,6 +118,52 @@ function tintRect(src, color, r) {
   return t;
 }
 
+// ───────── comic panels ─────────
+// A panel is a rectangle {x, y, w, h} plus optional style: sk = vertical offsets of its corners
+// [top-left, top-right, bottom-right, bottom-left] (slanted cuts), r = corner radius,
+// style = solid | rounded | double | dashed | rough | none.
+export function panelCorners(p, inset = 0) {
+  const k = p.sk || [0, 0, 0, 0], i = inset;
+  return [[p.x + i, p.y + k[0] + i], [p.x + p.w - i, p.y + k[1] + i], [p.x + p.w - i, p.y + p.h + k[2] - i], [p.x + i, p.y + p.h + k[3] - i]];
+}
+export function panelShape(ctx, p, inset = 0, newPath = false) {
+  if (newPath) ctx.beginPath();
+  const c = panelCorners(p, inset);
+  const r = Math.max(0, Math.min((p.r ?? (p.style === 'rounded' ? 36 : 0)) - inset * 0.5, p.w / 2 - inset, Math.abs(p.h) / 2 - inset));
+  if (!r) { ctx.moveTo(c[0][0], c[0][1]); for (let k = 1; k < 4; k++) ctx.lineTo(c[k][0], c[k][1]); ctx.closePath(); return; }
+  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const m = mid(c[3], c[0]); ctx.moveTo(m[0], m[1]);
+  for (let k = 0; k < 4; k++) ctx.arcTo(c[k][0], c[k][1], c[(k + 1) % 4][0], c[(k + 1) % 4][1], r);
+  ctx.closePath();
+}
+// hand-drawn outline: the shape traced with a small steady wobble (same every redraw)
+function roughPath(ctx, p, amp) {
+  const c = panelCorners(p); let seed = 0;
+  for (const ch of String(p.id || 'p')) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296 - 0.5);
+  ctx.beginPath();
+  for (let k = 0; k < 4; k++) {
+    const a = c[k], b = c[(k + 1) % 4], len = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(2, Math.round(len / 60));
+    const nx = -(b[1] - a[1]) / (len || 1), ny = (b[0] - a[0]) / (len || 1);
+    for (let j = 0; j <= n; j++) { const t = j / n, o = (j === 0 || j === n) ? rnd() * amp * 0.4 : rnd() * amp; const x = a[0] + (b[0] - a[0]) * t + nx * o, y = a[1] + (b[1] - a[1]) * t + ny * o; if (k === 0 && j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+  }
+  ctx.closePath();
+}
+export function drawPanelBorder(ctx, p, width, color, defStyle = 'solid') {
+  const st = p.style || defStyle;
+  if (st === 'none' || width <= 0) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineJoin = 'round';
+  if (st === 'rough') { ctx.lineWidth = width; roughPath(ctx, p, Math.max(2, width * 0.6)); ctx.stroke(); ctx.restore(); return; }
+  // stroke inside the panel edge only (clip to the shape, double width)
+  panelShape(ctx, p, 0, true); ctx.clip();
+  if (st === 'dashed') ctx.setLineDash([width * 4, width * 2.5]);
+  if (st === 'double') {
+    ctx.lineWidth = width * 0.9; panelShape(ctx, p, 0, true); ctx.stroke();
+    ctx.lineWidth = width * 0.9; panelShape(ctx, p, width * 1.4, true); ctx.stroke();
+  } else { ctx.lineWidth = width * 2; panelShape(ctx, p, 0, true); ctx.stroke(); }
+  ctx.restore();
+}
+
 export class Layer {
   constructor(w, h, o = {}) {
     this.id = o.id || uid();
@@ -342,7 +388,7 @@ export class Doc {
 
   panelPath(ctx) {
     ctx.beginPath();
-    for (const p of this.panels()) ctx.rect(p.x, p.y, p.w, p.h);
+    for (const p of this.panels()) panelShape(ctx, p);
   }
 
   // Draws the stack into ctx (whose transform maps doc px → target px).
@@ -456,10 +502,9 @@ export class Doc {
   drawFrames(ctx, layer) {
     ctx.save();
     ctx.globalAlpha *= layer.opacity;
-    ctx.strokeStyle = layer.borderColor; ctx.lineWidth = layer.border; ctx.lineJoin = 'miter';
     for (const p of layer.panels) {
-      const b = layer.border / 2;
-      ctx.strokeRect(p.x + b, p.y + b, p.w - layer.border, p.h - layer.border);
+      if (p.fill) { ctx.fillStyle = p.fill; panelShape(ctx, p, 0, true); ctx.fill(); }
+      drawPanelBorder(ctx, p, layer.border, layer.borderColor, layer.panelStyle || 'solid');
     }
     ctx.restore();
   }

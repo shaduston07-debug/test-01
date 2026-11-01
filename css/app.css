@@ -541,3 +541,9 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .brush-row b span { font-size: 10.5px; letter-spacing: 0.02em; text-transform: uppercase; opacity: 0.85; }
 .brush-row b span:empty { display: none; }
 .brush-row canvas { height: 44px; margin-top: 2px; }
+/* webtoon auto layout picker */
+.layout-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+.layout-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.layout-opt canvas { width: 70px; height: 125px; border-radius: 6px; }
+.layout-opt.on { background: rgba(47, 125, 255, 0.28); color: var(--text); box-shadow: inset 0 0 0 2px var(--accent); }
+.modal .seg { flex-wrap: wrap; }

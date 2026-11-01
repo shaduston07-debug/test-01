@@ -1,7 +1,7 @@
 // Webtoon / comic features: panel (frame) tool, balloon & text tool, auto layout,
 // canvas extension, phone scroll preview, smart slicing export.
 import { h, toast, dialog, clamp, makeCanvas, canvasToBlob, download, field, seg, switchRow, uid } from './util.js';
-import { Layer, FONT_LABELS } from './doc.js';
+import { Layer, FONT_LABELS, panelShape } from './doc.js';
 import * as store from './storage.js';
 import * as UI from './ui.js';
 
@@ -103,8 +103,13 @@ export function panelTool(app) {
       const L = this.layer(), s = L.panels[this.sel]; if (!s) return;
       const before = JSON.stringify(L.panels), g = app.doc.webtoon.gutter;
       let a, b;
-      if (dir === 'h') { const h1 = Math.round((s.h - g) / 2); a = { ...s, h: h1 }; b = { ...s, id: uid(), y: s.y + h1 + g, h: s.h - h1 - g }; }
-      else { const w1 = Math.round((s.w - g / 2) / 2); a = { ...s, w: w1 }; b = { ...s, id: uid(), x: s.x + w1 + Math.round(g / 2), w: s.w - w1 - Math.round(g / 2) }; }
+      const k = s.sk || [0, 0, 0, 0];
+      if (dir === 'h') { const h1 = Math.round((s.h - g) / 2); a = { ...s, h: h1, sk: [k[0], k[1], 0, 0] }; b = { ...s, id: uid(), y: s.y + h1 + g, h: s.h - h1 - g, sk: [0, 0, k[2], k[3]] }; }
+      else {
+        const w1 = Math.round((s.w - g / 2) / 2), f = w1 / s.w;
+        const mt = k[0] + (k[1] - k[0]) * f, mb = k[3] + (k[2] - k[3]) * f;
+        a = { ...s, w: w1, sk: [k[0], mt, mb, k[3]] }; b = { ...s, id: uid(), x: s.x + w1 + Math.round(g / 2), w: s.w - w1 - Math.round(g / 2), sk: [mt, k[1], k[2], mb] };
+      }
       if (a.w < 10 || a.h < 10 || b.w < 10 || b.h < 10) { toast('Panel too small to split'); return; }
       L.panels.splice(this.sel, 1, a, b);
       vecCmd(app, 'Split panel', L, 'panels', before); app.changed();
@@ -113,11 +118,11 @@ export function panelTool(app) {
       const P = this.panels();
       ctx.save();
       ctx.lineWidth = 2 * px; ctx.strokeStyle = 'rgba(61,139,255,0.5)'; ctx.setLineDash([6 * px, 6 * px]);
-      for (const q of P) ctx.strokeRect(q.x, q.y, q.w, q.h);
+      for (const q of P) { panelShape(ctx, q, 0, true); ctx.stroke(); }
       ctx.setLineDash([]);
       const s = P[this.sel];
       if (s) {
-        ctx.strokeStyle = '#3d8bff'; ctx.lineWidth = 2.5 * px; ctx.strokeRect(s.x, s.y, s.w, s.h);
+        ctx.strokeStyle = '#3d8bff'; ctx.lineWidth = 2.5 * px; panelShape(ctx, s, 0, true); ctx.stroke();
         for (const [x, y] of [[s.x, s.y], [s.x + s.w, s.y], [s.x + s.w, s.y + s.h], [s.x, s.y + s.h]]) {
           ctx.beginPath(); ctx.arc(x, y, 8 * px, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.stroke();
         }
@@ -132,6 +137,7 @@ export function panelTool(app) {
       return [
         h('span', { class: 'cb-label' }, has ? 'Panel selected' : 'Drag to draw a panel'),
         cb('Auto layout…', () => autoPanelsDialog(app)),
+        has && cb('Style…', () => panelStyleDialog(app, this)),
         has && cb('Split ═', () => this.split('h')), has && cb('Split ║', () => this.split('v')), has && cb('Delete', () => this.del()),
         sep(), cb('Extend canvas', () => extendDialog(app)), cb('Phone preview', () => phonePreview(app)), cb('Export', () => exportSlicesDialog(app), false, 'primary'),
       ].filter(Boolean);
@@ -140,34 +146,125 @@ export function panelTool(app) {
   return t;
 }
 
+// ───────── panel layout styles ─────────
+export const PANEL_LAYOUTS = [
+  ['stack', 'Stacked', 'One full-width panel per beat'],
+  ['cinema', 'Cinematic', 'Wide, short letterbox panels'],
+  ['pairs', 'Side by side', 'Two panels in each row'],
+  ['alt', 'Alternating 1 / 2', 'A wide panel, then two side by side'],
+  ['trio', 'Wide + three', 'A wide panel, then a row of three'],
+  ['stagger', 'Staggered', 'Narrower panels stepping left and right'],
+  ['slant', 'Slanted cuts', 'Diagonal edges between panels for action'],
+  ['bleed', 'Borderless bleed', 'Edge-to-edge panels, no frame'],
+  ['mixed', 'Dynamic mix', 'A varied rhythm of all of the above'],
+];
+export const PANEL_STYLES = [['solid', 'Solid'], ['rounded', 'Rounded'], ['double', 'Double'], ['dashed', 'Dashed'], ['rough', 'Hand-drawn'], ['none', 'None']];
+
+// Build panels for one layout from y = start. Returns {panels, end}.
+export function layoutPanels(kind, o, W, start) {
+  const out = [], m = o.margin, g = o.gutter, iw = W - m * 2, H = o.height, st = o.style;
+  const P = (x, y, w, hh, extra = {}) => out.push({ id: uid(), x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(hh), style: st, ...extra });
+  let y = start;
+  const vgap = Math.max(16, Math.round(g / 4)); // gap between panels in one row
+  const rowOf = (n, hh, kk = null) => { const w = (iw - vgap * (n - 1)) / n; for (let i = 0; i < n; i++) P(m + i * (w + vgap), y, w, hh, kk ? { sk: kk(i, n) } : {}); y += hh + g; };
+  const kinds = kind === 'mixed' ? ['stack', 'pairs', 'stagger', 'slant', 'cinema', 'trio', 'stack', 'alt'] : [kind];
+  let made = 0, step = 0;
+  while (made < o.count) {
+    const k = kinds[step++ % kinds.length], left = o.count - made;
+    if (k === 'stack') { P(m, y, iw, H); y += H + g; made++; }
+    else if (k === 'cinema') { const hh = Math.max(200, Math.round(iw * 0.42)); P(m, y, iw, hh); y += hh + g; made++; }
+    else if (k === 'pairs') { const n = Math.min(2, left); rowOf(n, Math.round(H * 0.8)); made += n; }
+    else if (k === 'trio') { if (made % 4 === 0 || left === 1) { P(m, y, iw, H); y += H + g; made++; } else { const n = Math.min(3, left); rowOf(n, Math.round(H * 0.6)); made += n; } }
+    else if (k === 'alt') { if ((step - 1) % 2 === 0 || left === 1) { P(m, y, iw, H); y += H + g; made++; } else { const n = Math.min(2, left); rowOf(n, Math.round(H * 0.75)); made += n; } }
+    else if (k === 'stagger') { const w = iw * 0.72, right = made % 2 === 1; P(right ? m + iw - w : m, y, w, H * 0.85); y += H * 0.85 + g * 0.6; made++; }
+    else if (k === 'slant') {
+      // consecutive panels share a diagonal cut: this panel's bottom edge matches the next one's top
+      const s = Math.round(Math.min(H * 0.35, iw * 0.18)), dir = made % 2 ? -1 : 1;
+      const prev = out[out.length - 1];
+      const top = prev && prev._slant ? prev._slant : [0, 0];
+      const bot = left > 1 && kind !== 'mixed' || (kind === 'mixed' && left > 1) ? [-s / 2 * dir, s / 2 * dir] : [0, 0];
+      P(m, y, iw, H, { sk: [top[0], top[1], bot[1], bot[0]], _slant: bot }); y += H + g * 0.5; made++;
+    } else if (k === 'bleed') { P(0, y, W, H, { style: 'none' }); y += H + Math.round(g * 0.5); made++; }
+  }
+  for (const p of out) delete p._slant;
+  // a slanted panel followed by a non-slanted one: flatten the dangling cut
+  for (let i = 0; i < out.length; i++) { const p = out[i], nx = out[i + 1]; if (p.sk && (!nx || !nx.sk)) { p.sk = [p.sk[0], p.sk[1], 0, 0]; } if (p.sk && p.sk.every((v) => !v)) delete p.sk; }
+  return { panels: out, end: y - g };
+}
+
+function layoutThumb(kind, style) {
+  const c = makeCanvas(84, 150), x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, 84, 150);
+  // laid out at real webtoon size (800 px wide), drawn scaled down
+  const k = 84 / 800, { panels } = layoutPanels(kind, { count: kind === 'mixed' ? 8 : 6, margin: 40, gutter: 110, height: 420, style }, 800, 60);
+  x.scale(k, k); x.strokeStyle = '#111'; x.fillStyle = '#e8eaf0';
+  for (const p of panels) { if (p.y > 150 / k) break; panelShape(x, p, 0, true); x.fill(); if ((p.style || style) !== 'none') { x.lineWidth = 2 / k; x.setLineDash((p.style || style) === 'dashed' ? [40, 28] : []); x.stroke(); } }
+  return c;
+}
+
 export function autoPanelsDialog(app) {
   const d = app.doc, w = d.webtoon;
-  const o = { count: 5, margin: w.margin ?? 40, gutter: w.gutter ?? 120, top: 200, height: 900, replace: true };
+  const o = { count: 5, margin: w.margin ?? 40, gutter: w.gutter ?? 120, top: 200, height: 900, replace: true, kind: store.prefs.get('panelLayout', 'stack'), style: store.prefs.get('panelStyle', 'solid') };
+  const grid = h('div', { class: 'layout-grid' });
+  const drawGrid = () => {
+    grid.innerHTML = '';
+    for (const [k, label, tip] of PANEL_LAYOUTS) {
+      const b = h('button', { class: 'layout-opt' + (o.kind === k ? ' on' : ''), title: tip, onclick: () => { o.kind = k; drawGrid(); } }, layoutThumb(k, o.style), h('span', {}, label));
+      grid.append(b);
+    }
+  };
+  drawGrid();
   const body = h('div', {},
+    h('div', { class: 'menu-section' }, 'Layout'), grid,
+    h('div', { class: 'menu-section' }, 'Border'),
+    seg(PANEL_STYLES, o.style, (v) => { o.style = v; drawGrid(); }),
     field('Panels', { min: 1, max: 20, step: 1, value: o.count, fmt: (v) => v, onInput: (v) => (o.count = v) }),
     field('Panel height', { min: 200, max: 3000, step: 10, value: o.height, fmt: (v) => v + ' px', onInput: (v) => (o.height = v) }),
     field('Gutter (vertical space between panels)', { min: 0, max: 800, step: 10, value: o.gutter, fmt: (v) => v + ' px', onInput: (v) => (o.gutter = v) }),
     field('Side margin', { min: 0, max: 300, step: 2, value: o.margin, fmt: (v) => v + ' px', onInput: (v) => (o.margin = v) }),
     field('Top margin', { min: 0, max: 1500, step: 10, value: o.top, fmt: (v) => v + ' px', onInput: (v) => (o.top = v) }),
     switchRow('Replace existing panels', o.replace, (v) => (o.replace = v)),
-    h('p', {}, 'Webtoons read top-to-bottom: generous gutters create pacing. The canvas extends automatically if needed.'),
+    h('p', {}, 'Webtoons read top-to-bottom: generous gutters create pacing. The canvas extends automatically if needed. Tap a panel with the Panel tool, then Style… to change one panel.'),
   );
   dialog({ title: 'Auto panel layout', body, actions: [{ label: 'Cancel' }, { label: 'Create', primary: true, onClick: () => {
     w.gutter = o.gutter; w.margin = o.margin;
+    store.prefs.set('panelLayout', o.kind); store.prefs.set('panelStyle', o.style);
     const L = ensureLayer(app, 'frames', 'Panels');
     const before = JSON.stringify(L.panels);
     const start = o.replace || !L.panels.length ? o.top : Math.max(...L.panels.map((p) => p.y + p.h)) + o.gutter;
-    const need = start + o.count * o.height + (o.count - 1) * o.gutter + o.top;
+    const lay = layoutPanels(o.kind, o, d.width, start);
+    const need = lay.end + o.top;
     if (need > d.height) {
       const ok = extendTo(app, need);
       if (!ok) return false;
     }
-    const panels = o.replace ? [] : [...L.panels];
-    for (let i = 0; i < o.count; i++) panels.push({ id: uid(), x: o.margin, y: start + i * (o.height + o.gutter), w: d.width - o.margin * 2, h: o.height });
-    L.panels = panels;
+    L.panels = o.replace ? lay.panels : [...L.panels, ...lay.panels];
     vecCmd(app, 'Auto layout', L, 'panels', before);
     app.changed();
   } }] });
+}
+
+// Style of the selected panel: border style, corner radius, slanted top / bottom edges.
+function panelStyleDialog(app, tool) {
+  const L = tool.layer(), p = L.panels[tool.sel]; if (!p) return;
+  const before = JSON.stringify(L.panels);
+  const sk = p.sk ? [...p.sk] : [0, 0, 0, 0];
+  const lim = Math.round(Math.min(p.h * 0.45, 600));
+  const live = () => { p.sk = sk.some((v) => v) ? [...sk] : undefined; if (!p.sk) delete p.sk; app.changed(); app.requestRender(); };
+  const body = h('div', {},
+    h('div', { class: 'menu-section' }, 'Border'),
+    seg(PANEL_STYLES, p.style || L.panelStyle || 'solid', (v) => { p.style = v; live(); }),
+    field('Corner radius', { min: 0, max: 200, step: 2, value: p.r ?? (p.style === 'rounded' ? 36 : 0), fmt: (v) => v + ' px', onInput: (v) => { p.r = v; live(); } }),
+    h('div', { class: 'menu-section' }, 'Slant'),
+    field('Top edge tilt', { min: -lim, max: lim, step: 2, value: (sk[1] - sk[0]) / 2, fmt: (v) => Math.round(v) + ' px', onInput: (v) => { sk[0] = -v; sk[1] = v; live(); } }),
+    field('Bottom edge tilt', { min: -lim, max: lim, step: 2, value: (sk[2] - sk[3]) / 2, fmt: (v) => Math.round(v) + ' px', onInput: (v) => { sk[3] = -v; sk[2] = v; live(); } }),
+    h('p', { class: 'hint' }, 'Tip: give a panel a bottom tilt and the panel below the same top tilt for a matching diagonal cut.'),
+  );
+  dialog({ title: 'Panel style', body, actions: [
+    { label: 'Cancel', onClick: () => { L.panels = JSON.parse(before); app.changed(); } },
+    { label: 'Apply to all panels', onClick: () => { for (const q of L.panels) { q.style = p.style; if (p.r != null) q.r = p.r; } vecCmd(app, 'Panel style', L, 'panels', before); app.changed(); } },
+    { label: 'Done', primary: true, onClick: () => { vecCmd(app, 'Panel style', L, 'panels', before); app.changed(); } },
+  ] });
 }
 
 function extendTo(app, newH) {
