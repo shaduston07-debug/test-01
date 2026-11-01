@@ -9,6 +9,7 @@ A notes app in the style of Apple Notes, with a few extras:
   - Typed an old word from memory, like *voror* or *xifos*? The spelling card suggests the real one.
   - Built-in glossaries work offline (about 270 Norse, 210 Latin, 185 Greek, 90 argot, 120 Lingala and 90 Tshiluba entries). The Lingala and Tshiluba lists are written without tone marks; check important words with a speaker or a dictionary. "More translations" uses Wiktionary, or Claude on claude.ai.
 - **Select text to translate or correct it.** Select a phrase (finger, pencil or mouse) and a **Translate · Spelling** bar appears under it. **Translate** translates the whole phrase at once ("I said it was good" → Lingala *Nalobaki ete ezalaki malamu*) into Old Norse, Latin, Greek, argot, Lingala, Tshiluba, English or French; tap a result to put it in your note, and tap it later to swap it or put the original back. **Spelling** lists every misspelled word in the selection with suggestions. Phrase translations come from Claude (on claude.ai, or in the app with your own API key under **Appearance › Claude**), otherwise from Google Translate's free endpoint (Latin, Lingala, Tshiluba, English, French), otherwise word by word from the built-in lists, marked as rough. Words from the built-in lists (Lingala, Tshiluba, Latin …) are never flagged as spelling mistakes.
+- **Cloud sync between your iPad and phone.** In the installed app, **Cloud sync** (bottom of the sidebar) keeps every device in step through a **private GitHub repository** that only you can see: notes, groups, your word list, pictures and recordings. Set-up: create a private repository named `inkwell-notes`, create a fine-grained access key limited to it with **Contents: Read and write**, and paste the key on each device. Changes sync a few seconds after you stop typing, when you return to the app and every two minutes. If the same note changed on two devices before they synced, both versions are kept (one as a "Conflicted copy"). On claude.ai, notes already sync through your claude.ai account.
 - **Groups.** Organise notes into coloured groups from the sidebar (+ to create, ⋯ to rename, recolour or delete). The folder button on the toolbar puts the open note into a group.
 - **Appearance.** Automatic, light or dark theme, and nine accent colours.
 - **Page.** Plain, lined, grid or dotted paper; seven paper colours; five fonts (System, Book, Garamond, Typewriter, Handwriting); four text sizes; three page widths.
@@ -65,6 +66,7 @@ python3 -m http.server 8000
 | Typed-sum calculator | `js/calc.js` |
 | claude.ai sync, Claude lookups, Claude with your own API key | `js/cloud.js` |
 | Whole-phrase translation | `js/phrase.js` |
+| Cloud sync through a private GitHub repository | `js/sync.js` |
 | Home-screen app: manifest, icons, offline cache | `manifest.webmanifest`, `icons/`, `sw.js` |
 | Native iPad/iPhone app and its .ipa build | `ios/`, `.github/workflows/ios.yml` |
 | Pencil / stylus sketching | `js/sketch.js` |

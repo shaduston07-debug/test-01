@@ -89,8 +89,12 @@ const Media = (() => {
       if (!target) return;
       try {
         const src = await url(el.dataset.media);
-        if (src) target.src = src;
-        else el.classList.add('missing');
+        if (src) {
+          target.src = src;
+          el.classList.remove('missing');
+        } else {
+          el.classList.add('missing');
+        }
       } catch {
         el.classList.add('missing');
       }
@@ -114,5 +118,12 @@ const Media = (() => {
     reader.readAsDataURL(file);
   });
 
-  return { save, restore, blob, url, hydrate, serialize, toDataUrl };
+  // Whether this device holds the file.
+  async function has(ref) {
+    if (!ref.startsWith('idb:')) return true;
+    const key = await run('readonly', s => s.getKey(ref.slice(4)));
+    return key !== undefined;
+  }
+
+  return { save, restore, blob, url, has, hydrate, serialize, toDataUrl };
 })();

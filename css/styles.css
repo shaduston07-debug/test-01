@@ -1641,3 +1641,28 @@ html.native-app .sketch-bar { padding-top: calc(8px + env(safe-area-inset-top, 0
 
 /* Claude key setting */
 .claude-key-status { margin: 0; font-size: 13px; color: var(--muted); }
+
+/* ---------- Cloud sync ---------- */
+
+#open-sync > span { display: grid; text-align: left; }
+.sync-line { font-size: 12px; font-weight: 400; color: var(--muted); }
+.sync-line.error { color: var(--misspelled); }
+.sync-steps { margin: 4px 0 14px; padding-left: 1.3em; font-size: 14px; line-height: 1.5; }
+.sync-steps li { margin-bottom: 6px; }
+.sync-steps a { color: var(--accent); font-weight: 600; }
+.sync-form { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.sync-form input {
+  padding: 9px 10px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  outline: none;
+}
+.sync-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sync-message { min-height: 1.2em; margin: 8px 0; font-size: 14px; color: var(--muted); }
+.sync-message.error { color: var(--misspelled); }
+.sync-summary { padding: 12px; margin: 10px 0; border-radius: 12px; background: var(--sidebar); }
+.sync-summary p { margin: 0; }

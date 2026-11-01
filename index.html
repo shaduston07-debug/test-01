@@ -40,6 +40,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>
           Personal Dictionary
         </button>
+        <button class="link-btn" id="open-sync">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9a4 4 0 0 1 0 9H7z"/></svg>
+          <span>Cloud sync<span class="sync-line" id="sync-line"></span></span>
+        </button>
         <button class="link-btn" id="open-appearance">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-1.2-1-1.5-1-2.5s.9-1.5 2-1.5H17a4 4 0 0 0 4-4c0-4.7-4-8.5-9-8.5z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/></svg>
           Appearance
@@ -165,6 +169,19 @@
   <!-- Answer for a typed sum such as 12 × 7 = -->
   <button class="math-chip" id="math-chip" hidden></button>
 
+  <!-- Cloud sync through a private GitHub repository -->
+  <div class="modal-backdrop" id="sync-modal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="sync-title">
+      <header>
+        <h2 id="sync-title">Cloud sync</h2>
+        <button class="icon-btn" id="close-sync" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div id="sync-body"></div>
+    </div>
+  </div>
+
   <!-- Appearance -->
   <div class="modal-backdrop" id="appearance-modal" hidden>
     <div class="modal" role="dialog" aria-labelledby="appearance-title">
@@ -288,6 +305,7 @@
   <script src="js/lexicons/argot.js"></script>
   <script src="js/lexicons/lingala.js"></script>
   <script src="js/lexicons/tshiluba.js"></script>
+  <script src="js/sync.js"></script>
   <script src="js/phrase.js"></script>
   <script src="js/calc.js"></script>
   <script src="js/media.js"></script>

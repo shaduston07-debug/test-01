@@ -38,19 +38,22 @@
     }
   }
 
-  function persist() {
+  function persist({ sync = true } = {}) {
     try {
       localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
     } catch {
       flash('Couldn’t save — browser storage is full or blocked.');
     }
+    if (sync) Sync.schedule();
   }
+
+  const newNoteId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
   const current = () => notes.find(n => n.id === currentId);
 
   function createNote(html = '', text = '') {
     const now = Date.now();
-    const note = { id: now.toString(36) + Math.random().toString(36).slice(2, 7), html, text, created: now, updated: now };
+    const note = { id: newNoteId(), html, text, created: now, updated: now };
     notes.unshift(note);
     persist();
     return note;
@@ -76,6 +79,7 @@
       notes = notes.filter(n => n !== note);
       persist();
       Cloud.deleteNote(note.id);
+      Sync.noteDeleted(note.id);
     }
   }
 
@@ -102,6 +106,7 @@
   function persistGroups() {
     try { localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); } catch { /* kept in memory */ }
     Cloud.saveGroups(groups);
+    Sync.schedule();
   }
 
   const groupOf = note => groups.find(g => g.id === note.group);
@@ -1303,6 +1308,7 @@
     notes = notes.filter(n => n !== note);
     persist();
     Cloud.deleteNote(note.id);
+    Sync.noteDeleted(note.id);
     currentId = null;
     const next = [...notes].sort((a, b) => b.updated - a.updated)[0];
     if (next) {
@@ -1375,6 +1381,7 @@
   let lastSavedWords = '';
   SpellCheck.onChange(() => {
     scanSpelling();
+    Sync.schedule();
     if (!dictModal.hidden) renderDictionary();
     const words = SpellCheck.list();
     if (dictionarySynced && JSON.stringify(words) !== lastSavedWords) {
@@ -1858,6 +1865,159 @@
     try { localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); } catch { /* kept in memory */ }
     renderList();
   }).catch(() => { /* groups on this device still work */ });
+
+  /* ---------- Cloud sync with your other devices (GitHub) ---------- */
+
+  const syncModal = $('#sync-modal');
+  const syncBody = $('#sync-body');
+
+  const deviceName = () =>
+    /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad'
+      : /iPhone/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'computer';
+
+  function syncedAt(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    return d.toDateString() === new Date().toDateString()
+      ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+      : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  }
+
+  function renderSyncLine(status = Sync.status()) {
+    const line = $('#sync-line');
+    line.textContent = Cloud.onClaude ? 'Synced with your claude.ai account'
+      : status.state === 'off' ? 'Off'
+        : status.state === 'syncing' ? 'Syncing\u2026'
+          : status.state === 'error' ? 'Needs attention'
+            : status.last ? 'Synced ' + syncedAt(status.last) : 'On';
+    line.classList.toggle('error', status.state === 'error');
+  }
+
+  function renderSync() {
+    const status = Sync.status();
+    const cfg = Sync.config();
+    if (Cloud.onClaude) {
+      syncBody.innerHTML = `
+        <p class="modal-hint">Here on claude.ai your notes are already saved to your claude.ai account, so they're on every device where you open this page.</p>
+        <p class="modal-hint">To sync the installed iPad and iPhone app, set up Cloud sync inside the app. To move notes from here into it, use Share \u203A Back up all notes, then Restore a backup in the app.</p>`;
+      return;
+    }
+    if (!cfg) {
+      syncBody.innerHTML = `
+        <p class="modal-hint">Keep this device and your phone in step through a private GitHub repository that only you can see. Notes, groups, your word list, pictures and recordings all sync.</p>
+        <ol class="sync-steps">
+          <li><a href="https://github.com/new?name=inkwell-notes&visibility=private" target="_blank" rel="noopener">Create a private repository</a> named <b>inkwell-notes</b>.</li>
+          <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create an access key</a> (a fine-grained token): under <i>Repository access</i> pick <b>Only select repositories</b> \u203A inkwell-notes; under <i>Permissions</i> set <b>Contents</b> to <b>Read and write</b>. Pick a long expiry.</li>
+          <li>Paste the key here. Do the same on your phone with the same key.</li>
+        </ol>
+        <form class="sync-form" id="sync-form">
+          <input id="sync-token" type="password" placeholder="Access key (github_pat_\u2026)" autocomplete="off" spellcheck="false" aria-label="GitHub access key">
+          <input id="sync-repo" type="text" value="inkwell-notes" autocomplete="off" spellcheck="false" aria-label="Repository name">
+          <button type="submit" class="primary-btn">Connect</button>
+        </form>
+        <p class="sync-message" id="sync-message">${status.state === 'error' ? esc(status.message) : ''}</p>
+        <p class="modal-hint">The key is stored only on this device and is only sent to GitHub.</p>`;
+      return;
+    }
+    syncBody.innerHTML = `
+      <div class="sync-summary">
+        <p><b>${esc(cfg.owner)}/${esc(cfg.repo)}</b></p>
+        <p class="sync-message${status.state === 'error' ? ' error' : ''}">${
+          status.state === 'syncing' ? 'Syncing\u2026'
+            : status.state === 'error' ? esc(status.message)
+              : status.last ? 'Last synced ' + syncedAt(status.last) : 'Not synced yet'}</p>
+      </div>
+      <p class="modal-hint">Changes sync a few seconds after you stop typing, when you come back to the app, and every two minutes while it's open. If a note was changed on both devices before they could sync, both versions are kept; the other one appears as a \u201CConflicted copy\u201D.</p>
+      <div class="backup-row">
+        <button class="action" data-sync="now">Sync now</button>
+        <button class="action subtle danger" data-sync="disconnect">Turn off on this device</button>
+      </div>`;
+  }
+
+  Sync.onStatus(status => {
+    renderSyncLine(status);
+    if (!syncModal.hidden && !syncBody.querySelector('#sync-token:focus')) renderSync();
+  });
+
+  $('#open-sync').addEventListener('click', () => {
+    closeCard();
+    renderSync();
+    syncModal.hidden = false;
+  });
+  $('#close-sync').addEventListener('click', () => { syncModal.hidden = true; });
+  syncModal.addEventListener('click', async e => {
+    if (e.target === syncModal) return (syncModal.hidden = true);
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.sync === 'now') return Sync.syncNow();
+    if (btn.dataset.sync === 'disconnect') {
+      if (!confirmByTapping(btn, 'Tap again to stop syncing on this device. Your notes stay here and on GitHub.')) return;
+      Sync.disconnect();
+      renderSync();
+    }
+  });
+  syncModal.addEventListener('submit', async e => {
+    e.preventDefault();
+    const token = $('#sync-token').value.trim();
+    const repo = $('#sync-repo').value.trim() || 'inkwell-notes';
+    const message = $('#sync-message');
+    if (!token) return (message.textContent = 'Paste the access key first.');
+    message.textContent = 'Connecting\u2026';
+    try {
+      await Sync.connect(token, repo);
+      renderSync();
+      await Sync.syncNow();
+      flash('Cloud sync is on');
+    } catch (err) {
+      message.textContent = {
+        bad_token: 'GitHub didn\u2019t accept that key. Check you copied all of it.',
+        offline: 'No connection. Try again when you\u2019re online.',
+      }[err.code] || err.message;
+    }
+  });
+
+  Sync.init({
+    getNotes: () => notes.slice(),
+    getGroups: () => groups.slice(),
+    getWords: () => SpellCheck.list(),
+    isPristine: n => isPristineWelcome(n),
+    deviceName,
+    conflictCopy: note => ({
+      ...note,
+      id: newNoteId(),
+      html: '<div>Conflicted copy</div>' + note.html,
+      text: 'Conflicted copy\n' + note.text,
+      updated: Date.now(),
+    }),
+    apply({ notes: next, groups: nextGroups, words, changed }) {
+      notes = next;
+      groups = nextGroups;
+      persist({ sync: false });
+      try { localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); } catch { /* kept in memory */ }
+      const have = new Set(SpellCheck.list().map(w => w.toLowerCase()));
+      const newWords = words.filter(w => !have.has(w.toLowerCase()));
+      if (newWords.length) SpellCheck.merge(newWords);
+      const note = current();
+      if (note && changed.has(note.id) && document.activeElement === editor) {
+        // You're typing in a note the other device also changed: keep its version
+        // as a copy, and keep what you're writing as the note itself.
+        notes.push({ ...note, id: newNoteId(), html: '<div>Conflicted copy</div>' + note.html, text: 'Conflicted copy\n' + note.text });
+        saveCurrent();
+      } else if (!note) {
+        const first = [...notes].sort((a, b) => b.updated - a.updated)[0];
+        const showing = app.classList.contains('show-editor');
+        if (first) openNote(first.id);
+        if (!showing) app.classList.remove('show-editor');
+      } else if (changed.has(note.id) && document.activeElement !== editor) {
+        editor.innerHTML = note.html;
+        Media.hydrate(editor);
+        renderDate(note);
+        scanSpelling();
+      }
+      renderList();
+    },
+  });
+  renderSyncLine();
 
   Cloud.onError(err => {
     if (err && err.code === 'invalid_argument') flash('This note is too big to save to your account. It\u2019s still saved on this device.');
