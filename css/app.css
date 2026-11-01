@@ -536,3 +536,8 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .hist-tiles, .pal-tiles { gap: 4px; background: none; border-radius: 0; overflow: visible; }
 .hist-tiles > *, .pal-tiles > * { border-radius: 7px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .hist-tiles .empty, .pal-tiles .empty { background: rgba(255, 255, 255, 0.06); }
+/* brush library: name gets the full width, source tag on its own line under it */
+.brush-row b { flex-direction: column; align-items: flex-start; gap: 1px; font-size: 14px; line-height: 1.25; }
+.brush-row b span { font-size: 10.5px; letter-spacing: 0.02em; text-transform: uppercase; opacity: 0.85; }
+.brush-row b span:empty { display: none; }
+.brush-row canvas { height: 44px; margin-top: 2px; }

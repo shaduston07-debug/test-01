@@ -556,10 +556,20 @@ export function brushPreview(brush, w = 230, hgt = 40, color = '#ffffff') {
   if (!src) {
     src = makeCanvas(w * 2, hgt * 2);
     const target = { canvas: src, layer: { alphaLock: false }, scale: 1, matrix: null, toLocal: (x, y) => ({ x, y }) };
-    const size = clamp(brush.size * 1.2, 6, hgt * 1.3);
-    previewEngine.begin(target, brush, { kind: 'paint', color, size, opacity: 1, noUndo: true, simTaper: true });
+    // previews show the brush's character at a readable size: very fine pens (ibis brushes are
+    // often 1–3 px) are drawn thicker, and the quick synthetic stroke doesn't trigger speed thinning
+    const size = clamp(brush.size * 1.2, 12, hgt * 1.3);
+    const pb = { ...brush, speedSize: 0, speedOpacity: 0 };
+    previewEngine.begin(target, pb, { kind: 'paint', color, size, opacity: 1, noUndo: true, simTaper: true });
     for (const p of strokePreviewPoints(w * 2, hgt * 2)) previewEngine.add(p);
     previewEngine.end();
+    // faint brushes (pencils, airbrushes, low-flow textures): lift the strongest part of the stroke
+    // to near full strength so every preview is easy to see; the texture/softness is kept
+    const x = src.getContext('2d', { willReadFrequently: true }), id = x.getImageData(0, 0, src.width, src.height), dd = id.data;
+    const hist = new Uint32Array(256); let n = 0;
+    for (let i = 3; i < dd.length; i += 4) if (dd[i]) { hist[dd[i]]++; n++; }
+    let acc = 0, p95 = 255; for (let v = 255; v > 0; v--) { acc += hist[v]; if (acc >= n * 0.05) { p95 = v; break; } }
+    if (n && p95 < 215) { const k = 235 / Math.max(20, p95); for (let i = 3; i < dd.length; i += 4) dd[i] = Math.min(255, dd[i] * k); x.putImageData(id, 0, 0); }
     previewCache.set(key, src);
   }
   const c = makeCanvas(src.width, src.height);
