@@ -418,16 +418,19 @@ class App {
     this.requestRender('view');
   }
 
-  fitView() {
+  fitView(o = {}) {
     if (!this.doc) return;
     const d = this.doc, top = 70, bottom = d.mode === 'animate' ? 210 : 20, side = 70;
+    // webtoon: fit the width but stay at the part of the strip being worked on
+    const keepY = o.keepPlace && d.mode === 'webtoon' && this.view ? this.screenToDoc(this.vw / 2, (o.at && o.at.y) || this.vh / 2).y : null;
     const aw = this.vw - side * 2, ah = this.vh - top - bottom;
     let z;
     if (d.mode === 'webtoon') z = Math.min(aw / d.width, 1.2);
     else z = Math.min(aw / d.width, ah / d.height);
     this.view = { x: 0, y: 0, zoom: z, rot: 0, flip: this.view.flip || 1 };
     const cx = this.vw / 2, cy = d.mode === 'webtoon' ? top + (d.width * z * 0.0) : top + ah / 2;
-    if (d.mode === 'webtoon') this.setViewAt({ x: d.width / 2, y: 0 }, { x: cx, y: top + 10 });
+    if (d.mode === 'webtoon' && keepY != null) this.setViewAt({ x: d.width / 2, y: clamp(keepY, 0, d.height) }, { x: cx, y: (o.at && o.at.y) || this.vh / 2 });
+    else if (d.mode === 'webtoon') this.setViewAt({ x: d.width / 2, y: 0 }, { x: cx, y: top + 10 });
     else this.setViewAt({ x: d.width / 2, y: d.height / 2 }, { x: cx, y: cy });
     this.requestRender('view');
   }
@@ -701,6 +704,8 @@ class App {
       t0: keep && prev ? prev.t0 : performance.now(), maxTouches: Math.max(ids.length, prev && keep ? prev.maxTouches : 0),
       moved: keep && prev ? prev.moved : false, zoom0: keep && prev ? prev.zoom0 : this.view.zoom,
       repeat: keep && prev ? prev.repeat : null, repeating: keep && prev ? prev.repeating : false,
+      // how far the fingers have moved over the whole gesture (kept when one finger lifts first)
+      travel: keep && prev ? (prev.travel || 0) : 0, lastC: keep && prev ? prev.lastC : null, base: keep && prev ? (prev.base || 0) + (prev.travelNow || 0) : 0,
     };
     // hold two fingers = keep undoing, three = keep redoing (until they lift or move)
     const g = this.gesture;
@@ -740,6 +745,7 @@ class App {
       if (Math.abs(rot - snap) < 0.07) rot = snap;
       this.view.rot = rot;
     }
+    g.travelNow = dist(cx, cy, cx0, cy0); g.travel = Math.max(g.travel || 0, (g.base || 0) + g.travelNow); g.lastC = { x: cx, y: cy };
     this.setViewAt(anchor, { x: cx, y: cy });
     this.showHud(Math.round(this.view.zoom * 100) + '%' + (this.view.rot ? ` · ${Math.round(((this.view.rot * 180 / Math.PI) % 360 + 360) % 360)}°` : ''));
     this.requestRender('view');
@@ -754,8 +760,10 @@ class App {
       if (g.maxTouches === 2) this.undo();
       else if (g.maxTouches === 3) this.redo();
       else if (g.maxTouches >= 4) document.body.classList.toggle('ui-hidden');
-    } else if (dt < 400 && this.view.zoom < g.zoom0 * 0.65) {
-      this.fitView(); // quick pinch → fit
+    } else if (dt < 400 && this.view.zoom < g.zoom0 * 0.65 && (g.travel || 0) < 160) {
+      // quick pinch → fit (only a real pinch: a fast two-finger scroll whose fingers drift
+      // together must not count). Long webtoon canvases stay where you are.
+      this.fitView({ keepPlace: this.doc.mode === 'webtoon', at: g.lastC });
     }
   }
 

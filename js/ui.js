@@ -1022,7 +1022,9 @@ export function resizeDoc(app, W, H, ox = 0, oy = 0) {
   d.width = W; d.height = H; d._tmp = [];
   app.selection = new (app.selection.constructor)(W, H);
   app.history.clear();
-  app.changed(); app.fitView();
+  app.changed();
+  // a webtoon strip that grows at the bottom keeps its scroll position
+  if (d.mode === 'webtoon' && !ox && !oy) app.requestRender('view'); else app.fitView();
 }
 
 function symmetryDialog(app) {
