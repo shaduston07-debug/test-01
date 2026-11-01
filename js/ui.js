@@ -233,6 +233,13 @@ export function bindColorButton(app, btn) {
   btn.addEventListener('pointercancel', () => { st = null; dot.remove(); });
 }
 
+const COLOR_TABS = [
+  ['ring', 'Disc', '<circle cx="12" cy="12" r="9"/><rect x="8" y="8" width="8" height="8"/>'],
+  ['triangle', 'Triangle', '<circle cx="12" cy="12" r="9"/><path d="M12 6.5 17 15H7z"/>'],
+  ['square', 'Classic', '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 15h16"/>'],
+  ['values', 'Value', '<path d="M5 8h14M5 12h14M5 16h14"/><circle cx="9" cy="8" r="1.6" fill="currentColor"/><circle cx="15" cy="12" r="1.6" fill="currentColor"/><circle cx="11" cy="16" r="1.6" fill="currentColor"/>'],
+  ['palettes', 'Palettes', '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>'],
+];
 // Color panel: Triangle (hue ring + SV triangle), Classic square, Values, Palettes —
 // with Hue / Saturation / Brightness bars underneath that work in every mode.
 export function openColor(app, anchor) {
@@ -247,8 +254,11 @@ export function openColor(app, anchor) {
   const tabsEl = h('div', { class: 'pop-tabs' });
   const view = h('div', { class: 'color-view' });
   const bars = h('div', { class: 'hsb-bars' });
-  const histQuick = h('div', { class: 'swatches hist-quick' });
-  body.append(view, histQuick, bars, tabsEl);
+  const histQuick = h('div', { class: 'hist-tiles' });
+  const histHead = h('div', { class: 'col-sec' }, h('span', null, 'History'),
+    h('button', { class: 'col-clear', onclick: () => { app.colorHistory = []; store.prefs.set('colorHistory', []); histKey = ''; quick.render(); renderSw && renderSw(); } }, 'Clear'));
+  tabsEl.className = 'col-tabs';
+  body.append(view, bars, histHead, histQuick, tabsEl);
 
   const hex = () => rgbToHex(...hsvToRgb(hh, s, v));
   const commit = () => { app.setColor(hex(), true); };
@@ -484,25 +494,34 @@ export function openColor(app, anchor) {
   const quick = h('div', { class: 'pal-quick' });
   quick.render = () => {
     quick.innerHTML = ''; histQuick.innerHTML = '';
-    if (tab === 'palettes') { histQuick.hidden = true; return; }
-    histQuick.hidden = !app.colorHistory.length;
-    for (const c of app.colorHistory.slice(0, 16)) histQuick.append(swatchBtn(c));
+    const showHist = tab !== 'palettes';
+    histQuick.hidden = histHead.hidden = !showHist;
+    if (!showHist) return;
+    // Procreate-style: a flush row of the last 10 colours actually used (empty slots stay dark)
+    for (let i = 0; i < 10; i++) { const c = app.colorHistory[i]; histQuick.append(c ? swatchBtn(c) : h('span', { class: 'empty' })); }
     const list = pals(), pal = list.find((x) => x.id === Pal.defaultPaletteId(list));
     if (!pal) return;
     const pick = h('button', { class: 'pal-pick', title: 'Choose the palette shown here', onclick: () => dialog({ title: 'Palette under the wheel', body: '', actions: [
       ...list.map((p2) => ({ label: (p2.id === pal.id ? '✓ ' : '') + p2.name, onClick: () => { Pal.setDefaultPalette(p2.id); quick.render(); renderSw && renderSw(); } })),
       { label: 'Cancel', primary: true },
     ] }) }, pal.name + ' ▾');
-    quick.append(pick, swatchGrid(pal));
+    // the palette as a grid of square tiles; empty slots add the current colour
+    const grid = h('div', { class: 'pal-tiles' });
+    pal.colors.forEach((c, ci) => grid.append(swatchBtn(c, () => swatchMenu(pal.id, ci))));
+    const cells = Math.max(30, Math.ceil((pal.colors.length + 1) / 10) * 10);
+    for (let i = pal.colors.length; i < cells; i++) grid.append(h('button', { class: 'empty', title: 'Add current colour', onclick: () => { const l2 = pals(); const p2 = l2.find((x) => x.id === pal.id); p2.colors.push(app.color); savePals(l2); } }));
+    quick.append(h('div', { class: 'col-sec' }, pick), grid);
   };
-  body.insertBefore(quick, bars);
+  body.insertBefore(quick, tabsEl);
 
   const builders = { ring: () => buildTriangle('square'), triangle: () => buildTriangle('triangle'), square: buildSquare, values: buildValues, palettes: buildPalettes };
   let cur = null;
   const renderTab = () => {
     tabsEl.innerHTML = '';
-    for (const [k, l] of [['ring', 'Square'], ['triangle', 'Triangle'], ['square', 'Classic'], ['values', 'Value'], ['palettes', 'Palettes']]) {
-      tabsEl.append(h('button', { class: tab === k ? 'on' : '', onclick: () => { tab = k; store.prefs.set('colorTab', k); renderTab(); } }, l));
+    for (const [k, l, ic] of COLOR_TABS) {
+      const b = h('button', { class: tab === k ? 'on' : '', onclick: () => { tab = k; store.prefs.set('colorTab', k); renderTab(); } });
+      b.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">${ic}</svg><span>${l}</span>`;
+      tabsEl.append(b);
     }
     cur = builders[tab]();
     view.innerHTML = ''; view.append(cur.el);
@@ -525,7 +544,7 @@ export function openColor(app, anchor) {
   };
   app.colorListeners.add(listener);
   renderTab();
-  openPopover(anchor, { title: 'Colors', body, head: [head], width: 330, key: 'color', float: true, onClose: () => app.colorListeners.delete(listener) });
+  openPopover(anchor, { title: 'Colours', body, head: [head], width: 400, key: 'color', float: true, onClose: () => app.colorListeners.delete(listener) });
 }
 
 // ───────── brush previews ─────────

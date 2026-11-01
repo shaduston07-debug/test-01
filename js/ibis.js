@@ -11,21 +11,61 @@ import { BRUSH_DEFAULTS, newBrushFrom, preloadBrush, rawImageToMaskCanvas } from
 import * as store from './storage.js';
 
 // ───────── QR scanning ─────────
-async function decodeQR(img) {
+export async function decodeQR(img) {
   await loadScript('vendor/jsQR.js');
-  const tries = [];
   const w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
-  for (const target of [Math.min(1400, Math.max(w0, h0)), 900, 600, 1800]) {
-    const k = Math.min(1, target / Math.max(w0, h0)) || 1;
-    tries.push(k);
-  }
-  for (const k of [...new Set(tries)]) {
-    const c = makeCanvas(w0 * k, h0 * k), x = c.getContext('2d', { willReadFrequently: true });
+  const read = (id) => window.jsQR(id.data, id.width, id.height, { inversionAttempts: 'attemptBoth' });
+  // draw (a crop of) the image at scale k onto white
+  const grab = (k, sx = 0, sy = 0, sw = w0, sh = h0) => {
+    const c = makeCanvas(Math.max(1, Math.round(sw * k)), Math.max(1, Math.round(sh * k))), x = c.getContext('2d', { willReadFrequently: true });
     x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
-    x.drawImage(img, 0, 0, c.width, c.height);
-    const id = x.getImageData(0, 0, c.width, c.height);
-    const r = window.jsQR(id.data, id.width, id.height, { inversionAttempts: 'attemptBoth' });
-    if (r) return r;
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    return x.getImageData(0, 0, c.width, c.height);
+  };
+  // stretch contrast so washed-out / dim photos and screenshots become black & white again
+  const levels = (id) => {
+    const d = id.data, hist = new Uint32Array(256), n = d.length / 4;
+    for (let i = 0; i < d.length; i += 4) hist[(d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8]++;
+    let lo = 0, hi = 255, acc = 0;
+    while (lo < 255 && (acc += hist[lo]) < n * 0.02) lo++;
+    acc = 0; while (hi > 0 && (acc += hist[hi]) < n * 0.02) hi--;
+    if (hi - lo < 8) return null;
+    const out = new ImageData(id.width, id.height), o = out.data, k = 255 / (hi - lo);
+    for (let i = 0; i < d.length; i += 4) { const g = clamp((((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) - lo) * k, 0, 255); o[i] = o[i + 1] = o[i + 2] = g; o[i + 3] = 255; }
+    return out;
+  };
+  // sharpen (unsharp mask) for soft / blurred codes
+  const sharpen = (id) => {
+    const { width: w, height: hh, data: d } = id, out = new ImageData(w, hh), o = out.data;
+    for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (!x || !y || x === w - 1 || y === hh - 1) { o[i] = o[i + 1] = o[i + 2] = d[i]; o[i + 3] = 255; continue; }
+      const v = clamp(5 * d[i] - d[i - 4] - d[i + 4] - d[i - w * 4] - d[i + w * 4], 0, 255);
+      o[i] = o[i + 1] = o[i + 2] = v; o[i + 3] = 255;
+    }
+    return out;
+  };
+  const long = Math.max(w0, h0);
+  const scales = [...new Set([1400, 900, 600, 1800].map((t) => Math.min(t / long, long < 500 ? 2.5 : 1)))];
+  // 1. plain passes at a few sizes (fast path: almost every QR image reads here)
+  for (const k of scales) { const r = read(grab(k)); if (r) return r; }
+  // 2. contrast-stretched, then sharpened
+  for (const k of scales.slice(0, 3)) {
+    const lv = levels(grab(k)); if (!lv) continue;
+    let r = read(lv); if (r) return r;
+    r = read(sharpen(lv)); if (r) return r;
+  }
+  // 3. the code may be a small part of a big photo / screenshot: scan overlapping tiles
+  for (const n of [2, 3]) {
+    const tw = w0 / n * 1.5, th = h0 / n * 1.5;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const sx = clamp(i * w0 / n - (tw - w0 / n) / 2, 0, w0 - tw), sy = clamp(j * h0 / n - (th - h0 / n) / 2, 0, h0 - th);
+      const k = Math.min(1100 / Math.max(tw, th), 2);
+      const id = grab(k, Math.max(0, sx), Math.max(0, sy), Math.min(tw, w0), Math.min(th, h0));
+      let r = read(id); if (r) return r;
+      const lv = levels(id); if (lv && (r = read(lv))) return r;
+    }
   }
   return null;
 }

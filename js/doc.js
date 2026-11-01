@@ -22,7 +22,7 @@ export const BLEND_MODES = [
 ];
 export const blendShort = (b) => (BLEND_MODES.find((m) => m[0] === b) || BLEND_MODES[0])[2];
 
-const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint'];
+const LAYER_PROPS = ['id', 'type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint', 'draft', 'express', 'border', 'borderWidth', 'borderColor'];
 
 // Layer colour (display tint, like Clip Studio's layer colour): the layer's pixels shown in one
 // colour, keeping their alpha. Cached per canvas and redone only when the layer changes.
@@ -36,6 +36,77 @@ function tintOf(src, color, holder, key) {
   x.globalCompositeOperation = 'source-over';
   holder._tintKey = key;
   return t;
+}
+// Clip Studio-style layer effects: expression colour (gray / monochrome) and a border (outline).
+// Like the tint they only change how the layer is shown; the pixels stay as painted.
+const hasFx = (it) => !!(it.tint || it.express === 'gray' || it.express === 'mono' || (it.border && it.borderWidth > 0));
+const fxKey = (it) => [it.tint, it.express, it.border && it.borderWidth, it.border && it.borderColor].join('|');
+let FILTER_OK = null;
+function grayInPlace(x, w, h, mono) {
+  if (!mono) {
+    if (FILTER_OK == null) {
+      // feature test by result: older WebKit accepts the property but ignores it
+      try { const t = makeCanvas(1, 1).getContext('2d', { willReadFrequently: true }), r = makeCanvas(1, 1); r.getContext('2d').fillStyle = '#f00'; r.getContext('2d').fillRect(0, 0, 1, 1); t.filter = 'grayscale(1)'; t.drawImage(r, 0, 0); const p = t.getImageData(0, 0, 1, 1).data; FILTER_OK = Math.abs(p[0] - p[1]) < 8; } catch { FILTER_OK = false; }
+    }
+    if (FILTER_OK) {
+      const c = makeCanvas(w, h), cx = c.getContext('2d');
+      cx.filter = 'grayscale(1)'; cx.drawImage(x.canvas, 0, 0);
+      x.globalCompositeOperation = 'copy'; x.drawImage(c, 0, 0); x.globalCompositeOperation = 'source-over';
+      return;
+    }
+  }
+  const id = x.getImageData(0, 0, w, h), d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (!d[i + 3]) continue;
+    let g = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+    if (mono) { g = g < 128 ? 0 : 255; d[i + 3] = d[i + 3] < 110 ? 0 : 255; }
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  x.putImageData(id, 0, 0);
+}
+function fxOf(src, it, holder, key) {
+  let t = holder._fxC;
+  if (!t || t.width !== src.width || t.height !== src.height) { t = holder._fxC = makeCanvas(src.width, src.height); holder._fxKey = null; }
+  if (key != null && holder._fxKey === key) return t;
+  const x = t.getContext('2d', { willReadFrequently: it.express === 'mono' || undefined });
+  x.globalCompositeOperation = 'copy'; x.drawImage(src, 0, 0); x.globalCompositeOperation = 'source-over';
+  if (it.tint) { x.globalCompositeOperation = 'source-in'; x.fillStyle = it.tint; x.fillRect(0, 0, t.width, t.height); x.globalCompositeOperation = 'source-over'; }
+  else if (it.express === 'gray' || it.express === 'mono') grayInPlace(x, t.width, t.height, it.express === 'mono');
+  if (it.border && it.borderWidth > 0) {
+    // outline: the shape grown by the border width (rings of offset copies), in one colour, under the layer
+    let b = holder._fxB;
+    if (!b || b.width !== t.width || b.height !== t.height) b = holder._fxB = makeCanvas(t.width, t.height);
+    const bx = b.getContext('2d'), r = it.borderWidth;
+    bx.globalCompositeOperation = 'copy'; bx.drawImage(t, 0, 0); bx.globalCompositeOperation = 'source-over';
+    for (let rr = r; rr > 0.5; rr -= Math.max(1.5, r / 4)) {
+      const n = Math.max(8, Math.ceil(Math.PI * 2 * rr / 1.8));
+      for (let k = 0; k < n; k++) { const a = k / n * Math.PI * 2; bx.drawImage(t, Math.cos(a) * rr, Math.sin(a) * rr); }
+    }
+    bx.globalCompositeOperation = 'source-in'; bx.fillStyle = it.borderColor || '#ffffff'; bx.fillRect(0, 0, b.width, b.height);
+    bx.globalCompositeOperation = 'source-over'; bx.drawImage(t, 0, 0);
+    x.globalCompositeOperation = 'copy'; x.drawImage(b, 0, 0); x.globalCompositeOperation = 'source-over';
+  }
+  holder._fxKey = key;
+  return t;
+}
+function fxRect(src, it, r) {
+  let t = src._fxR;
+  if (!t || t.width < r.w || t.height < r.h) t = src._fxR = makeCanvas(Math.max(r.w, 64), Math.max(r.h, 64));
+  const x = t.getContext('2d');
+  x.globalCompositeOperation = 'copy'; x.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h); x.globalCompositeOperation = 'source-over';
+  if (it.tint) { x.globalCompositeOperation = 'source-in'; x.fillStyle = it.tint; x.fillRect(0, 0, r.w, r.h); x.globalCompositeOperation = 'source-over'; }
+  else if (it.express === 'gray' || it.express === 'mono') { x.save(); x.beginPath(); x.rect(0, 0, r.w, r.h); x.clip(); grayRect(x, r.w, r.h, it.express === 'mono'); x.restore(); }
+  return t;
+}
+function grayRect(x, w, h, mono) {
+  const id = x.getImageData(0, 0, w, h), d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (!d[i + 3]) continue;
+    let g = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+    if (mono) { g = g < 128 ? 0 : 255; d[i + 3] = d[i + 3] < 110 ? 0 : 255; }
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  x.putImageData(id, 0, 0);
 }
 function tintRect(src, color, r) {
   let t = src._tintR;
@@ -65,6 +136,12 @@ export class Layer {
     this.groupId = o.groupId || null;
     this.collapsed = !!o.collapsed;
     this.private = !!o.private; // hidden from the time-lapse (Procreate's "private photo")
+    // Clip Studio layer options
+    this.draft = !!o.draft;                 // draft layer: shown, but left out of exports and fill references
+    this.express = o.express || 'color';    // expression colour: color | gray | mono
+    this.border = !!o.border;               // border effect (outline)
+    this.borderWidth = o.borderWidth ?? 4;
+    this.borderColor = o.borderColor || '#ffffff';
     if (this.type === '3d') { this.scene3d = o.scene3d || null; this.models = o.models || new Map(); }
     if (this.type === 'raster' || this.type === '3d') {
       this.canvas = makeCanvas(w, h);
@@ -185,9 +262,16 @@ export class Doc {
   }
 
   // Where brush strokes land, plus the doc→local mapping.
+  isLocked(it) {
+    if (!it) return false;
+    if (it.locked) return true;
+    const g = it.groupId && this.items.find((x) => x.id === it.groupId);
+    return !!(g && g.locked);
+  }
   getTarget(create = true) {
     const it = this.activeItem;
     if (!it) return null;
+    if (this.mode === 'animate' && this.isLocked(it)) return null;
     if (this.mode === 'animate') {
       let cel = it.celAt(this.playhead);
       if (!cel) { if (!create) return null; cel = this.addCel(it, this.playhead, 1); }
@@ -199,7 +283,7 @@ export class Doc {
         toLocal: (x, y) => { const p = inv.transformPoint({ x, y }); return { x: p.x, y: p.y }; },
       };
     }
-    if (!it.isRaster) return null;
+    if (!it.isRaster || this.isLocked(it)) return null;
     return { canvas: it.canvas, layer: it, scale: 1, matrix: null, toLocal: (x, y) => ({ x, y }) };
   }
 
@@ -226,10 +310,14 @@ export class Doc {
     } else if (it.type === 'raster' || it.type === '3d') c = it.canvas;
     else return null;
     const pv = preview && preview(c), ov = overlay ? overlay(c) : null;
-    if (it.tint) {
+    if (it.tint && !(it.border && it.borderWidth > 0)) {
       // live preview canvases change every frame; the layer itself only when its version does
       const canvas = pv ? tintOf(pv, it.tint, pv, null) : tintOf(c, it.tint, c, (c._ver || 0) + ':' + it.tint);
       return { canvas, matrix, alpha, overlay: ov ? { ...ov, tint: it.tint } : null };
+    }
+    if (hasFx(it)) {
+      const canvas = pv ? fxOf(pv, it, pv, null) : fxOf(c, it, c, (c._ver || 0) + ':' + fxKey(it));
+      return { canvas, matrix, alpha, overlay: ov ? { ...ov, fx: it } : null };
     }
     return { canvas: pv || c, matrix, alpha, overlay: ov };
   }
@@ -242,9 +330,9 @@ export class Doc {
       const a = ctx.globalAlpha;
       ctx.globalAlpha = a * src.overlay.alpha;
       const r = src.overlay.rect;
-      if (src.overlay.tint) {
+      if (src.overlay.tint || src.overlay.fx) {
         const rr = r || { x: 0, y: 0, w: src.overlay.canvas.width, h: src.overlay.canvas.height };
-        if (rr.w > 0 && rr.h > 0) ctx.drawImage(tintRect(src.overlay.canvas, src.overlay.tint, rr), 0, 0, rr.w, rr.h, rr.x, rr.y, rr.w, rr.h);
+        if (rr.w > 0 && rr.h > 0) ctx.drawImage(src.overlay.tint ? tintRect(src.overlay.canvas, src.overlay.tint, rr) : fxRect(src.overlay.canvas, src.overlay.fx, rr), 0, 0, rr.w, rr.h, rr.x, rr.y, rr.w, rr.h);
       } else if (r) { if (r.w > 0 && r.h > 0) ctx.drawImage(src.overlay.canvas, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h); }
       else ctx.drawImage(src.overlay.canvas, 0, 0);
       ctx.globalAlpha = a;
@@ -276,7 +364,7 @@ export class Doc {
       if (it.clip && this.clipBase(i) >= 0) continue;
       const clips = [];
       if (it.hasPixels) for (let j = i + 1; j < items.length && items[j].clip; j++) clips.push(items[j]);
-      if (!it.visible || (o.filter && !o.filter(it))) continue;
+      if (!it.visible || (o.filter && !o.filter(it)) || (it.draft && o.drafts === false)) continue;
       if (it.type === 'frames' || it.type === 'balloons') {
         ctx.save(); ctx.globalAlpha = gAlpha;
         if (it.type === 'frames') this.drawFrames(ctx, it);
@@ -381,7 +469,8 @@ export class Doc {
     const c = makeCanvas(o.width || this.width, o.height || this.height);
     const x = c.getContext('2d');
     x.scale(c.width / this.width, c.height / this.height);
-    this.composite(x, o);
+    // exports, thumbnails and fill references leave draft layers out (like Clip Studio)
+    this.composite(x, { drafts: false, ...o });
     return c;
   }
 

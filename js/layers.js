@@ -7,7 +7,7 @@ import { withUndo, touch } from './history.js';
 import { openPopover, closePopover } from './ui.js';
 
 // ───────── structural undo ─────────
-const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint'];
+const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint', 'draft', 'express', 'border', 'borderWidth', 'borderColor'];
 function captureStruct(doc) {
   return { items: [...doc.items], props: doc.items.map((it) => Object.fromEntries(PROPS.map((k) => [k, it[k]]))), active: doc.active };
 }
@@ -166,9 +166,13 @@ export function openLayers(app, anchor) {
   // stop native scrolling while a row is being dragged
   list.addEventListener('touchmove', (e) => { if (layersOpen && layersOpen.dragging) e.preventDefault(); }, { passive: false });
 
+  // swipe a row sideways to add it to / take it out of a multi-selection (like Procreate)
+  const picked = new Set();
   const render = () => {
     list.innerHTML = '';
     const items = d.items;
+    for (const p of [...picked]) if (!items.includes(p)) picked.delete(p);
+    if (picked.size) list.append(multiBar());
     const groups = d.mode === 'animate' ? new Map() : d.groupMap();
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
@@ -191,14 +195,14 @@ export function openLayers(app, anchor) {
     if (it.type === 'group') {
       const n = d.layers.filter((l) => l.groupId === it.id).length;
       const chev = h('button', { class: 'grp-chev' + (it.collapsed ? '' : ' open'), html: ICONS.chevron, onclick: (e) => { e.stopPropagation(); it.collapsed = !it.collapsed; app.dirtySave = true; render(); } });
-      row = h('div', { class: 'layer-row group' + (on ? ' on' : '') }, chev, h('div', { class: 'layer-name' }, h('b', {}, it.name), h('small', {}, `${n} layer${n === 1 ? '' : 's'}${it.opacity < 1 ? ' · ' + pct(it.opacity) : ''}`)), vis);
+      row = h('div', { class: 'layer-row group' + (on ? ' on' : '') + (picked.has(it) ? ' picked' : '') }, chev, h('div', { class: 'layer-name' }, h('b', {}, it.name), h('small', {}, `${n} layer${n === 1 ? '' : 's'}${it.opacity < 1 ? ' · ' + pct(it.opacity) : ''}`)), vis);
     } else {
-      const tags = [it.private && 'private', it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip'].filter(Boolean).join(' · ');
+      const tags = [it.locked && '🔒 locked', it.draft && 'draft', it.private && 'private', it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip', it.border && 'border', it.express === 'gray' && 'gray', it.express === 'mono' && 'mono'].filter(Boolean).join(' · ');
       const sub = it.type === '3d' ? `3D · ${it.scene3d ? it.scene3d.objects.length : 0} object${it.scene3d && it.scene3d.objects.length === 1 ? '' : 's'}` : it.type === 'frames' ? `${it.panels.length} panels` : it.type === 'balloons' ? `${it.balloons.length} balloons` : it.type === 'track' ? `${it.cels.length} drawings · ${it.keys.length} keys` : (tags || (it.opacity < 1 ? pct(it.opacity) : ''));
       const canTint = it.type === 'raster' || it.type === 'track';
       const tintBtn = canTint ? h('button', { class: 'layer-tint' + (it.tint ? ' on' : ''), title: 'Layer colour', style: it.tint ? { background: it.tint } : {}, onclick: (e) => { e.stopPropagation(); d.active = i; render(); openTint(it); } }) : null;
       const blendBtn = h('button', { class: 'layer-blend', title: 'Blend mode & opacity', onclick: (e) => { e.stopPropagation(); d.active = i; render(); openBlend(it); } }, it.type === 'raster' || it.type === 'track' ? blendShort(it.blend) : '');
-      row = h('div', { class: 'layer-row' + (on ? ' on' : '') + (it.clip ? ' clip' : '') + (inGroup ? ' member' : '') },
+      row = h('div', { class: 'layer-row' + (on ? ' on' : '') + (picked.has(it) ? ' picked' : '') + (it.clip ? ' clip' : '') + (inGroup ? ' member' : '') },
         thumbOf(app, it), h('div', { class: 'layer-name' }, h('b', {}, it.name), sub ? h('small', {}, sub) : null), tintBtn, blendBtn, vis);
     }
     row.dataset.idx = i;
@@ -207,6 +211,7 @@ export function openLayers(app, anchor) {
   };
 
   const select = (it, i) => {
+    if (picked.size) { picked.clear(); d.active = i; render(); app.requestRender('view'); return; }
     if (d.active === i) { openSheet(it); return; }
     d.active = i;
     if (sheetFor) openSheet(it);
@@ -237,7 +242,12 @@ export function openLayers(app, anchor) {
         navigator.vibrate && navigator.vibrate(8);
       };
       const move = (ev) => {
-        if (!st.lifted) { if (Math.hypot(ev.clientX - st.x, ev.clientY - st.y) > 8) { st.cancelled = true; clearTimeout(st.timer); } return; }
+        if (!st.lifted) {
+          const dx = ev.clientX - st.x, dy = ev.clientY - st.y;
+          if (!st.swiped && Math.abs(dx) > 28 && Math.abs(dx) > Math.abs(dy) * 1.8) { st.swiped = true; st.cancelled = true; clearTimeout(st.timer); togglePick(it); return; }
+          if (Math.hypot(dx, dy) > 8) { st.cancelled = true; clearTimeout(st.timer); }
+          return;
+        }
         ev.preventDefault();
         ghost.style.top = ev.clientY - st.dy + 'px';
         const lr = list.getBoundingClientRect();
@@ -272,6 +282,31 @@ export function openLayers(app, anchor) {
       window.addEventListener('pointermove', move, { passive: false });
       window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
     });
+  };
+
+  const togglePick = (it) => {
+    closeSheet(); closeBlend();
+    if (!picked.size && d.activeItem && d.activeItem !== it) picked.add(d.activeItem);
+    if (picked.has(it)) picked.delete(it); else picked.add(it);
+    if (picked.size === 1 && picked.has(d.activeItem)) picked.clear();
+    navigator.vibrate && navigator.vibrate(6);
+    render();
+  };
+  const multiBar = () => {
+    const n = picked.size;
+    const act = (label, fn, cls = '') => h('button', { class: 'multi-act ' + cls, onclick: (e) => { e.stopPropagation(); fn(); } }, label);
+    const bar = h('div', { class: 'multi-bar' },
+      h('div', { class: 'multi-head' }, h('b', {}, `${n} layer${n === 1 ? '' : 's'} selected`), act('Done', () => { picked.clear(); render(); }, 'done')),
+      h('div', { class: 'multi-acts' },
+        d.mode !== 'animate' ? act('Group', () => { groupPicked(app, [...picked]); picked.clear(); render(); }) : null,
+        act('Merge', () => { if (mergePicked(app, [...picked])) { picked.clear(); render(); } }),
+        act('Duplicate', () => { duplicatePicked(app, [...picked]); render(); }),
+        act([...picked].some((x) => x.visible) ? 'Hide' : 'Show', () => { const v = ![...picked].some((x) => x.visible); structCmd(app, v ? 'Show layers' : 'Hide layers', () => { for (const x of picked) x.visible = v; }); render(); }),
+        act('Reference', () => { const v = ![...picked].every((x) => x.reference); structCmd(app, 'Reference', () => { for (const x of picked) if (x.type !== 'group') x.reference = v; }); render(); }),
+        act('Lock', () => { const v = ![...picked].every((x) => x.locked); structCmd(app, v ? 'Lock layers' : 'Unlock layers', () => { for (const x of picked) x.locked = v; }); render(); }),
+        act('Delete', async () => { if (!(await confirmDialog(`Delete ${n} layer${n === 1 ? '' : 's'}?`, 'Delete', true))) return; deletePicked(app, [...picked]); picked.clear(); render(); }, 'danger')),
+      h('p', { class: 'hint' }, 'Swipe more layers sideways to add or remove them · tap a layer to finish'));
+    return bar;
   };
 
   // ── blend mode & opacity popup (Procreate's "N" button) ──
@@ -426,7 +461,26 @@ function sheetBody(app, it, i, rerender, close, openBlend) {
 
   if (it.type === 'raster' || it.type === 'track') {
     box.append(section('Layer'));
-    box.append(toggle('Alpha Lock', 'alphaLock', rerender), toggle('Clipping Mask', 'clip', rerender), toggle('Reference', 'reference'), toggle('Private (hidden from time-lapse)', 'private', rerender));
+    box.append(toggle('Alpha Lock', 'alphaLock', rerender), toggle('Clipping Mask', 'clip', rerender), toggle('Reference', 'reference', rerender), toggle('Lock Layer', 'locked', rerender), toggle('Private (hidden from time-lapse)', 'private', rerender));
+    if (it.type === 'raster') {
+      // Clip Studio layer options
+      box.append(section('Clip Studio'));
+      box.append(toggle('Draft Layer', 'draft', rerender));
+      const exp = h('div', { class: 'sheet-seg' });
+      for (const [k, l] of [['color', 'Color'], ['gray', 'Gray'], ['mono', 'Mono']]) exp.append(h('button', { class: (it.express || 'color') === k ? 'on' : '', onclick: () => { structCmd(app, 'Expression colour', () => { it.express = k; }); rerender(); } }, l));
+      box.append(h('div', { class: 'sheet-item static' }, h('span', { html: ICONS.adjust || '' }), 'Expression', exp));
+      box.append(toggle('Border Effect', 'border', rerender));
+      if (it.border) {
+        let bStart = null;
+        const bw = field('Border width', { min: 1, max: 40, step: 1, value: it.borderWidth ?? 4, fmt: (v) => v + ' px', onInput: (v) => { if (!bStart) bStart = captureStruct(d); it.borderWidth = v; app.requestRender(); } });
+        bw.querySelector('input').addEventListener('change', () => { if (!bStart) return; const before = bStart; bStart = null; const after = captureStruct(d); app.history.push({ label: 'Border width', undo() { restoreStruct(d, before); app.changed(); }, redo() { restoreStruct(d, after); app.changed(); } }); app.changed(); });
+        const bc = h('input', { type: 'color', value: it.borderColor || '#ffffff' });
+        bc.addEventListener('change', () => { structCmd(app, 'Border colour', () => { it.borderColor = bc.value; }); });
+        bc.addEventListener('input', () => { it.borderColor = bc.value; app.requestRender(); });
+        box.append(bw, h('div', { class: 'sheet-item static' }, h('span', { html: ICONS.panel || '' }), 'Border colour', bc));
+      }
+      box.append(section('Actions'));
+    }
     if (d.mode === 'webtoon' && it.type === 'raster') box.append(toggle('Mask to panels', 'panelMask'));
     const target = () => (it.type === 'raster' ? it.canvas : (it.celAt(d.playhead) || {}).canvas);
     if (it.type === 'raster') box.append(item('select', 'Select', () => { app.selection.fromAlpha(it.canvas); app.selectionChanged(); app.setTool('select'); close(); }));
@@ -493,6 +547,82 @@ function sheetBody(app, it, i, rerender, close, openBlend) {
     close(); rerender();
   }, 'danger'));
   return box;
+}
+
+// ───────── multi-selection actions ─────────
+const membersOf = (d, list) => {
+  // a picked group stands for its members
+  const out = new Set();
+  for (const it of list) {
+    if (it.type === 'group') { for (const l of d.items) if (l.groupId === it.id) out.add(l); }
+    else out.add(it);
+  }
+  return d.items.filter((x) => out.has(x)); // bottom → top
+};
+function groupPicked(app, list) {
+  const d = app.doc, mem = membersOf(d, list);
+  if (!mem.length) return;
+  structCmd(app, 'Group layers', () => {
+    const top = mem[mem.length - 1];
+    const oldGroups = new Set(list.filter((x) => x.type === 'group'));
+    // anchor: insert the new group where the topmost layer was (outside any old group)
+    const anchorG = top.groupId ? d.items.find((x) => x.id === top.groupId) : null;
+    let after = null;
+    if (!anchorG) { for (let k = d.items.indexOf(top) + 1; k < d.items.length; k++) if (!mem.includes(d.items[k]) && !oldGroups.has(d.items[k])) { after = d.items[k]; break; } }
+    const g = new Layer(d.width, d.height, { type: 'group', name: 'New Group' });
+    const rest = d.items.filter((x) => !mem.includes(x) && !oldGroups.has(x));
+    let at = anchorG && rest.includes(anchorG) ? rest.indexOf(anchorG) + 1 : after ? rest.indexOf(after) : rest.length;
+    for (const m of mem) m.groupId = g.id;
+    rest.splice(at, 0, ...mem, g);
+    // drop groups that were emptied
+    const used = new Set(rest.map((x) => x.groupId));
+    const items = rest.filter((x) => x.type !== 'group' || x === g || used.has(x.id));
+    if (d.mode === 'animate') d.tracks = items; else d.layers = items;
+    d.active = items.indexOf(g);
+  });
+}
+function mergePicked(app, list) {
+  const d = app.doc;
+  const mem = membersOf(d, list).filter((x) => x.type === 'raster');
+  if (mem.length < 2) { toast('Pick at least two paint layers to merge'); return false; }
+  const set = new Set(mem);
+  const top = mem[mem.length - 1], bottom = mem[0];
+  // composite exactly what is visible of those layers (blend modes, clipping, opacity)
+  const vis = mem.map((x) => x.visible); mem.forEach((x) => { x.visible = true; });
+  const flat = d.flatten({ bg: false, filter: (it) => set.has(it) });
+  mem.forEach((x, k) => { x.visible = vis[k]; });
+  const merged = new Layer(d.width, d.height, { name: top.name, groupId: bottom.groupId });
+  merged.canvas.getContext('2d').drawImage(flat, 0, 0);
+  structCmd(app, 'Merge layers', () => {
+    const items = d.items, at = items.indexOf(bottom);
+    items.splice(at, 1, merged);
+    for (const m of mem) if (m !== bottom) items.splice(items.indexOf(m), 1);
+    d.active = items.indexOf(merged);
+  });
+  return true;
+}
+function duplicatePicked(app, list) {
+  const d = app.doc, mem = membersOf(d, list).filter((x) => x.type === 'raster');
+  if (!mem.length) { toast('Only paint layers can be duplicated'); return; }
+  if (!app.canAddRaster(mem.length)) return;
+  structCmd(app, 'Duplicate layers', () => {
+    for (const it of mem) {
+      const copy = new Layer(d.width, d.height, { ...it, id: null, name: it.name + ' copy' });
+      copy.canvas.getContext('2d').drawImage(it.canvas, 0, 0);
+      d.items.splice(d.items.indexOf(it) + 1, 0, copy);
+    }
+  });
+}
+function deletePicked(app, list) {
+  const d = app.doc;
+  const gone = new Set(membersOf(d, list));
+  for (const it of list) if (it.type === 'group') gone.add(it);
+  structCmd(app, 'Delete layers', () => {
+    const cur = d.activeItem;
+    const items = d.items.filter((x) => !gone.has(x));
+    if (d.mode === 'animate') d.tracks = items; else d.layers = items;
+    d.active = clamp(items.includes(cur) ? items.indexOf(cur) : items.length - 1, 0, Math.max(0, items.length - 1));
+  });
 }
 
 function mergeDown(app, i) {

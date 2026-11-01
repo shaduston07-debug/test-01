@@ -393,11 +393,14 @@ class App {
   setColor(hex, remember = true) {
     this.color = hex;
     store.prefs.set('color', hex);
-    if (remember) {
-      this.colorHistory = [hex, ...this.colorHistory.filter((c) => c !== hex)].slice(0, 16);
-      store.prefs.set('colorHistory', this.colorHistory);
-    }
     this.updateColorChip();
+  }
+  // history holds colours actually used on the canvas (painted or filled), like Procreate
+  noteColorUsed(hex = this.color) {
+    if (this.colorHistory[0] === hex) return;
+    this.colorHistory = [hex, ...this.colorHistory.filter((c) => c !== hex)].slice(0, 20);
+    store.prefs.set('colorHistory', this.colorHistory);
+    for (const f of this.colorListeners) f(this.color);
   }
   updateColorChip() {
     $('#btn-color span').style.background = this.color;
@@ -1122,7 +1125,7 @@ class App {
   async fillAt(x, y, color = this.color, tolerance = null) {
     const d = this.doc;
     const target = d.getTarget(true);
-    if (!target) { toast('Pick a raster layer to fill'); return; }
+    if (!target) { toast(d.isLocked(d.activeItem) ? 'This layer is locked' : 'Pick a raster layer to fill'); return; }
     const s = this.settings;
     let ref;
     if (s.fillRef === 'layer') {
@@ -1147,6 +1150,7 @@ class App {
       c.drawImage(fill, 0, 0); c.restore();
     }, () => this.requestRender(), target.matrix ? null : fill.bbox);
     this.changed('active');
+    this.noteColorUsed(color);
     return true;
   }
 
@@ -1160,11 +1164,12 @@ class App {
         const target = d.getTarget(true);
         if (!target) {
           const a = d.activeItem;
-          toast(!a ? 'Add a layer first' : a.type === '3d' ? '3D layer — use the 3D tool, or Rasterize it to paint on it' : a.type === 'group' ? 'Pick a layer inside the group to paint on' : `"${a.name}" isn't a paint layer — pick or add a raster layer`);
+          toast(!a ? 'Add a layer first' : d.isLocked(a) ? `"${a.name}" is locked — unlock it in the Layers panel` : a.type === '3d' ? '3D layer — use the 3D tool, or Rasterize it to paint on it' : a.type === 'group' ? 'Pick a layer inside the group to paint on' : `"${a.name}" isn't a paint layer — pick or add a raster layer`);
           return false;
         }
         if (!target.layer.visible) toast('Layer is hidden');
         const toolName = kind === 'paint' ? 'brush' : kind === 'erase' ? 'eraser' : 'smudge';
+        if (kind === 'paint') app.noteColorUsed();
         app.engine.begin(target, app.brushFor(toolName), {
           kind, color: app.color, size: app.getSize(), opacity: app.getOpacity(), symmetry: app.symmetry,
           selection: app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen', viewZoom: app.view.zoom,
