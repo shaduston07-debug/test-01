@@ -1,12 +1,35 @@
 // Photo & video import: insert a (private) photo, pick a single frame from a video, or
 // import a video as animation drawings.
 import { h, toast, dialog, field, switchRow, pickFile, makeCanvas, clamp } from './util.js';
+import { isNative, nativeTakePhoto } from './platform.js';
 import { Track } from './doc.js';
 import { insertLayer } from './layers.js';
 
 export async function insertPhoto(app, priv = false) {
   const [f] = await pickFile('image/*');
-  if (f) app.insertImage(f, { private: priv });
+  if (f) await placePhoto(app, f, priv);
+}
+async function placePhoto(app, f, priv) {
+  try { await app.insertImage(f, { private: priv, name: f.name && !/^image\.(jpe?g|heic|png)$/i.test(f.name) ? undefined : 'Photo' }); }
+  catch (e) { console.error(e); toast('Couldn’t import that photo' + (e && e.message ? ' — ' + e.message : ''), 5000); }
+}
+// Take a photo with the camera and insert it as a new layer.
+export async function takePhoto(app, priv = false) {
+  if (isNative) {
+    let blob;
+    try { blob = await nativeTakePhoto(); }
+    catch (e) { toast(/denied|permission/i.test(String(e && e.message)) ? 'Camera access is off — turn it on in Settings › Inkwell Studio › Camera' : 'Camera error — ' + ((e && e.message) || e), 6000); return; }
+    if (blob) await placePhoto(app, new File([blob], 'Photo.jpg', { type: blob.type || 'image/jpeg' }), priv);
+    return;
+  }
+  // browser / Home Screen app: the file input opens the camera directly
+  const f = await new Promise((res) => {
+    const inp = h('input', { type: 'file', accept: 'image/*', capture: 'environment' });
+    inp.style.cssText = 'position:fixed;left:-9999px;opacity:0';
+    inp.addEventListener('change', () => { res(inp.files[0] || null); inp.remove(); });
+    document.body.append(inp); inp.click();
+  });
+  if (f) await placePhoto(app, f, priv);
 }
 
 function loadVideo(file) {

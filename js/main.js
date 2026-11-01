@@ -1327,7 +1327,7 @@ class App {
   // source: File / Blob / canvas / ImageBitmap. opts.private keeps it out of the time-lapse.
   async insertImage(source, opts = {}) {
     const d = this.doc;
-    const img = await createImageBitmap(source);
+    const img = await decodeImage(source);
     const name = opts.name || (source.name ? source.name.replace(/\.[^.]+$/, '') : 'Image');
     const place = (c) => {
       const s = Math.min(1, d.width / img.width, d.height / img.height);
@@ -1349,6 +1349,20 @@ class App {
     this.setTool('transform');
   }
 
+}
+
+// Blob/File → drawable image. createImageBitmap first; WebKit sometimes rejects camera JPEGs
+// there, so fall back to an <img> element (which also honours EXIF orientation).
+async function decodeImage(source) {
+  if (!(source instanceof Blob)) return source;
+  try { return await createImageBitmap(source); } catch { /* fall back */ }
+  const url = URL.createObjectURL(source);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    const c = makeCanvas(img.naturalWidth, img.naturalHeight); c.getContext('2d').drawImage(img, 0, 0);
+    return c;
+  } catch { throw new Error('this image format can’t be read'); }
+  finally { URL.revokeObjectURL(url); }
 }
 
 // Out of canvas memory while creating a layer → explain instead of failing silently

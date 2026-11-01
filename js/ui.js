@@ -834,6 +834,7 @@ export function openActions(app, anchor) {
   const pages = {
     add: () => [
       menuItem('image', 'Insert a photo', () => Media.insertPhoto(app, false)),
+      menuItem('camera', 'Take a photo', () => Media.takePhoto(app, false)),
       menuItem('image', 'Insert a private photo', () => Media.insertPhoto(app, true), 'not in time-lapse'),
       menuItem('video', 'Insert a video frame', () => Media.insertVideoFrame(app)),
       d.mode === 'animate' && menuItem('video', 'Import video as animation', () => Media.importVideoAsAnimation(app)),

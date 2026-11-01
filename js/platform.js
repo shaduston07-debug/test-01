@@ -33,6 +33,21 @@ export async function nativeSave(blob, filename) {
   return uri;
 }
 
+// Native camera (UIImagePickerController via @capacitor/camera). Returns a Blob, or null if
+// the user cancelled. Uses a file URI rather than base64 so big photos don't bloat memory.
+export async function nativeTakePhoto() {
+  try {
+    const r = await native('Camera', 'getPhoto', { source: 'CAMERA', resultType: 'uri', quality: 92, correctOrientation: true, saveToGallery: false, width: 4096, height: 4096 });
+    const url = r.webPath || (r.path && cap.convertFileSrc ? cap.convertFileSrc(r.path) : r.path);
+    if (!url) return null;
+    return await (await fetch(url)).blob();
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    if (/cancel/i.test(m)) return null;
+    throw e;
+  }
+}
+
 // Home Screen / Safari: prefer the system share sheet when it can take files.
 export async function webShare(blob, filename) {
   if (!isIOS || !navigator.canShare) return false;
