@@ -122,18 +122,25 @@ function tintRect(src, color, r) {
 // A panel is a rectangle {x, y, w, h} plus optional style: sk = vertical offsets of its corners
 // [top-left, top-right, bottom-right, bottom-left] (slanted cuts), r = corner radius,
 // style = solid | rounded | double | dashed | rough | none.
+// p.pts = [[x, y], …]: a free-shaped panel (polygon / freehand / cut) — x, y, w, h hold its bounds.
 export function panelCorners(p, inset = 0) {
+  if (p.pts) {
+    if (!inset) return p.pts;
+    let cx = 0, cy = 0; for (const [x, y] of p.pts) { cx += x; cy += y; } cx /= p.pts.length; cy /= p.pts.length;
+    return p.pts.map(([x, y]) => { const d = Math.hypot(x - cx, y - cy) || 1; return [x - (x - cx) / d * inset, y - (y - cy) / d * inset]; });
+  }
   const k = p.sk || [0, 0, 0, 0], i = inset;
   return [[p.x + i, p.y + k[0] + i], [p.x + p.w - i, p.y + k[1] + i], [p.x + p.w - i, p.y + p.h + k[2] - i], [p.x + i, p.y + p.h + k[3] - i]];
 }
 export function panelShape(ctx, p, inset = 0, newPath = false) {
   if (newPath) ctx.beginPath();
-  const c = panelCorners(p, inset);
-  const r = Math.max(0, Math.min((p.r ?? (p.style === 'rounded' ? 36 : 0)) - inset * 0.5, p.w / 2 - inset, Math.abs(p.h) / 2 - inset));
-  if (!r) { ctx.moveTo(c[0][0], c[0][1]); for (let k = 1; k < 4; k++) ctx.lineTo(c[k][0], c[k][1]); ctx.closePath(); return; }
+  const c = panelCorners(p, inset), n = c.length;
+  let r = Math.max(0, Math.min((p.r ?? (p.style === 'rounded' ? 36 : 0)) - inset * 0.5, p.w / 2 - inset, Math.abs(p.h) / 2 - inset));
+  if (r && p.pts) { let e = Infinity; for (let k = 0; k < n; k++) { const a = c[k], b = c[(k + 1) % n]; e = Math.min(e, Math.hypot(b[0] - a[0], b[1] - a[1]) / 2); } r = Math.min(r, e); }
+  if (!r || p.free) { ctx.moveTo(c[0][0], c[0][1]); for (let k = 1; k < n; k++) ctx.lineTo(c[k][0], c[k][1]); ctx.closePath(); return; }
   const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-  const m = mid(c[3], c[0]); ctx.moveTo(m[0], m[1]);
-  for (let k = 0; k < 4; k++) ctx.arcTo(c[k][0], c[k][1], c[(k + 1) % 4][0], c[(k + 1) % 4][1], r);
+  const m = mid(c[n - 1], c[0]); ctx.moveTo(m[0], m[1]);
+  for (let k = 0; k < n; k++) ctx.arcTo(c[k][0], c[k][1], c[(k + 1) % n][0], c[(k + 1) % n][1], r);
   ctx.closePath();
 }
 // hand-drawn outline: the shape traced with a small steady wobble (same every redraw)
@@ -142,8 +149,8 @@ function roughPath(ctx, p, amp) {
   for (const ch of String(p.id || 'p')) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
   const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296 - 0.5);
   ctx.beginPath();
-  for (let k = 0; k < 4; k++) {
-    const a = c[k], b = c[(k + 1) % 4], len = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(2, Math.round(len / 60));
+  for (let k = 0; k < c.length; k++) {
+    const a = c[k], b = c[(k + 1) % c.length], len = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(2, Math.round(len / 60));
     const nx = -(b[1] - a[1]) / (len || 1), ny = (b[0] - a[0]) / (len || 1);
     for (let j = 0; j <= n; j++) { const t = j / n, o = (j === 0 || j === n) ? rnd() * amp * 0.4 : rnd() * amp; const x = a[0] + (b[0] - a[0]) * t + nx * o, y = a[1] + (b[1] - a[1]) * t + ny * o; if (k === 0 && j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
   }
