@@ -29,6 +29,9 @@ export class StrokeEngine {
   // o: {kind, color, size, opacity, symmetry, selection, simTaper, onChange}
   begin(target, brush, o) {
     if (o.steadyInk && isInkBrush(brush) && !brush.exact) brush = steadyInk(brush);
+    // brushes that keep the original speed response and pressure/speed opacity (Pluma falcon)
+    this.classic = !!(brush.classicSpeed || /pluma/i.test(brush.name || '') || brush.id === 'ibis-pluma-falcon');
+    if (this.classic && o.solidColor) o = { ...o, solidColor: false };
     this.target = target; this.brush = brush; this.o = o;
     this.kind = o.kind || 'paint';
     const W = target.canvas.width, H = target.canvas.height;
@@ -196,7 +199,7 @@ export class StrokeEngine {
       // speed effects change gradually along the line (over ~2 brush widths), so uneven pen
       // sample timing can never show up as beads or dashes
       const vRaw = av + dv * t, step = Math.max(0.5, this.carry || 1);
-      this.vSm = this.vSm == null ? vRaw : this.vSm + (vRaw - this.vSm) * Math.min(1, step / (this.size / this.scale * 4 + 10));
+      this.vSm = this.vSm == null ? vRaw : this.vSm + (vRaw - this.vSm) * Math.min(1, step / (this.classic ? this.size / this.scale * 2 + 6 : this.size / this.scale * 4 + 10));
       pt.v = this.vSm;
       this.travelNow = this.travel + pos;
       // stampAt returns the un-jittered size so spacing needn't recompute it
@@ -214,7 +217,7 @@ export class StrokeEngine {
     s = Math.max(s, this.size * (b.minSize || 0));
     s *= 1 + (b.tiltSize || 0) * pt.t;
     // speed can thin a line a little (≤ 35 %), never make long fast lines vanish
-    if (b.speedSize) s *= 1 - Math.min(0.18, b.speedSize * 0.4) * Math.min(1, (pt.v || 0) / 6);
+    if (b.speedSize) s *= this.classic ? 1 - Math.min(0.35, b.speedSize * 0.6) * Math.min(1, (pt.v || 0) / 5) : 1 - Math.min(0.18, b.speedSize * 0.4) * Math.min(1, (pt.v || 0) / 6);
     if (this.fade) {
       let k = (b.fadeStartSize ?? 1);
       if (k > 1) k = 1 + (k - 1) * this.blobK; // ink blob at the start (0 = none)
@@ -236,7 +239,7 @@ export class StrokeEngine {
     // Solid colour (default): pressure / tilt / speed change the size only — a stroke is always
     // the full colour, so overlapping strokes of one colour don't darken (like Procreate / CSP pens)
     const solid = this.o.solidColor;
-    const o = solid ? 1 : Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (1 - Math.min(0.15, (b.speedOpacity || 0) * 0.35) * Math.min(1, (pt.v || 0) / 6));
+    const o = solid ? 1 : Math.max(0.5, 1 - b.opacityPressure * (1 - pt.p)) * (1 - (b.tiltOpacity || 0) * pt.t) * (this.classic ? 1 - Math.min(0.25, (b.speedOpacity || 0) * 0.45) * Math.min(1, (pt.v || 0) / 5) : 1 - Math.min(0.15, (b.speedOpacity || 0) * 0.35) * Math.min(1, (pt.v || 0) / 6));
     const ao = o >= 0.999 ? 1 : 1 - Math.pow(1 - clamp(o, 0, 0.999), Math.max(0.02, b.spacing));
     let alpha = b.flow * (solid ? 1 : Math.max(0.3, 1 - (b.flowPressure || 0) * (1 - pt.p))) * ao;
     if (this.fade && (b.fadeStartAlpha ?? 1) !== 1) {
