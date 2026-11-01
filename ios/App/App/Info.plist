@@ -305,6 +305,12 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo to import into your canvas as a layer or reference.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose photos and videos to import into your canvas.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record sound when you capture a video to import.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save your exported artwork to Photos.</string>
 </dict>
