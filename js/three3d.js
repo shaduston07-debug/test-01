@@ -161,7 +161,7 @@ function addOutlines(root, widthRef) {
 // Rings rotate about X (red), Y (green), Z (blue); arrows move along an axis; the yellow square
 // slides the object on the floor, the white ball moves it in the screen plane. Drawn on top of
 // everything at a constant on-screen size; a selected joint gets the rings only.
-const GIZMO_COL = { x: 0xe5484d, y: 0x46b85a, z: 0x3f7fe8, f: 0xf2c230, v: 0xffffff };
+const GIZMO_COL = { x: 0xe5484d, y: 0x46b85a, z: 0x3f7fe8, f: 0xf2c230, v: 0xffffff, c: 0xff9f1a };
 function buildGizmo() {
   const g = new T.Group(); g.visible = false; g.userData.gizmo = true;
   const vis = (c) => new T.MeshBasicMaterial({ color: c, depthTest: false, depthWrite: false, transparent: true, opacity: 0.92, side: T.DoubleSide });
@@ -185,6 +185,13 @@ function buildGizmo() {
   add('mz', arrow(), arrowPick(), [Math.PI / 2, 0, 0]);
   add('mf', [new T.PlaneGeometry(0.3, 0.3).rotateX(-Math.PI / 2).translate(0.42, 0, 0.42)], new T.PlaneGeometry(0.42, 0.42).rotateX(-Math.PI / 2).translate(0.42, 0, 0.42));
   add('mv', [new T.SphereGeometry(0.09, 16, 12)], new T.SphereGeometry(0.2, 8, 6));
+  // scale: orange cubes out on the diagonals with a thin stem — drag away from the centre to enlarge
+  const d = 1.32 / Math.SQRT2;
+  const cube = (x, y, z) => [new T.BoxGeometry(0.13, 0.13, 0.13).translate(x, y, z)];
+  for (const [x, y, z] of [[d, d, 0], [-d, -d, 0]]) {
+    const geo = cube(x, y, z); const st = new T.CylinderGeometry(0.01, 0.01, 0.36, 6).rotateZ(-Math.PI / 4).translate(x * 0.86, y * 0.86, z);
+    add('sc', [...geo, st], new T.BoxGeometry(0.3, 0.3, 0.3).translate(x, y, z));
+  }
   return g;
 }
 // where the manipulator sits: the joint, the figure's hips, else the middle of the object
@@ -701,7 +708,7 @@ export function tool3d(app) {
       this.dragging = false;
       if (this.gz) {
         const g = this.gz; this.gz = null;
-        this.commit(g.joint ? 'Pose' : g.handle[0] === 'r' ? 'Rotate object' : 'Move object', this.before);
+        this.commit(g.joint ? 'Pose' : g.handle === 'sc' ? 'Scale object' : g.handle[0] === 'r' ? 'Rotate object' : 'Move object', this.before);
         this.redraw(1); return;
       }
       if (this.mode === 'object') {
@@ -715,6 +722,18 @@ export function tool3d(app) {
     },
     cancel() { this.dragging = false; this.gz = null; this.redraw(1); },
     // ── manipulator ──
+    // page coordinates of a manipulator handle (used by tests / tutorials)
+    _handleScreen(handle) {
+      const rt = runtimes.get(this.layer()); if (!rt || !rt.gizmo || !rt.gizmo.visible) return null;
+      rt.gizmo.updateMatrixWorld(true);
+      let m = null; rt.gizmo.traverse((o) => { if (!m && o.isMesh && o.userData.handle === handle && o.material.colorWrite === false) m = o; });
+      if (!m) return null;
+      m.geometry.computeBoundingBox();
+      const local = handle[0] === 'r' ? new T.Vector3(Math.SQRT1_2, Math.SQRT1_2, 0) : m.geometry.boundingBox.getCenter(new T.Vector3());
+      const w = m.localToWorld(local).project(rt.camera);
+      const d = app.docToScreen((w.x + 1) / 2 * app.doc.width, (1 - w.y) / 2 * app.doc.height), r = app.canvas.getBoundingClientRect();
+      return [r.left + d.x, r.top + d.y];
+    },
     rayAt(p, cam) { const r = new T.Raycaster(); r.setFromCamera(this.ndc(p), cam); return r; },
     gizmoHit(p) {
       const rt = runtimes.get(this.layer()); if (!rt || !rt.gizmo || !rt.gizmo.visible) return null;
@@ -729,20 +748,26 @@ export function tool3d(app) {
       });
       const hits = this.rayAt(p, rt.camera).intersectObjects(picks, false);
       // arrows, the floor square and the ball win over the rings they cross
-      const hit = hits.find((x) => x.object.userData.handle[0] === 'm') || hits[0];
+      const hit = hits.find((x) => x.object.userData.handle[0] === 'm' || x.object.userData.handle === 'sc') || hits[0];
       return hit ? hit.object.userData.handle : null;
     },
     startGizmo(handle, p) {
       const rt = runtimes.get(this.layer()), e = this.selEntry(); if (!e || !rt.gizmoTarget) return false;
       const ax = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[handle[1]];
-      this.gz = { handle, e, rt, c: rt.gizmo.position.clone(), axis: ax && new T.Vector3(...ax), joint: rt.gizmoTarget.joint };
+      this.gz = { handle, e, rt, c: rt.gizmo.position.clone(), axis: handle !== 'sc' && ax && new T.Vector3(...ax), joint: rt.gizmoTarget.joint };
       this.gz.last = this.gizmoParam(p);
+      if (handle === 'sc') { this.gz.d0 = this.gz.last; this.gz.s0 = e.data.scale || 1; this.gz.p0 = e.node.getWorldPosition(new T.Vector3()); }
       return true;
     },
     // ring: the pointer's direction around the axis; arrow: its position along the axis;
     // square / ball: its point on the floor plane / the screen plane through the centre
     gizmoParam(p) {
       const { handle, c, axis, rt } = this.gz, ray = this.rayAt(p, rt.camera).ray;
+      if (handle === 'sc') {
+        // distance from the centre, measured in the screen plane through it
+        const hit = ray.intersectPlane(new T.Plane().setFromNormalAndCoplanarPoint(rt.camera.getWorldDirection(new T.Vector3()), c), new T.Vector3());
+        return hit ? Math.max(1e-4, hit.distanceTo(c)) : null;
+      }
       if (handle[0] === 'r') {
         if (Math.abs(ray.direction.dot(axis)) < 0.12) return null; // seen edge-on: use the drag distance
         const hit = ray.intersectPlane(new T.Plane().setFromNormalAndCoplanarPoint(axis, c), new T.Vector3());
@@ -757,6 +782,13 @@ export function tool3d(app) {
     },
     gizmoMove(p, dx, dy) {
       const g = this.gz, now = this.gizmoParam(p), o = g.e.data, node = g.e.node;
+      if (g.handle === 'sc') {
+        if (!now || !g.d0) return;
+        // grows from its base, so anything standing on the floor stays on it
+        o.scale = clamp(g.s0 * now / g.d0, 0.02, 100);
+        syncObject(g.e); app.showHud && app.showHud(Math.round(o.scale * 100) + '%');
+        return;
+      }
       if (g.handle[0] === 'r') {
         const ang = now && g.last ? Math.atan2(new T.Vector3().crossVectors(g.last, now).dot(g.axis), g.last.dot(now)) : (dx - dy) * 0.01;
         g.last = now;

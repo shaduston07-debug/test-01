@@ -594,3 +594,11 @@ body.mode-animate #btn-3d-models { display: none; }
 .p3d-chips button.on { background: var(--accent); color: #fff; }
 .p3d-partrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .p3d-partval { margin: 0; }
+/* floating panels: fixed size, no rubber-band wobble while scrolling */
+.float-win .pop-body { overscroll-behavior: contain; -webkit-overflow-scrolling: auto; }
+.float-win:has(.p3d) { height: min(74vh, 700px); }
+.float-win:has(.p3d) .pop-body.p3d { max-height: none; min-height: 0; flex: 1 1 auto; }
+.p3d { overflow-anchor: none; contain: layout paint; }
+.float-win .pop-body { touch-action: pan-y; overflow-x: hidden; overscroll-behavior: contain; }
+.float-win .pop-body .p3d-pad, .float-win .pop-body canvas { touch-action: none; }
+.float-win:has(.p3d) { height: min(74vh, 700px, calc(100vh - 24px)); }

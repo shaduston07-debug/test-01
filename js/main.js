@@ -587,7 +587,10 @@ class App {
         this.startGesture();
         return;
       }
-      if (!this.fingerDraws() || this.spaceDown) {
+      // manipulation tools (3D, transform, panels, balloons) take a single finger even when the
+      // Apple Pencil is the drawing tool, like Clip Studio's 3D manipulator
+      const ft = this.tools[this.tool];
+      if ((!this.fingerDraws() && !(ft && ft.fingers)) || this.spaceDown) {
         this.pan1 = { id: e.pointerId, sx: p.sx, sy: p.sy, view: { ...this.view } };
         this.startHold(e.pointerId, p);
         return;
@@ -1328,6 +1331,7 @@ class App {
       '3d': Three3D.tool3d(app),
       balloon: Toon.balloonTool(app),
     };
+    for (const k of ['3d', 'transform', 'panel', 'balloon', 'move']) if (tools[k]) tools[k].fingers = true;
     return tools;
   }
 

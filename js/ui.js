@@ -80,7 +80,10 @@ function makeFloat(key, title, width, headBox, bodyEl, onClose, rect) {
   const place = (x, y) => {
     const w = win.offsetWidth || width, hh = win.offsetHeight || 200;
     win.style.left = clamp(x, 4, innerWidth - w - 4) + 'px';
-    win.style.top = clamp(y, 4, innerHeight - Math.min(hh, 120)) + 'px';
+    const top = clamp(y, 4, innerHeight - Math.min(hh, 120));
+    win.style.top = top + 'px';
+    // the whole window stays on screen; its contents scroll inside it
+    win.style.maxHeight = Math.max(220, innerHeight - top - 12) + 'px';
   };
   $('#overlay-ui').append(win);
   place(saved ? saved.x : rect.left, saved ? saved.y : rect.top);
