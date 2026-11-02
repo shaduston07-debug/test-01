@@ -13,6 +13,7 @@ class GLB:
         self.j = {'asset': {'version': '2.0', 'generator': 'Inkwell Studio Blender build'}, 'scenes': [{'nodes': []}], 'scene': 0,
                   'nodes': [], 'meshes': [], 'accessors': [], 'bufferViews': [], 'buffers': [{'byteLength': 0}], 'materials': []}
         self.bin = bytearray()
+        self.morph_scales = []
 
     def _view(self, data, target=None):
         while len(self.bin) % 4:
@@ -108,8 +109,20 @@ class GLB:
         if material is not None:
             p['material'] = material
         if targets:
-            p['targets'] = [{'POSITION': self.accessor(t, FLOAT, 3, target=34962, minmax=True)} for t in targets]
+            p['targets'] = [{'POSITION': self.morph(t)} for t in targets]
         return p
+
+    def morph(self, t):
+        """morph deltas as normalized int16 (KHR_mesh_quantization); the scale goes in self.morph_scales"""
+        s = float(np.abs(t).max()) or 1.0
+        q = np.round(t / s * 32767).astype(np.int16)
+        a = self.accessor(q, SHORT, 3, normalized=True, target=34962, minmax=True)
+        self.morph_scales.append(s)
+        for k in ('extensionsUsed', 'extensionsRequired'):
+            self.j.setdefault(k, [])
+            if 'KHR_mesh_quantization' not in self.j[k]:
+                self.j[k].append('KHR_mesh_quantization')
+        return a
 
     def mesh(self, name, prims, target_names=None):
         m = {'name': name, 'primitives': prims}

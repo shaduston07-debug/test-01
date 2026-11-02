@@ -98,11 +98,11 @@ def mesh_obj(name, P, idx):
     return ob
 
 
-SETTINGS = {
-    # gender, muscle, weight, proportions (0.5 = average, 1 = idealised)
-    'female': {'base': (0.0, 0.5, 0.48, 1.0), 'slim': (0.0, 0.38, 0.12, 1.0), 'strong': (0.0, 0.92, 0.62, 1.0)},
-    'male': {'base': (1.0, 0.6, 0.48, 1.0), 'slim': (1.0, 0.4, 0.12, 1.0), 'strong': (1.0, 1.0, 0.64, 1.0)},
-}
+# gender, muscle, weight, proportions (0.5 = average, 1 = idealised). The body-shape pad mixes
+# the base with four extremes: musculature (muscle-, muscle+) and body fat (fat-, fat+).
+MORPHS = ['muscle-', 'muscle+', 'fat-', 'fat+']
+SETTINGS = {sex: {'base': (g, 0.5, 0.5, 1.0), 'muscle-': (g, 0.0, 0.5, 1.0), 'muscle+': (g, 1.0, 0.5, 1.0), 'fat-': (g, 0.5, 0.0, 1.0), 'fat+': (g, 0.5, 1.0, 1.0)}
+            for sex, g in (('female', 0.0), ('male', 1.0))}
 
 for sex in SEXES:
     clear()
@@ -125,11 +125,7 @@ for sex in SEXES:
             Wsub[v.index, gi[ge.group]] = ge.weight
     eye_parts = {s: eyeball(*base['eyes'][s]) for s in 'LR'}
     eye_objs = [mesh_obj('eye' + s, eye_parts[s][0], eye_parts[s][1]) for s in 'LR']
-    for vn in ('slim', 'strong'):
-        variants[vn]['ob'].hide_render = True  # they overlap the base body: keep them out of the bake
-    ao = bake_ao(ob, eye_objs)
-    for vn in ('slim', 'strong'):
-        variants[vn]['ob'].hide_render = False
+    ao = bake_ao(ob, eye_objs)  # (the ray casts only see the base body and the eyes)
     # soften: drawing figures want shape cues, not grime
     shade = 1 - 0.55 * (1 - np.clip(ao, 0, 1)) ** 1.2
     col = np.stack([shade, shade, shade, np.ones_like(shade)], 1)
@@ -153,7 +149,7 @@ for sex in SEXES:
     def full_pos(vn):
         v = variants[vn]
         return np.concatenate([v['pos']] + [eyeball(*v['eyes'][s])[0] for s in 'LR']).astype(np.float32)
-    targets = [full_pos(vn) - POS for vn in ('slim', 'strong')]
+    targets = [full_pos(vn) - POS for vn in MORPHS]
 
     glb = GLB()
     J = base['J']
@@ -170,12 +166,12 @@ for sex in SEXES:
     skin = glb.skin([jnode[n] for n in APP], np.array(inv), skeleton=jnode['pelvis'])
     mat = glb.material('mannequin', color=(0.58, 0.56, 0.53, 1), rough=0.62)
     prim = glb.primitive(POS, IDX, material=mat, color=COL, joints=ji, weights=wq, targets=targets)
-    mesh = glb.mesh('body', [prim], target_names=['slim', 'strong'])
+    mesh = glb.mesh('body', [prim], target_names=MORPHS)
     mnode = glb.node('body', mesh=mesh, skin=skin)
     root = glb.node('figure-' + sex, children=[mnode, jnode['pelvis']])
     r3 = lambda a: [round(float(x), 5) for x in a]
     extras = {
-        'inkwell': 'figure', 'sex': sex, 'joints': APP, 'parents': [PARENT[n] for n in APP], 'eyeStart': nbody, 'morphs': ['slim', 'strong'],
+        'inkwell': 'figure', 'sex': sex, 'joints': APP, 'parents': [PARENT[n] for n in APP], 'eyeStart': nbody, 'morphs': MORPHS, 'morphScales': glb.morph_scales,
         'variants': {vn: {'joints': {n: r3(v['J'][n]) for n in APP}, 'tips': {n: r3(p) for n, p in v['tips'].items()},
                           'eyes': {s: r3(v['eyes'][s][0]) for s in 'LR'}, 'top': float(v['pos'][:, 1].max())} for vn, v in variants.items()},
         'source': 'MakeHuman hm08 base mesh, macro targets and Mixamo-compatible rig weights (CC0, via the MPFB2 data folder)',
@@ -186,8 +182,8 @@ for sex in SEXES:
 
     if RENDER:
         # quick look: the three variants side by side, Workbench studio light
-        for vn in ('slim', 'strong'):
-            variants[vn]['ob'].location.x = {'slim': -0.7, 'strong': 0.7}[vn]
+        for i, vn in enumerate(MORPHS):
+            variants[vn]['ob'].location.x = (i - 1.5 + (i >= 2)) * 0.7  # base in the middle
         for o in bpy.context.scene.objects:
             o.rotation_euler.x = math.radians(90)  # our Y-up data → Blender's Z-up
         sc = bpy.context.scene

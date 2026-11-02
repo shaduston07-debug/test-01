@@ -19,7 +19,7 @@ materials and displacement, baked to texture maps; no external images are used f
 
 | File | Made from |
 | --- | --- |
-| `figure-female.glb`, `figure-male.glb` | MakeHuman body shaped with its own targets, subdivided once, ambient occlusion baked into vertex colours, Mixamo-compatible weights merged onto the app's joints; morph targets *slim* / *strong* for Build |
+| `figure-female.glb`, `figure-male.glb` | MakeHuman body shaped with its own targets, subdivided once, ambient occlusion baked into vertex colours, Mixamo-compatible weights merged onto the app's joints; morph targets for the body-shape pad (less / more muscle, less / more body fat, from MakeHuman's own macro targets) |
 | `creature-orc.glb`, `creature-ghoul.glb` | MakeHuman body with creature targets (jaw, brow, ears, limbs, gaunt / heavy build), eyes, tusks / claws, procedural skin baked to maps; bound in its A-pose with per-joint bind rotations |
 | `creature-werewolf.glb`, `-demon`, `-xeno`, `-spider`, `-golem`, `-kraken`, `-dragon` | Inkwell's sculpted creature (same skeleton and joint names), smoothed, decimated, UV-unwrapped; displaced high-resolution copy with a procedural skin baked to albedo / normal / roughness / AO |
 | `car.glb`, `sports.glb`, `moto.glb` | Inkwell's generated vehicles: welded and bevelled, clear-coated paint (tinted with the object colour in the app), chrome, rubber, glass, lights |

@@ -45,17 +45,31 @@ function loadFigureGLB(sex) {
     for (let i = 0; i < nv * 4; i++) { si[i] = ji[i]; sw[i] = wi.normalized ? wi.array[i] / 255 : wi.array[i]; }
     const col = g.attributes.color, colors = new Float32Array(nv * 3);
     for (let i = 0; i < nv; i++) for (let k = 0; k < 3; k++) colors[i * 3 + k] = col ? col.getComponent(i, k) : 1;
-    const morph = Object.fromEntries((x.morphs || []).map((n, i) => [n, g.morphAttributes.position[i].array]));
+    // morph deltas may be stored as normalized int16 (scale in the extras)
+    const morph = Object.fromEntries((x.morphs || []).map((n, i) => {
+      const a = g.morphAttributes.position[i].array;
+      if (a instanceof Float32Array) return [n, a];
+      const k = ((x.morphScales && x.morphScales[i]) || 1) / 32767;
+      return [n, Float32Array.from(a, (v) => v * k)];
+    }));
     return { x, names, base: g.attributes.position.array, idx: g.index.array, si, sw, colors, morph, nv };
   })());
+}
+
+// musculature / body fat (0…1); documents from before the 2D pad only have a single build value
+export function bodyShape(b) {
+  if (b.muscle != null && b.fat != null) return { muscle: b.muscle, fat: b.fat };
+  const k = b.build ?? 0.45, c = (v) => Math.max(0, Math.min(1, v));
+  return { muscle: c(0.5 + (k - 0.5) * 0.9), fat: c(0.5 + (k - 0.5) * 0.7) };
 }
 
 export async function buildHumanGLB(body, color = '#c9c6c1') {
   const b = { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, ...body };
   const D = await loadFigureGLB(b.sex === 'male' ? 'male' : 'female');
   const { x, nv } = D;
-  // build: 0.5 is the base body; below blends towards slim, above towards strong
-  const w = { slim: Math.max(0, (0.5 - b.build) * 2), strong: Math.max(0, (b.build - 0.5) * 2) };
+  // body shape (Clip Studio's 2D pad): musculature and body fat, 0.5 = the base body
+  const { muscle, fat } = bodyShape(b);
+  const w = { 'muscle-': Math.max(0, (0.5 - muscle) * 2), 'muscle+': Math.max(0, (muscle - 0.5) * 2), 'fat-': Math.max(0, (0.5 - fat) * 2), 'fat+': Math.max(0, (fat - 0.5) * 2) };
   const P = new Float32Array(D.base);
   for (const [n, k] of Object.entries(w)) if (k && D.morph[n]) { const d = D.morph[n]; for (let i = 0; i < P.length; i++) P[i] += d[i] * k; }
   const mix = (get) => { const a = get(x.variants.base).slice(); for (const [n, k] of Object.entries(w)) if (k) { const v = get(x.variants[n]), b0 = get(x.variants.base); for (let i = 0; i < 3; i++) a[i] += (v[i] - b0[i]) * k; } return a; };
@@ -209,6 +223,19 @@ export async function buildHumanMH(body, color = '#c9c6c1') {
 // Shared by both bodies: T-pose skeleton with the app's joint names, the mesh bound in its own
 // A-pose, skin weights, material with the drawing guide lines, armour.
 function rigFigure({ P, idx, AP, weights, color, colors, body, H, ks, guides, eyeStart = 0 }) {
+  const { spec, bindQ } = humanSkeleton(AP);
+  const root = new T.Group();
+  const { joints, world } = makeJoints(spec, root);
+  // bind pose = the mesh's own A-pose
+  for (const [n, qq] of Object.entries(bindQ)) joints[n].quaternion.copy(qq);
+  root.updateMatrixWorld(true);
+  return bindFigure({ P, idx, weights, color, colors, body, H, ks, guides, eyeStart, root, joints, world, bindQ });
+}
+
+// The app's T-pose skeleton (identity joint rotations, arms along ±X, facing +Z) from joint
+// positions in any rest pose (AP), and each arm joint's rotation from that T-pose to the rest pose.
+// Fingers, toes, clavicles and spine joints are optional (imported rigs may not have them).
+export function humanSkeleton(AP) {
   const v = (a) => new T.Vector3(...a);
   const bindQ = {}, TP = {};
   for (const k of ['pelvis', 'spine', 'chest', 'neck', 'head']) TP[k] = AP[k];
@@ -216,8 +243,12 @@ function rigFigure({ P, idx, AP, weights, color, colors, body, H, ks, guides, ey
   const frame = (X, Y) => { const x = X.clone().normalize(), z = new T.Vector3().crossVectors(x, Y).normalize(), y = new T.Vector3().crossVectors(z, x); return new T.Matrix4().makeBasis(x, y, z); };
   for (const [s, sx] of [['L', 1], ['R', -1]]) {
     const Sh = v(AP['shoulder' + s]), El = v(AP['elbow' + s]), Wr = v(AP['hand' + s]);
-    const Ib = v(AP['index' + s + 1]), Mb = v(AP['middle' + s + 1]), Pb = v(AP['pinky' + s + 1]);
     const u = El.clone().sub(Sh).normalize(), f = Wr.clone().sub(El).normalize();
+    // no finger joints: the hand continues the forearm, palm facing down in the T-pose
+    const fakeUp = new T.Vector3(0, 1, 0).sub(f.clone().multiplyScalar(f.y)).normalize();
+    const Ib = AP['index' + s + 1] ? v(AP['index' + s + 1]) : Wr.clone().add(f).add(new T.Vector3().crossVectors(f, fakeUp).multiplyScalar(-0.3 * sx));
+    const Mb = AP['middle' + s + 1] ? v(AP['middle' + s + 1]) : Wr.clone().add(f);
+    const Pb = AP['pinky' + s + 1] ? v(AP['pinky' + s + 1]) : Wr.clone().add(f).add(new T.Vector3().crossVectors(f, fakeUp).multiplyScalar(0.3 * sx));
     let bend = f.clone().sub(u.clone().multiplyScalar(f.dot(u)));
     if (bend.lengthSq() < 1e-4) bend = new T.Vector3(0, 0, 1).sub(u.clone().multiplyScalar(u.z));
     bend.normalize();
@@ -238,6 +269,7 @@ function rigFigure({ P, idx, AP, weights, color, colors, body, H, ks, guides, ey
     // fingers keep their layout relative to the hand frame
     const inv = qh.clone().invert(), hT = v(TP['hand' + s]);
     for (const fn of Object.keys(FING)) for (let k = 1; k <= 3; k++) {
+      if (!AP[fn + s + k]) continue;
       const rel = v(AP[fn + s + k]).sub(Wr).applyQuaternion(inv);
       TP[fn + s + k] = hT.clone().add(rel).toArray();
     }
@@ -247,14 +279,12 @@ function rigFigure({ P, idx, AP, weights, color, colors, body, H, ks, guides, ey
   for (const s of ['L', 'R']) {
     spec.push(['clav' + s, 'chest', TP['clav' + s]], ['shoulder' + s, 'clav' + s, TP['shoulder' + s]], ['elbow' + s, 'shoulder' + s, TP['elbow' + s]], ['hand' + s, 'elbow' + s, TP['hand' + s]],
       ['hip' + s, 'pelvis', TP['hip' + s]], ['knee' + s, 'hip' + s, TP['knee' + s]], ['foot' + s, 'knee' + s, TP['foot' + s]], ['toe' + s, 'foot' + s, TP['toe' + s]]);
-    for (const fn of Object.keys(FING)) for (let k = 1; k <= 3; k++) spec.push([fn + s + k, k === 1 ? 'hand' + s : fn + s + (k - 1), TP[fn + s + k]]);
+    for (const fn of Object.keys(FING)) for (let k = 1; k <= 3; k++) if (TP[fn + s + k]) spec.push([fn + s + k, k === 1 ? 'hand' + s : fn + s + (k - 1), TP[fn + s + k]]);
   }
-  const root = new T.Group();
-  const { joints, world } = makeJoints(spec, root);
-  // bind pose = the mesh's own A-pose
-  for (const [n, qq] of Object.entries(bindQ)) joints[n].quaternion.copy(qq);
-  root.updateMatrixWorld(true);
+  return { spec, bindQ };
+}
 
+function bindFigure({ P, idx, weights, color, colors, body, H, ks, guides, eyeStart, root, joints, world, bindQ }) {
   const { si, sw } = weights(joints);
   const nv = P.length / 3;
   const geo = new T.BufferGeometry();
@@ -290,6 +320,93 @@ function rigFigure({ P, idx, AP, weights, color, colors, body, H, ks, guides, ey
   return { root, joints, mat, world, H, mesh, rest: MH_REST, armor: (style) => armorMH({ root, joints, mesh, mat, bindQ }, style) };
 }
 const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+
+// ───────── imported human models (Blender / Mixamo / Rigify / VRM / Unreal rigs) ─────────
+// The model's bones are matched to our joints by name. Our own T-pose skeleton is built at
+// those joint positions (invisible), so poses, IK, hand shapes, Mirror and BVH work on it
+// exactly as on the drawing figures; drive() then turns every matched bone by the same amount
+// its joint has turned since the bind pose. Unmatched bones (twists, extra spine) follow along.
+export function rigImported(node, mapNames) {
+  node.updateMatrixWorld(true);
+  const skinned = [], bones = new Set();
+  node.traverse((o) => { if (o.isSkinnedMesh) { skinned.push(o); for (const b of o.skeleton.bones) bones.add(b); } });
+  if (!skinned.length) return null;
+  const map = mapNames([...bones].map((b) => ({ name: b.userData.name || b.name, bone: b })));
+  const need = ['pelvis', 'head', 'shoulderL', 'elbowL', 'handL', 'shoulderR', 'elbowR', 'handR', 'hipL', 'kneeL', 'footL', 'hipR', 'kneeR', 'footR'];
+  if (!need.every((n) => map[n])) return null;
+  const inv = new T.Matrix4().copy(node.matrixWorld).invert();
+  const at = (b) => b.getWorldPosition(new T.Vector3()).applyMatrix4(inv);
+  // face +Z with the left side on +X, like our figures
+  const lr = at(map.hipL.bone).sub(at(map.hipR.bone));
+  const turn = Math.atan2(-lr.z, lr.x);
+  if (Math.abs(turn) > 0.3) {
+    const inner = node.children[0] || node;
+    inner.quaternion.premultiply(new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), turn));
+    inner.position.applyAxisAngle(new T.Vector3(0, 1, 0), turn);
+    node.updateMatrixWorld(true);
+  }
+  const AP = {};
+  for (const [n, m] of Object.entries(map)) AP[n] = at(m.bone).toArray();
+  // joints the rig doesn't have get sensible places (they just have no bone to turn)
+  const lerp = (a, b, t) => a.map((x, i) => x + (b[i] - x) * t);
+  const neck = AP.neck || lerp(AP.head, lerp(AP.shoulderL, AP.shoulderR, 0.5), 0.5);
+  AP.neck ||= neck;
+  AP.spine ||= lerp(AP.pelvis, neck, 0.3);
+  AP.chest ||= lerp(AP.pelvis, neck, 0.65);
+  for (const s of ['L', 'R']) {
+    AP['clav' + s] ||= lerp(AP.chest, AP['shoulder' + s], 0.25);
+    AP['toe' + s] ||= add3(AP['foot' + s], [0, -0.05, 0.12]);
+  }
+  let H = 0; node.traverse((o) => { if (o.isMesh) { const b = new T.Box3().setFromObject(o); H = Math.max(H, b.max.applyMatrix4(inv).y); } });
+  const { spec, bindQ } = humanSkeleton(AP);
+  const jroot = new T.Group();
+  const { joints, world } = makeJoints(spec, jroot);
+  node.add(jroot);
+  // bind: our joints in the model's rest pose; remember both sides' rest rotations
+  for (const [n, q] of Object.entries(bindQ)) joints[n].quaternion.copy(q);
+  node.updateMatrixWorld(true);
+  const nodeQ = node.getWorldQuaternion(new T.Quaternion()), nodeQi = nodeQ.clone().invert();
+  const local = (o) => nodeQi.clone().multiply(o.getWorldQuaternion(new T.Quaternion()));
+  const driven = Object.entries(map).filter(([n]) => joints[n]).map(([n, m]) => ({ joint: joints[n], bone: m.bone, jBindInv: local(joints[n]).invert(), boneRest: local(m.bone) }));
+  const boneRestLocal = new Map([...bones].map((b) => [b, b.quaternion.clone()]));
+  const pelvisBone = map.pelvis.bone, pelvisRest = pelvisBone.position.clone(), pelvisBind = joints.pelvis.position.clone();
+  for (const n of Object.keys(bindQ)) joints[n].quaternion.identity();
+  node.updateMatrixWorld(true);
+  const byBone = new Map(driven.map((d) => [d.bone, d]));
+  // vertex → our joint: the matched joint of the bone it follows most (or its nearest matched parent)
+  const jointOfBone = new Map();
+  for (const b of bones) { let p = b; while (p && !byBone.has(p)) p = p.parent; jointOfBone.set(b, p ? byBone.get(p).joint.name : 'pelvis'); }
+  for (const m of skinned) {
+    const si = m.geometry.attributes.skinIndex, sw = m.geometry.attributes.skinWeight;
+    m.userData.boneOf = (v) => { let b = 0, w = -1; for (let k = 0; k < 4; k++) { const x = sw.getComponent(v, k); if (x > w) { w = x; b = si.getComponent(v, k); } } return jointOfBone.get(m.skeleton.bones[b]); };
+    m.frustumCulled = false;
+  }
+  const drive = () => {
+    node.updateMatrixWorld(true);
+    const cur = node.getWorldQuaternion(new T.Quaternion()).invert();
+    // in hierarchy order: a bone's parent is final before the bone itself
+    const walk = (b, parentQ) => {
+      const d = byBone.get(b);
+      let q;
+      if (d) {
+        const jq = cur.clone().multiply(d.joint.getWorldQuaternion(new T.Quaternion()));
+        q = jq.multiply(d.jBindInv).multiply(d.boneRest); // node-space world rotation
+        b.quaternion.copy(parentQ.clone().invert().multiply(q));
+      } else {
+        b.quaternion.copy(boneRestLocal.get(b));
+        q = parentQ.clone().multiply(b.quaternion);
+      }
+      for (const c of b.children) if (bones.has(c)) walk(c, q);
+    };
+    for (const b of bones) if (!bones.has(b.parent)) walk(b, cur.clone().multiply(b.parent.getWorldQuaternion(new T.Quaternion())));
+    // the hips carry the figure's height changes (crouch, jump, sit)
+    const dp = joints.pelvis.position.clone().sub(pelvisBind);
+    const parentScale = pelvisBone.parent.getWorldScale(new T.Vector3()).x / node.getWorldScale(new T.Vector3()).x;
+    pelvisBone.position.copy(pelvisRest).add(dp.applyQuaternion(pelvisBone.parent.getWorldQuaternion(new T.Quaternion()).invert().multiply(node.getWorldQuaternion(new T.Quaternion()))).divideScalar(parentScale || 1));
+    node.updateMatrixWorld(true);
+  };
+  return { root: node, joints, world, H: H || 1.7, rest: MH_REST, drive, imported: true, mapped: Object.keys(map).length };
+}
 
 // rest pose: arms relaxed down, fingers as sculpted (no extra curl)
 export const MH_REST = { ...Object.fromEntries(Object.entries(HUMAN_REST).filter(([k]) => !/^(thumb|index|middle|ring|pinky)/.test(k))), hipL: [0, 0, -4], hipR: [0, 0, 4], footL: [0, 0, 4], footR: [0, 0, -4] };

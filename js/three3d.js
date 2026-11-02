@@ -15,6 +15,7 @@ import * as WD from './world3d.js';
 import * as MH from './mhbody.js';
 import * as AS from './assets3d.js';
 import * as store from './storage.js';
+import { openFloating, closeFloat, isFloating } from './ui.js';
 
 let T = null;
 async function three() {
@@ -35,7 +36,7 @@ export const defaultScene = () => ({
 // drawing figures: rig 2 = the Clip-Studio-style female / male figure with finger joints
 // (older documents keep their original simple figure)
 const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 2, name: sex === 'male' ? 'Drawing figure (male)' : 'Drawing figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#c9c6c1', outfit: 'none',
-  body: sex === 'male' ? { sex: 'male', height: 1.75, heads: 7.5, build: 0.55 } : { sex: 'female', height: 1.62, heads: 7.2, build: 0.4 } });
+  body: sex === 'male' ? { sex: 'male', height: 1.75, heads: 7.5, build: 0.55, muscle: 0.65, fat: 0.42 } : { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, muscle: 0.45, fat: 0.45 } });
 // built-in library models (generated, no download)
 export const LIBRARY = [
   ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour']]],
@@ -44,13 +45,20 @@ export const LIBRARY = [
   ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
   ['Places', [['castle', 'Castle'], ['street', 'City street'], ['district', 'City district'], ['cyber', 'Cyberpunk street'], ['ruins', 'Ruined city'], ['mountains', 'Mountains & lake'], ['forest', 'Forest hills'], ['desert', 'Desert dunes']]],
 ];
+// camera presets (PoseManiacs-style dynamic angles): [label, direction, lens, distance ×, aim up]
+const CAM_ANGLES = [['Front', [0, 0.05, 1], 35], ['Three-quarter', [0.7, 0.12, 1], 35], ['Side', [1, 0.05, 0], 35], ['Back', [-0.4, 0.1, -1], 35],
+  ['High angle', [0.45, 1.3, 1], 40], ['Low angle', [0.4, -0.55, 1], 45, 0.85, 0.3], ['Dramatic', [0.8, -0.35, 0.9], 70, 0.55, 0.25], ['Top down', [0.01, 1, 0.02], 40, 1.2]];
 const procObject = (gen, x = 0) => ({ id: uid(), kind: 'proc', gen, name: LIBRARY.flatMap((c) => c[1]).find((i) => i[0] === gen)?.[1] || gen, pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: { car: '#3d6fd6', sports: '#e8b21a', moto: '#c72c2c' }[gen] || (C.CREATURES.includes(gen) && C.creatureDef(gen).color) || '#cfcac2' });
 
 export function create3DLayer(doc) {
   const l = new Layer(doc.width, doc.height, { type: '3d', name: '3D' });
-  l.scene3d = defaultScene();
-  l.scene3d.objects.push(figureObject(0, 'female'));
+  l.scene3d = defaultScene(); // starts empty: models are chosen from the 3D panel
   return l;
+}
+function isEmptyCanvas(c) {
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  for (let k = 3; k < d.length; k += 4) if (d[k]) return false;
+  return true;
 }
 
 // ───────── drawing figure (CSP-style mannequin) ─────────
@@ -148,6 +156,56 @@ function addOutlines(root, widthRef) {
   for (const [p, c] of add) p.add(c);
 }
 
+// ───────── Clip Studio-style manipulator ─────────
+// Rings rotate about X (red), Y (green), Z (blue); arrows move along an axis; the yellow square
+// slides the object on the floor, the white ball moves it in the screen plane. Drawn on top of
+// everything at a constant on-screen size; a selected joint gets the rings only.
+const GIZMO_COL = { x: 0xe5484d, y: 0x46b85a, z: 0x3f7fe8, f: 0xf2c230, v: 0xffffff };
+function buildGizmo() {
+  const g = new T.Group(); g.visible = false; g.userData.gizmo = true;
+  const vis = (c) => new T.MeshBasicMaterial({ color: c, depthTest: false, depthWrite: false, transparent: true, opacity: 0.92, side: T.DoubleSide });
+  const pickMat = new T.MeshBasicMaterial({ colorWrite: false, depthTest: false, depthWrite: false, side: T.DoubleSide });
+  const add = (handle, geos, pick, rot) => {
+    const part = new T.Group(); part.userData.handle = handle;
+    if (rot) part.rotation.set(...rot);
+    for (const geo of geos) { const m = new T.Mesh(geo, vis(GIZMO_COL[handle[1]])); m.renderOrder = 1000; m.raycast = () => {}; part.add(m); }
+    const p = new T.Mesh(pick, pickMat); p.userData.handle = handle; p.renderOrder = 1000; part.add(p);
+    g.add(part);
+  };
+  const ring = () => new T.TorusGeometry(1, 0.014, 8, 96), ringPick = () => new T.TorusGeometry(1, 0.09, 6, 48);
+  add('rx', [ring()], ringPick(), [0, Math.PI / 2, 0]);
+  add('ry', [ring()], ringPick(), [Math.PI / 2, 0, 0]);
+  add('rz', [ring()], ringPick());
+  // arrows reach past the rings so the two never share a spot
+  const arrow = () => [new T.CylinderGeometry(0.018, 0.018, 1.15, 10).translate(0, 0.775, 0), new T.ConeGeometry(0.07, 0.22, 16).translate(0, 1.45, 0)];
+  const arrowPick = () => new T.CylinderGeometry(0.11, 0.11, 0.5, 8).translate(0, 1.36, 0);
+  add('mx', arrow(), arrowPick(), [0, 0, -Math.PI / 2]);
+  add('my', arrow(), arrowPick());
+  add('mz', arrow(), arrowPick(), [Math.PI / 2, 0, 0]);
+  add('mf', [new T.PlaneGeometry(0.3, 0.3).rotateX(-Math.PI / 2).translate(0.42, 0, 0.42)], new T.PlaneGeometry(0.42, 0.42).rotateX(-Math.PI / 2).translate(0.42, 0, 0.42));
+  add('mv', [new T.SphereGeometry(0.09, 16, 12)], new T.SphereGeometry(0.2, 8, 6));
+  return g;
+}
+// where the manipulator sits: the joint, the figure's hips, else the middle of the object
+function gizmoCenter(e, joint) {
+  if (joint && e.joints && e.joints[joint]) return e.joints[joint].getWorldPosition(new T.Vector3());
+  const root = e.joints && (e.joints.pelvis || e.joints.hips || e.joints.d_hip || e.joints.body || e.joints.mantle);
+  if (root) return root.getWorldPosition(new T.Vector3());
+  if (!e.center) { e.node.updateMatrixWorld(true); const b = new T.Box3().setFromObject(e.node); e.center = e.node.worldToLocal(b.getCenter(new T.Vector3())); }
+  return e.node.localToWorld(e.center.clone());
+}
+function placeGizmo(rt) {
+  const g = rt.gizmo, tg = rt.gizmoTarget, e = tg && rt.objs.get(tg.id);
+  if (!g) return;
+  g.visible = !!e;
+  if (!e) return;
+  rt.scene.updateMatrixWorld(true);
+  const c = gizmoCenter(e, tg.joint);
+  g.position.copy(c);
+  g.scale.setScalar(rt.camera.position.distanceTo(c) * Math.tan(rt.camera.fov * Math.PI / 360) * (tg.joint ? 0.14 : 0.3));
+  for (const p of g.children) p.visible = !tg.joint || p.userData.handle[0] === 'r';
+}
+
 // ───────── runtime scene per layer ─────────
 const runtimes = new WeakMap();
 let hlMat = null;
@@ -161,6 +219,7 @@ async function runtimeFor(layer) {
   rt.hemi = new T.HemisphereLight(0xffffff, 0x8a8478, 1);
   rt.sun = new T.DirectionalLight(0xffffff, 2.4);
   rt.scene.add(rt.hemi, rt.sun);
+  rt.gizmo = buildGizmo(); rt.scene.add(rt.gizmo);
   runtimes.set(layer, rt);
   // figures and creatures mesh in workers, so build them all at once
   await Promise.all(layer.scene3d.objects.map((o) => buildObject(layer, rt, o)));
@@ -200,6 +259,9 @@ async function buildObject(layer, rt, o) {
     node = new T.Group(); node.add(m);
   } else if (o.kind === 'model') {
     node = await loadModel(layer.models.get(o.modelId));
+    // a rigged human (Blender, Mixamo, Rigify, VRM…) poses exactly like the drawing figures
+    const hf = node && MH.rigImported(node, M.mapRigNames);
+    if (hf) { fig = hf; joints = hf.joints; rig = 'human'; o.pose ||= {}; }
   }
   if (!node) return;
   if (o.mat) { try { await applyMaterial(node, o.mat, layer); } catch (e) { console.warn('material', e); } }
@@ -235,7 +297,7 @@ function syncObject(e) {
   e.node.position.set(...o.pos);
   e.node.quaternion.set(...o.quat);
   e.node.scale.setScalar(o.scale);
-  if (e.rig === 'human') M.applyPose(e.joints, o.pose || {}, e.fig.rest || M.HUMAN_REST, e.fig.H);
+  if (e.rig === 'human') { M.applyPose(e.joints, o.pose || {}, e.fig.rest || M.HUMAN_REST, e.fig.H); if (e.fig.drive) e.fig.drive(); }
   else if (e.rig === 'dragon') M.applyPose(e.joints, o.pose || {}, M.DRAGON_REST, 1);
   else if (e.rig === 'creature') M.applyPose(e.joints, o.pose || {}, C.creatureRest(o.gen), 1);
   else if (e.joints) applyPose({ joints: e.joints }, o);
@@ -442,6 +504,7 @@ function studioEnv() {
 // Synchronous render once the scene exists (used for live dragging).
 function renderNow(layer, doc, rt, scale = 1, live = false) {
   applySceneSettings(layer, rt, doc);
+  placeGizmo(rt);
   getRenderer();
   const max = renderer.capabilities.maxRenderbufferSize || 8192;
   let w = Math.max(1, Math.round(doc.width * scale)), hh = Math.max(1, Math.round(doc.height * scale));
@@ -463,17 +526,32 @@ function renderNow(layer, doc, rt, scale = 1, live = false) {
 // ───────── tool ─────────
 export function tool3d(app) {
   const t = {
-    mode: 'orbit', sel: null, joint: null, busy: false, ik: true,
+    // 'object' works like Clip Studio's Object tool: tap to select a model (tap again on a body part
+    // for its joint), drag the manipulator, drag a hand / foot of the selected figure (IK), drag
+    // empty space to orbit the camera
+    mode: 'object', sel: null, joint: null, busy: false, ik: true, gizmoOn: true, off: true, panelOpen: {},
     layer() { const it = app.doc && app.doc.activeItem; return it && it.type === '3d' ? it : null; },
     async enter() {
+      this.off = false;
       const L = this.layer();
       if (!L) { toast('Select a 3D layer (Layers › cube button, or Actions › Add › 3D layer)'); return; }
       try { await this.redraw(1); } catch (e) { console.error(e); toast('3D failed to start: ' + e.message); }
+      this.openPanel();
     },
-    exit() { this.joint = null; const L = this.layer(); if (L && runtimes.get(L)) { this.highlight(null); this.redraw(1); } },
+    exit() {
+      this.joint = null; this.off = true;
+      closeFloat('3d');
+      const L = this.layer(); if (L && runtimes.get(L)) { this.highlight(null); this.redraw(1); }
+    },
+    // the manipulator follows the selection (never drawn once the tool is put away)
+    syncGizmo() {
+      const L = this.layer(), rt = L && runtimes.get(L); if (!rt) return;
+      const show = !this.off && this.gizmoOn && this.sel && rt.objs.has(this.sel) && ['object', 'move', 'rotate', 'scale', 'pose'].includes(this.mode);
+      rt.gizmoTarget = show ? { id: this.sel, joint: this.mode === 'object' || this.mode === 'pose' ? this.joint : null } : null;
+    },
     async redraw(scale = 1) {
       const L = this.layer(); if (!L) return;
-      if (!runtimes.get(L)) { await render3D(L, app.doc, scale); app.requestRender('active'); return; }
+      if (!runtimes.get(L)) { await render3D(L, app.doc, scale); this.syncGizmo(); app.requestRender('active'); return; }
       this.schedule(scale);
     },
     // live preview: one render per display frame, at about the on-screen resolution
@@ -485,23 +563,37 @@ export function tool3d(app) {
         this.raf = 0;
         const L = this.layer(), rt = L && runtimes.get(L), sc = this.pending; this.pending = null;
         if (!rt) return;
+        this.syncGizmo();
         renderNow(L, app.doc, rt, sc, sc < 1 && (this.dragging || this.live));
         app.requestRender('active');
       });
     },
     snapshot() { return JSON.stringify(this.layer().scene3d); },
-    commit(label, before) {
+    commit(label, before, refresh = true) {
       const L = this.layer(), after = this.snapshot();
       if (before === after) return;
-      const restore = async (json) => { L.scene3d = JSON.parse(json); const rt = runtimes.get(L); if (rt) for (const e of rt.objs.values()) { e.data = L.scene3d.objects.find((o) => o.id === e.data.id) || e.data; syncObject(e); } await render3D(L, app.doc, 1); app.changed('active'); };
+      const restore = async (json) => { L.scene3d = JSON.parse(json); const rt = runtimes.get(L); if (rt) for (const e of rt.objs.values()) { e.data = L.scene3d.objects.find((o) => o.id === e.data.id) || e.data; syncObject(e); } await render3D(L, app.doc, 1); app.changed('active'); if (this.layer() === L) this.panelRefresh(); };
       app.history.push({ label, bytes: after.length, undo: () => restore(before), redo: () => restore(after) });
       app.changed('active');
+      if (refresh) this.panelRefresh();
+    },
+    // panel controls: one undo step per gesture (committed once the control rests)
+    edit(label, fn, rebuild = false) {
+      if (!this.editBefore) this.editBefore = this.snapshot();
+      fn();
+      if (!rebuild) { this.live = true; this.redraw(this.previewScale()); }
+      clearTimeout(this.editT);
+      this.editT = setTimeout(async () => {
+        const b = this.editBefore; this.editBefore = null; this.live = false;
+        if (rebuild && this.selEntry()) await this.rebuild(this.selEntry());
+        this.commit(label, b, false); this.redraw(1);
+      }, rebuild ? 250 : 350);
     },
     ndc(p) { return new T.Vector2((p.x / app.doc.width) * 2 - 1, -(p.y / app.doc.height) * 2 + 1); },
     pick(p) {
       const rt = runtimes.get(this.layer()); if (!rt) return null;
       const ray = new T.Raycaster(); ray.setFromCamera(this.ndc(p), rt.camera);
-      const hit = ray.intersectObjects(rt.scene.children, true).find((i) => i.object.visible && !i.object.userData.outline);
+      const hit = ray.intersectObjects(rt.scene.children, true).find((i) => i.object.visible && !i.object.userData.outline && !i.object.userData.handle && i.object.userData.objId != null);
       if (!hit) return null;
       // one skinned body: the joint is the one that vertex follows most
       const joint = hit.object.userData.joint || (hit.object.userData.boneOf && hit.face ? hit.object.userData.boneOf(hit.face.a) : null);
@@ -531,7 +623,17 @@ export function tool3d(app) {
     down(p) {
       const L = this.layer(); if (!L) { toast('Select a 3D layer'); return false; }
       if (!runtimes.get(L)) { this.enter(); return false; }
-      this.p0 = p; this.last = p; this.moved = false; this.before = this.snapshot();
+      this.p0 = p; this.last = p; this.moved = false; this.before = this.snapshot(); this.jointBefore = this.joint; this.dragIK = false;
+      const gh = this.gizmoHit(p);
+      if (gh && this.startGizmo(gh, p)) { this.dragging = true; return; }
+      if (this.mode === 'object') {
+        const hit = this.pick(p), e = hit && runtimes.get(L).objs.get(hit.objId);
+        this.tapHit = hit;
+        // the selected figure: drag a hand / foot (or its fingers / toes) and the arm / leg follows (IK)
+        const eff = hit && hit.joint && (hit.joint.replace(/^(thumb|index|middle|ring|pinky)([LR])\d$/, 'hand$2').replace(/^toe([LR])$/, 'foot$1'));
+        if (e && hit.objId === this.sel && e.rig === 'human' && this.ik && M.IK_CHAINS[eff]) { this.joint = eff; this.dragIK = true; this.highlight(this.joint); }
+        this.dragging = true; return;
+      }
       if (this.mode === 'pose' || this.mode === 'move' || this.mode === 'rotate' || this.mode === 'scale') {
         const hit = this.pick(p);
         if (hit) {
@@ -547,11 +649,13 @@ export function tool3d(app) {
       const L = this.layer(), rt = runtimes.get(L); if (!rt) return;
       const dx = p.x - this.last.x, dy = p.y - this.last.y; this.last = p;
       if (Math.hypot(p.x - this.p0.x, p.y - this.p0.y) > 3) this.moved = true;
+      if (this.gz) { this.gizmoMove(p, dx, dy); this.redraw(this.previewScale()); return; }
       const s = L.scene3d, cam = rt.camera;
       const pos = new T.Vector3(...s.camera.pos), tgt = new T.Vector3(...s.camera.target);
       const right = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 0), up = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
       const unit = (dist) => (2 * Math.tan((cam.fov * Math.PI / 180) / 2) * dist) / app.doc.height;
-      if (this.mode === 'orbit') {
+      if (this.mode === 'orbit' || (this.mode === 'object' && !this.dragIK)) {
+        if (this.mode === 'object' && !this.moved) return; // a tap selects (on release)
         const off = pos.clone().sub(tgt), sph = new T.Spherical().setFromVector3(off);
         sph.theta -= dx * 0.006; sph.phi = clamp(sph.phi - dy * 0.006, 0.05, Math.PI - 0.05);
         off.setFromSpherical(sph); s.camera.pos = tgt.clone().add(off).toArray();
@@ -572,7 +676,7 @@ export function tool3d(app) {
           o.quat = qd.multiply(e.node.quaternion).toArray();
         } else if (this.mode === 'scale') {
           o.scale = clamp(o.scale * Math.exp(-dy * 0.005), 0.05, 50);
-        } else if (this.mode === 'pose' && this.joint && e.joints && e.rig === 'human' && this.ik && M.IK_CHAINS[this.joint]) {
+        } else if ((this.mode === 'pose' || this.dragIK) && this.joint && e.joints && e.rig === 'human' && this.ik && M.IK_CHAINS[this.joint]) {
           // drag a hand / foot: the arm / leg follows (two-bone IK), like Clip Studio
           const j = e.joints[this.joint], at = j.getWorldPosition(new T.Vector3());
           const k = unit(cam.position.distanceTo(at));
@@ -591,32 +695,251 @@ export function tool3d(app) {
     up() {
       if (!this.dragging) return;
       this.dragging = false;
+      if (this.gz) {
+        const g = this.gz; this.gz = null;
+        this.commit(g.joint ? 'Pose' : g.handle[0] === 'r' ? 'Rotate object' : 'Move object', this.before);
+        this.redraw(1); return;
+      }
+      if (this.mode === 'object') {
+        if (!this.moved) this.tapSelect(this.tapHit);
+        this.commit(this.dragIK ? 'Pose' : 'Orbit camera', this.before);
+        this.dragIK = false; this.redraw(1); return;
+      }
       if (!this.moved && (this.mode === 'move' || this.mode === 'rotate' || this.mode === 'scale') && !this.pick(this.p0)) { this.sel = null; app.updateCtxBar(); }
       this.commit({ orbit: 'Orbit camera', pan: 'Pan camera', zoom: 'Zoom camera', move: 'Move object', rotate: 'Rotate object', scale: 'Scale object', pose: 'Pose' }[this.mode], this.before);
       this.redraw(1);
     },
-    cancel() { this.dragging = false; this.redraw(1); },
+    cancel() { this.dragging = false; this.gz = null; this.redraw(1); },
+    // ── manipulator ──
+    rayAt(p, cam) { const r = new T.Raycaster(); r.setFromCamera(this.ndc(p), cam); return r; },
+    gizmoHit(p) {
+      const rt = runtimes.get(this.layer()); if (!rt || !rt.gizmo || !rt.gizmo.visible) return null;
+      rt.gizmo.updateMatrixWorld(true);
+      const picks = [], view = rt.camera.getWorldDirection(new T.Vector3());
+      rt.gizmo.traverse((o) => {
+        if (!o.isMesh || !o.userData.handle || !o.parent.visible) return;
+        const hd = o.userData.handle;
+        // a ring seen edge-on is just a line: it can't be turned sensibly and would cover the arrows
+        if (hd[0] === 'r' && Math.abs(view.dot(new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]))) < 0.15) return;
+        picks.push(o);
+      });
+      const hits = this.rayAt(p, rt.camera).intersectObjects(picks, false);
+      // arrows, the floor square and the ball win over the rings they cross
+      const hit = hits.find((x) => x.object.userData.handle[0] === 'm') || hits[0];
+      return hit ? hit.object.userData.handle : null;
+    },
+    startGizmo(handle, p) {
+      const rt = runtimes.get(this.layer()), e = this.selEntry(); if (!e || !rt.gizmoTarget) return false;
+      const ax = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[handle[1]];
+      this.gz = { handle, e, rt, c: rt.gizmo.position.clone(), axis: ax && new T.Vector3(...ax), joint: rt.gizmoTarget.joint };
+      this.gz.last = this.gizmoParam(p);
+      return true;
+    },
+    // ring: the pointer's direction around the axis; arrow: its position along the axis;
+    // square / ball: its point on the floor plane / the screen plane through the centre
+    gizmoParam(p) {
+      const { handle, c, axis, rt } = this.gz, ray = this.rayAt(p, rt.camera).ray;
+      if (handle[0] === 'r') {
+        if (Math.abs(ray.direction.dot(axis)) < 0.12) return null; // seen edge-on: use the drag distance
+        const hit = ray.intersectPlane(new T.Plane().setFromNormalAndCoplanarPoint(axis, c), new T.Vector3());
+        return hit && hit.sub(c);
+      }
+      if (axis) {
+        const w = c.clone().sub(ray.origin), b = axis.dot(ray.direction), den = 1 - b * b;
+        return den < 1e-3 ? null : (b * ray.direction.dot(w) - axis.dot(w)) / den;
+      }
+      const n = handle === 'mf' ? new T.Vector3(0, 1, 0) : rt.camera.getWorldDirection(new T.Vector3());
+      return ray.intersectPlane(new T.Plane().setFromNormalAndCoplanarPoint(n, c), new T.Vector3());
+    },
+    gizmoMove(p, dx, dy) {
+      const g = this.gz, now = this.gizmoParam(p), o = g.e.data, node = g.e.node;
+      if (g.handle[0] === 'r') {
+        const ang = now && g.last ? Math.atan2(new T.Vector3().crossVectors(g.last, now).dot(g.axis), g.last.dot(now)) : (dx - dy) * 0.01;
+        g.last = now;
+        const q = new T.Quaternion().setFromAxisAngle(g.axis, ang);
+        if (g.joint) {
+          const j = g.e.joints[g.joint], pq = j.parent.getWorldQuaternion(new T.Quaternion());
+          o.pose = { ...(o.pose || {}), [g.joint]: pq.clone().invert().multiply(q).multiply(pq).multiply(j.quaternion).toArray() };
+        } else {
+          const pq = node.parent.getWorldQuaternion(new T.Quaternion());
+          o.quat = pq.clone().invert().multiply(q).multiply(pq).multiply(node.quaternion).toArray();
+          // turn about the manipulator's centre, not the object's origin
+          const wp = node.getWorldPosition(new T.Vector3()).sub(g.c).applyQuaternion(q).add(g.c);
+          o.pos = node.parent.worldToLocal(wp).toArray();
+        }
+      } else {
+        if (now == null || g.last == null) { g.last = now; return; }
+        const d = typeof now === 'number' ? g.axis.clone().multiplyScalar(now - g.last) : now.clone().sub(g.last);
+        g.last = now;
+        o.pos = node.parent.worldToLocal(node.getWorldPosition(new T.Vector3()).add(d)).toArray();
+      }
+      syncObject(g.e);
+    },
+    // tap: select a model; tap the selected one again on a body part for that joint's rings
+    tapSelect(hit) {
+      const rt = runtimes.get(this.layer());
+      if (!hit) { this.sel = null; this.joint = null; }
+      else if (hit.objId === this.sel) { const e = rt.objs.get(hit.objId); this.joint = e && e.joints && hit.joint && hit.joint !== this.jointBefore ? hit.joint : null; }
+      else { this.sel = hit.objId; this.joint = null; }
+      this.highlight(this.joint); app.updateCtxBar(); this.panelRefresh();
+    },
+    // ── property panel (like Clip Studio's tool property / sub tool detail for 3D) ──
+    openPanel() {
+      if (isFloating('3d')) { this.panelRefresh(); return; }
+      this.panelEl = h('div', { class: 'pop-body p3d' });
+      openFloating('3d', '3D', { width: 330, body: this.panelEl, onClose: () => { this.panelEl = null; } });
+      this.panelRefresh();
+    },
+    panelRefresh() {
+      if (!this.panelEl) return;
+      const keep = this.panelEl.scrollTop;
+      this.panelEl.replaceChildren(...this.panelBuild());
+      this.panelEl.scrollTop = keep;
+    },
+    panelBuild() {
+      const L = this.layer();
+      if (!L) return [h('p', { class: 'hint' }, 'Select a 3D layer to edit it.')];
+      const s = L.scene3d, e = this.selEntry();
+      const sec = (title, ...kids) => {
+        const d = h('details', { class: 'p3d-sec' }, h('summary', {}, title), ...kids);
+        d.open = this.panelOpen[title] !== false;
+        d.addEventListener('toggle', () => { this.panelOpen[title] = d.open; });
+        return d;
+      };
+      const btn = (label, fn) => h('button', { class: 'lib3d-item', onclick: fn }, label);
+      const grid = (...b) => h('div', { class: 'lib3d-grid' }, ...b.filter(Boolean));
+      const out = [];
+      // add (Clip Studio's 3D materials)
+      const lib = h('details', { class: 'p3d-sub' }, h('summary', {}, 'Library'));
+      for (const [cat, items] of LIBRARY) lib.append(h('div', { class: 'menu-section' }, cat), grid(...items.map(([gen, label]) => btn(label, () => this.addLibrary(gen)))));
+      out.push(sec('Add model', grid(btn('Female figure', () => this.addFigure('female')), btn('Male figure', () => this.addFigure('male')), btn('Shape…', () => this.shapeMenu()), btn('Import file…', () => this.importModel()), btn('Free assets…', () => this.assetMenu())), lib));
+      // objects in the layer
+      out.push(sec('Objects', ...(s.objects.length ? s.objects.map((o) => h('div', { class: 'p3d-row' + (o.id === this.sel ? ' on' : '') },
+        h('button', { class: 'p3d-name', onclick: () => { this.sel = o.id; this.joint = null; this.highlight(null); this.redraw(1); app.updateCtxBar(); this.panelRefresh(); } }, o.name || o.kind),
+        h('button', { class: 'p3d-x', title: 'Delete', onclick: () => { this.sel = o.id; this.deleteSel(); this.panelRefresh(); } }, '×'))) : [h('p', { class: 'hint' }, 'Nothing here yet — add a model above.')])));
+      if (e) out.push(...this.panelObject(e, sec, btn, grid));
+      // light source
+      out.push(sec('Light source', h('p', { class: 'hint' }, 'Drag the dot: the middle is light from above, the edge is light from the side. Bottom = from the front.'), this.lightPad(),
+        field('Strength', { min: 0, max: 6, step: 0.05, value: s.light.intensity, fmt: (v) => v.toFixed(1), onInput: (v) => this.edit('Light', () => { s.light.intensity = v; }) }),
+        field('Ambient', { min: 0, max: 3, step: 0.05, value: s.light.ambient, fmt: (v) => v.toFixed(1), onInput: (v) => this.edit('Light', () => { s.light.ambient = v; }) })));
+      // lines
+      out.push(sec('Lines', switchRow('Outlines', s.outline, (v) => this.edit('Outlines', () => { s.outline = v; })),
+        field('Line width', { min: 0.002, max: 0.03, step: 0.001, value: s.outlineWidth, fmt: (v) => v.toFixed(3), onInput: (v) => this.edit('Line width', () => { s.outlineWidth = v; }) })));
+      // camera
+      out.push(sec('Camera', grid(...CAM_ANGLES.map(([label, ...a]) => btn(label, () => this.camAngle(...a)))),
+        field('Lens (field of view)', { min: 10, max: 90, step: 1, value: s.camera.fov, fmt: (v) => v + '°', onInput: (v) => this.edit('Lens', () => { s.camera.fov = v; }) }),
+        grid(btn('Reset camera', () => { const b = this.snapshot(); L.scene3d.camera = defaultScene().camera; this.commit('Reset camera', b); this.redraw(1); }))));
+      out.push(h('button', { class: 'pill primary p3d-wide', onclick: () => this.rasterize() }, 'Rasterize (make it paintable)'));
+      return out;
+    },
+    panelObject(e, sec, btn, grid) {
+      const o = e.data, human = e.rig === 'human', out = [];
+      out.push(h('div', { class: 'p3d-title' }, o.name || o.kind));
+      if (o.kind === 'figure' && o.rig === 2) {
+        const b = o.body;
+        const rebuildBody = (fn) => this.edit('Body', fn, true);
+        out.push(sec('Body',
+          h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => rebuildBody(() => { b.sex = v; if (v === 'male' && b.height < 1.68) b.height = 1.75; if (v === 'female' && b.height > 1.7) b.height = 1.62; }))),
+          h('div', { class: 'p3d-lab' }, 'Body shape'), this.shapePad(o),
+          field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => rebuildBody(() => { b.height = v; }) }),
+          field('Head-to-body ratio', { min: 5, max: 9, step: 0.1, value: b.heads, fmt: (v) => v.toFixed(1) + ' heads', onInput: (v) => rebuildBody(() => { b.heads = v; }) }),
+          h('div', { class: 'stack' }, h('label', {}, 'Armour'), seg([['none', 'None'], ['medieval', 'Medieval'], ['scifi', 'Sci-fi']], o.outfit || 'none', (v) => rebuildBody(() => { o.outfit = v; }))),
+          switchRow('Guide lines (face & body centre, eye line)', b.guides !== false, (v) => { const m = e.fig && e.fig.mesh; this.edit('Guide lines', () => { b.guides = v; if (m && m.userData.setGuides) m.userData.setGuides(v); }); })));
+      }
+      if (e.joints) {
+        out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), btn('Reset pose', () => this.resetPose())),
+          human && switchRow('IK (drag a hand / foot to move the limb)', this.ik, (v) => { this.ik = v; app.updateCtxBar(); }),
+          h('p', { class: 'hint' }, this.joint ? `${this.jointLabel(this.joint)}: drag the rings to turn it. Tap it again to go back to the whole model.` : 'Tap a body part of the selected model to turn that joint with the rings.')));
+      }
+      const color = h('input', { type: 'color', value: o.color || '#cfcac2' });
+      color.oninput = () => this.edit('Colour', () => { o.color = color.value; e.node.traverse((m) => { if (m.isMesh && !m.userData.outline && m.material && m.material.color && !m.userData.handle) m.material.color.set(color.value); }); });
+      out.push(sec('Object',
+        field('Size', { min: 0.05, max: 10, step: 0.01, value: o.scale, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => this.edit('Scale object', () => { o.scale = v; syncObject(e); }) }),
+        grid(btn('Stand on floor', () => { const b = this.snapshot(); o.pos = [o.pos[0], 0, o.pos[2]]; syncObject(e); this.commit('Move object', b); this.redraw(1); }),
+          btn('Reset rotation', () => { const b = this.snapshot(); o.quat = [0, 0, 0, 1]; syncObject(e); this.commit('Rotate object', b); this.redraw(1); }),
+          btn('Frame in view', () => this.frameObject(o.id, o.gen)), o.kind === 'weapon' && btn('Hold…', () => this.holdMenu()), btn('Material…', () => this.materialDialog())),
+        h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), color)));
+      return out;
+    },
+    // Clip Studio's body-shape pad: across = body fat (lean → heavy), up = musculature
+    shapePad(o) {
+      const W = 290, Hh = 150, c = h('canvas', { class: 'p3d-pad', width: W * 2, height: Hh * 2 });
+      const { muscle, fat } = MH.bodyShape(o.body);
+      let st = { muscle, fat };
+      const draw = () => {
+        const x = c.getContext('2d'); x.setTransform(2, 0, 0, 2, 0, 0); x.clearRect(0, 0, W, Hh);
+        x.fillStyle = 'rgba(0,0,0,0.28)'; x.fillRect(0, 0, W, Hh);
+        x.strokeStyle = 'rgba(255,255,255,0.12)'; for (let k = 1; k < 4; k++) { x.beginPath(); x.moveTo(W * k / 4, 0); x.lineTo(W * k / 4, Hh); x.moveTo(0, Hh * k / 4); x.lineTo(W, Hh * k / 4); x.stroke(); }
+        x.fillStyle = 'rgba(255,255,255,0.55)'; x.font = '11px system-ui';
+        x.fillText('muscular', 6, 13); x.fillText('soft', 6, Hh - 6); x.textAlign = 'right'; x.fillText('heavy', W - 6, Hh / 2 + 4); x.textAlign = 'left'; x.fillText('lean', 6, Hh / 2 + 4);
+        const px = st.fat * W, py = (1 - st.muscle) * Hh;
+        x.fillStyle = '#2f7dff'; x.strokeStyle = '#fff'; x.lineWidth = 2; x.beginPath(); x.arc(px, py, 8, 0, Math.PI * 2); x.fill(); x.stroke();
+      };
+      const set = (ev) => {
+        const r = c.getBoundingClientRect();
+        st = { fat: clamp((ev.clientX - r.left) / r.width, 0, 1), muscle: clamp(1 - (ev.clientY - r.top) / r.height, 0, 1) };
+        draw();
+        this.edit('Body shape', () => { o.body.muscle = +st.muscle.toFixed(3); o.body.fat = +st.fat.toFixed(3); o.body.build = o.body.muscle; }, true);
+      };
+      c.addEventListener('pointerdown', (ev) => { c.setPointerCapture(ev.pointerId); set(ev); });
+      c.addEventListener('pointermove', (ev) => { if (c.hasPointerCapture(ev.pointerId)) set(ev); });
+      draw();
+      return c;
+    },
+    // light direction: seen from above, the figure facing down the pad
+    lightPad() {
+      const S = 150, R = S / 2 - 10, c = h('canvas', { class: 'p3d-pad p3d-light', width: S * 2, height: S * 2 }), sc = this.layer().scene3d;
+      const draw = () => {
+        const x = c.getContext('2d'); x.setTransform(2, 0, 0, 2, 0, 0); x.clearRect(0, 0, S, S);
+        const g = x.createRadialGradient(S / 2, S / 2, 4, S / 2, S / 2, R); g.addColorStop(0, '#5a5a62'); g.addColorStop(1, '#202024');
+        x.fillStyle = g; x.beginPath(); x.arc(S / 2, S / 2, R, 0, Math.PI * 2); x.fill();
+        x.fillStyle = 'rgba(255,255,255,0.5)'; x.font = '10px system-ui'; x.textAlign = 'center'; x.fillText('front', S / 2, S - 2); x.fillText('back', S / 2, 9);
+        const az = sc.light.az * Math.PI / 180, r = (1 - sc.light.el / 90) * R;
+        x.fillStyle = '#ffd34d'; x.strokeStyle = '#fff'; x.lineWidth = 2; x.beginPath(); x.arc(S / 2 + Math.sin(az) * r, S / 2 + Math.cos(az) * r, 8, 0, Math.PI * 2); x.fill(); x.stroke();
+      };
+      const set = (ev) => {
+        const b = c.getBoundingClientRect(), dx = (ev.clientX - b.left) / b.width * S - S / 2, dy = (ev.clientY - b.top) / b.height * S - S / 2;
+        const r = Math.min(1, Math.hypot(dx, dy) / R);
+        this.edit('Light', () => { sc.light.az = Math.round(Math.atan2(dx, dy) * 180 / Math.PI); sc.light.el = Math.round((1 - r) * 90); });
+        draw();
+      };
+      c.addEventListener('pointerdown', (ev) => { c.setPointerCapture(ev.pointerId); set(ev); });
+      c.addEventListener('pointermove', (ev) => { if (c.hasPointerCapture(ev.pointerId)) set(ev); });
+      draw();
+      return c;
+    },
+    camAngle(dirv, fov, dk = 1, dy = 0) {
+      const L = this.layer(), s = L.scene3d, e = this.poseTarget();
+      const at = e ? gizmoCenter(e, null) : new T.Vector3(...s.camera.target);
+      const dist = Math.max(1.2, new T.Vector3(...s.camera.pos).distanceTo(new T.Vector3(...s.camera.target)));
+      const b = this.snapshot(), d = new T.Vector3(...dirv).normalize().multiplyScalar(dist * dk);
+      s.camera = { pos: at.clone().add(d).toArray(), target: [at.x, at.y + dy, at.z], fov };
+      this.commit('Camera angle', b); this.redraw(1);
+    },
     bar() {
       const L = this.layer();
       if (!L) return [h('span', { class: 'three-hint' }, 'Select a 3D layer to edit it')];
       const cb = (label, fn, on, cls = '') => h('button', { class: 'cb-btn' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), onclick: fn }, label);
       const sep = () => h('span', { class: 'cb-sep' });
-      const setMode = (m) => { this.mode = m; if (m !== 'pose') { this.joint = null; this.highlight(null); this.redraw(1); } app.updateCtxBar(); };
+      const setMode = (m) => { this.mode = m; if (m !== 'pose' && m !== 'object') { this.joint = null; this.highlight(null); } this.redraw(1); app.updateCtxBar(); };
       const e = this.selEntry();
       const items = [
+        cb('Object', () => setMode('object'), this.mode === 'object'), sep(),
         ...[['orbit', 'Orbit'], ['pan', 'Pan'], ['zoom', 'Zoom']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), cb('Camera…', () => this.cameraMenu()), sep(),
         ...[['move', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale'], ['pose', 'Pose']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), sep(),
+        cb('Panel', () => (isFloating('3d') ? closeFloat('3d') : this.openPanel()), isFloating('3d')), cb('Manipulator', () => { this.gizmoOn = !this.gizmoOn; this.redraw(1); app.updateCtxBar(); }, this.gizmoOn), sep(),
         cb('＋ Figure', () => this.figureMenu()), cb('＋ Library…', () => this.libraryMenu()), cb('＋ Model…', () => this.importModel()), cb('＋ Assets…', () => this.assetMenu()), cb('＋ Shape', () => this.shapeMenu()),
         cb('Light…', () => this.lightDialog()),
       ];
       if (e && e.data.kind === 'weapon') items.push(sep(), cb('Hold…', () => this.holdMenu()));
       if (e) items.push(cb('Material…', () => this.materialDialog()));
-      if (this.mode === 'pose') {
+      if (this.mode === 'object') items.push(sep(), h('span', { class: 'three-hint' }, !e ? 'Tap a model to select it · drag empty space to orbit' : this.joint ? `${this.jointLabel(this.joint)} · drag the rings` : 'Drag the rings / arrows · tap a body part for its joint'));
+      if (this.mode === 'pose' || (this.mode === 'object' && e && e.joints)) {
         const ikJoint = this.joint && M.IK_CHAINS[this.joint] && e && e.rig === 'human';
         items.push(sep(), h('span', { class: 'three-hint' }, this.joint ? (ikJoint && this.ik ? `${this.jointLabel(this.joint)} · drag to move the limb` : `${this.jointLabel(this.joint)} · drag to bend`) : 'Tap a body part, then drag'));
         if (e && e.rig === 'human') items.push(cb('IK', () => { this.ik = !this.ik; app.updateCtxBar(); }, this.ik));
         items.push(cb('Poses…', () => this.poseMenu()));
-        if (e && e.rig === 'human') items.push(cb('Hands…', () => this.handMenu()), cb('Mirror', () => this.mirrorPose()), cb('Body…', () => this.bodyDialog()), cb('BVH…', () => this.bvhMenu()));
+        if (e && e.rig === 'human') items.push(cb('Hands…', () => this.handMenu()), cb('Mirror', () => this.mirrorPose()), e.data.kind === 'figure' && cb('Body…', () => this.bodyDialog()), cb('BVH…', () => this.bvhMenu()));
         if (e && e.joints) items.push(cb('Reset pose', () => this.resetPose()));
       }
       if (this.sel) items.push(sep(), cb('Delete object', () => this.deleteSel()));
@@ -909,7 +1232,7 @@ export function tool3d(app) {
       // the undo snapshot restores data only, so rebuild the runtime on undo
       const after = this.snapshot();
       app.history.push({ label: 'Delete object', undo: async () => { L.scene3d = JSON.parse(b); runtimes.delete(L); await render3D(L, app.doc, 1); app.changed('active'); }, redo: async () => { L.scene3d = JSON.parse(after); runtimes.delete(L); await render3D(L, app.doc, 1); app.changed('active'); } });
-      this.redraw(1); app.updateCtxBar();
+      this.redraw(1); app.updateCtxBar(); this.panelRefresh();
     },
     lightDialog() {
       const L = this.layer(), s = L.scene3d, b = this.snapshot(), r = () => { this.live = true; this.redraw(this.previewScale()); };
@@ -929,7 +1252,9 @@ export function tool3d(app) {
     },
     async rasterize() {
       const L = this.layer();
-      await this.redraw(1);
+      // a clean render: no manipulator, no joint highlight
+      this.joint = null; this.highlight(null); this.off = true; this.syncGizmo();
+      await render3D(L, app.doc, 1);
       structCmd(app, 'Rasterize 3D', () => { L.type = 'raster'; });
       toast('Converted to a normal layer — draw over it');
       app.setTool('brush');
@@ -942,8 +1267,12 @@ export async function add3DLayer(app) {
   const d = app.doc;
   if (d.mode === 'animate') { toast('3D layers are available in Illustrate and Webtoon canvases'); return; }
   if (!app.canAddRaster()) return;
-  const l = create3DLayer(d);
-  insertLayer(app, l);
+  const l = create3DLayer(d), cur = d.activeItem, i = d.active;
+  // an empty paint layer becomes the 3D layer (undo brings the original back); otherwise a new one
+  if (cur && cur.type === 'raster' && !cur.locked && isEmptyCanvas(cur.canvas)) {
+    Object.assign(l, { name: cur.name, opacity: cur.opacity, blend: cur.blend, groupId: cur.groupId });
+    structCmd(app, 'Make 3D layer', () => { d.layers.splice(i, 1, l); d.active = i; });
+  } else insertLayer(app, l);
   toast('Loading 3D…', 3000);
   try { await render3D(l, d, 1); } catch (e) { console.error(e); toast('3D failed to start: ' + e.message); return; }
   app.changed();

@@ -922,10 +922,13 @@ const SIDE_ALIAS = [
   ['clav', /^(shoulder|collar|clavicle)$/], ['shoulder', /^(arm|uparm|upperarm|shldr|humerus)$/], ['elbow', /^(forearm|lowarm|lowerarm|radius|elbow)$/], ['hand', /^(hand|wrist)$/],
   ['hip', /^(upleg|upperleg|thigh|femur)$/], ['knee', /^(leg|lowleg|lowerleg|shin|tibia|knee|calf)$/], ['foot', /^(foot|ankle)$/], ['toe', /^(toebase|toes?)$/],
 ];
-function mapBVH(bvh) {
+function mapBVH(bvh) { return mapRigNames(bvh.joints); }
+// map any named joints / bones (BVH joints, an imported model's skeleton) onto the figure's joints
+export function mapRigNames(list) {
   const map = {};
-  for (const j of bvh.joints) {
-    const { side, n } = canonical(j.name);
+  for (const j of list) {
+    // "upper_armL" style (Blender's .L / .R once the dot is stripped on import)
+    const { side, n } = canonical(j.name.replace(/([a-z0-9_])([LR])$/, '$1.$2'));
     if (!side) { for (const [ours, re] of BODY_ALIAS) if (re.test(n) && !map[ours]) { map[ours] = j; break; } continue; }
     let done = false;
     for (const [ours, re] of SIDE_ALIAS) if (re.test(n)) { if (!map[ours + side]) map[ours + side] = j; done = true; break; }
