@@ -587,3 +587,10 @@ body.mode-animate #btn-3d-models { display: none; }
 .asset-card.busy { opacity: 0.5; pointer-events: none; }
 .asset-card.busy::before { content: ''; position: absolute; inset: 0; margin: auto; width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, 0.3); border-top-color: #fff; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* 3D figure: per-part proportions */
+.p3d-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 2px 0 8px; }
+.p3d-chips button { padding: 5px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); font-size: 12px; font-weight: 600; color: var(--muted); }
+.p3d-chips button.changed { color: var(--text); box-shadow: inset 0 0 0 1px rgba(116, 168, 255, 0.6); }
+.p3d-chips button.on { background: var(--accent); color: #fff; }
+.p3d-partrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.p3d-partval { margin: 0; }

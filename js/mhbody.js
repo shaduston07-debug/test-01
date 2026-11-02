@@ -63,6 +63,94 @@ export function bodyShape(b) {
   return { muscle: c(0.5 + (k - 0.5) * 0.9), fat: c(0.5 + (k - 0.5) * 0.7) };
 }
 
+// ───────── per-part proportions (like Clip Studio's body-shape part editing) ─────────
+// parts: { key: [width, length] } (1 = unchanged). Each part scales its bones' part of the mesh:
+// length along the bone, width across it; everything further out (child joints) follows.
+export const BODY_PARTS = [
+  ['head', 'Head', ['head']], ['neck', 'Neck', ['neck']], ['shoulders', 'Shoulders', ['clavL', 'clavR']],
+  ['chest', 'Chest', ['chest']], ['waist', 'Waist', ['spine']], ['hips', 'Hips', ['pelvis']],
+  ['upperArms', 'Upper arms', ['shoulderL', 'shoulderR']], ['forearms', 'Forearms', ['elbowL', 'elbowR']], ['hands', 'Hands', ['handL', 'handR', '*fingers']],
+  ['thighs', 'Thighs', ['hipL', 'hipR']], ['calves', 'Lower legs', ['kneeL', 'kneeR']], ['feet', 'Feet', ['footL', 'footR', 'toeL', 'toeR']],
+];
+const FINGERS = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+function parentOf(n) {
+  const m = /^(thumb|index|middle|ring|pinky)([LR])(\d)$/.exec(n);
+  if (m) return m[3] === '1' ? 'hand' + m[2] : m[1] + m[2] + (+m[3] - 1);
+  const side = /([LR])$/.exec(n), s = side ? side[1] : '';
+  const base = n.replace(/[LR]$/, '');
+  return { pelvis: null, spine: 'pelvis', chest: 'spine', neck: 'chest', head: 'neck', clav: 'chest', shoulder: 'clav' + s, elbow: 'shoulder' + s, hand: 'elbow' + s, hip: 'pelvis', knee: 'hip' + s, foot: 'knee' + s, toe: 'foot' + s }[base];
+}
+function tailOf(n, J) {
+  const m = /^(thumb|index|middle|ring|pinky)([LR])(\d)$/.exec(n);
+  if (m) { const nx = m[1] + m[2] + (+m[3] + 1); if (J[nx]) return J[nx]; const p = J[parentOf(n)]; return [2 * J[n][0] - p[0], 2 * J[n][1] - p[1], 2 * J[n][2] - p[2]]; }
+  const s = (/([LR])$/.exec(n) || [, ''])[1], base = n.replace(/[LR]$/, '');
+  const t = { pelvis: 'spine', spine: 'chest', chest: 'neck', neck: 'head', clav: 'shoulder' + s, shoulder: 'elbow' + s, elbow: 'hand' + s, hand: 'middle' + s + '1', hip: 'knee' + s, knee: 'foot' + s, foot: 'toe' + s }[base];
+  if (t && J[t]) return J[t];
+  if (base === 'head') return [J[n][0], J[n][1] + 0.2, J[n][2]];
+  const p = J[parentOf(n)] || [J[n][0], J[n][1] - 0.1, J[n][2]];
+  return [2 * J[n][0] - p[0], 2 * J[n][1] - p[1], 2 * J[n][2] - p[2]];
+}
+export function applyParts(P, J, extra, names, si, sw, parts) {
+  const scale = {};
+  for (const [key, , bones] of BODY_PARTS) {
+    const v = parts[key]; if (!v || (v[0] === 1 && v[1] === 1)) continue;
+    for (const bn of bones) {
+      if (bn === '*fingers') { for (const s of ['L', 'R']) for (const f of FINGERS) for (let k = 1; k <= 3; k++) scale[f + s + k] = [v[0], v[1]]; }
+      else scale[bn] = v;
+    }
+  }
+  if (!Object.keys(scale).length) return 0;
+  const torso = new Set(['pelvis', 'spine', 'chest']);
+  // per-bone affine: p' = J'[b] + S_b (p − J[b])
+  const order = Object.keys(J).filter((n) => parentOf(n) !== undefined);
+  const depth = (n) => { let d = 0; for (let p = parentOf(n); p; p = parentOf(p)) d++; return d; };
+  order.sort((a, b) => depth(a) - depth(b));
+  const M = {}, J2 = {};
+  const mat = (n) => {
+    const v = scale[n]; if (!v) return null;
+    const [W, L] = v, a = J[n], t = tailOf(n, J);
+    let u = [t[0] - a[0], t[1] - a[1], t[2] - a[2]]; const ul = Math.hypot(...u) || 1; u = u.map((c) => c / ul);
+    // across-axes: e1 ≈ sideways (x), e2 = u × e1 (front-back)
+    let e1 = [1, 0, 0]; const d = e1[0] * u[0]; e1 = [e1[0] - d * u[0], -d * u[1], -d * u[2]];
+    let l1 = Math.hypot(...e1); if (l1 < 0.3) { e1 = [0, 0, 1]; const d2 = u[2]; e1 = [-d2 * u[0], -d2 * u[1], 1 - d2 * u[2]]; l1 = Math.hypot(...e1); }
+    e1 = e1.map((c) => c / l1);
+    const e2 = [u[1] * e1[2] - u[2] * e1[1], u[2] * e1[0] - u[0] * e1[2], u[0] * e1[1] - u[1] * e1[0]];
+    const f1 = W, f2 = torso.has(n) ? 1 + (W - 1) * 0.6 : W;
+    // S = L·uuᵀ + f1·e1e1ᵀ + f2·e2e2ᵀ
+    const S = []; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) S.push(L * u[i] * u[j] + f1 * e1[i] * e1[j] + f2 * e2[i] * e2[j]);
+    return S;
+  };
+  const app = (S, v) => (S ? [S[0] * v[0] + S[1] * v[1] + S[2] * v[2], S[3] * v[0] + S[4] * v[1] + S[5] * v[2], S[6] * v[0] + S[7] * v[1] + S[8] * v[2]] : v);
+  for (const n of order) {
+    const p = parentOf(n);
+    if (!p || !J2[p]) J2[n] = J[n].slice();
+    else { const r = app(M[p], [J[n][0] - J[p][0], J[n][1] - J[p][1], J[n][2] - J[p][2]]); J2[n] = [J2[p][0] + r[0], J2[p][1] + r[1], J2[p][2] + r[2]]; }
+    M[n] = mat(n);
+  }
+  const fb = (n, x, y, z) => { const a = J[n], b = J2[n]; if (!a || !b) return [x, y, z]; const r = app(M[n], [x - a[0], y - a[1], z - a[2]]); return [b[0] + r[0], b[1] + r[1], b[2] + r[2]]; };
+  const nv = P.length / 3;
+  let min0 = Infinity; for (let i = 0; i < nv; i++) min0 = Math.min(min0, P[i * 3 + 1]);
+  for (let i = 0; i < nv; i++) {
+    const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+    let ox = 0, oy = 0, oz = 0, wsum = 0;
+    for (let k = 0; k < 4; k++) {
+      const w = sw[i * 4 + k]; if (!w) continue;
+      const q = fb(names[si[i * 4 + k]], x, y, z); ox += q[0] * w; oy += q[1] * w; oz += q[2] * w; wsum += w;
+    }
+    if (wsum > 0) { P[i * 3] = ox / wsum; P[i * 3 + 1] = oy / wsum; P[i * 3 + 2] = oz / wsum; }
+  }
+  for (const pt of extra) { const q = fb('head', ...pt.v); pt.set(q); }
+  for (const n of Object.keys(J2)) J[n] = J2[n];
+  // keep the feet on the floor (longer / shorter legs move the soles)
+  let min1 = Infinity; for (let i = 0; i < nv; i++) min1 = Math.min(min1, P[i * 3 + 1]);
+  const dy = min0 - min1;
+  if (Math.abs(dy) > 1e-5) {
+    for (let i = 0; i < nv; i++) P[i * 3 + 1] += dy;
+    for (const n of Object.keys(J)) J[n] = [J[n][0], J[n][1] + dy, J[n][2]];
+  }
+  return dy;
+}
+
 export async function buildHumanGLB(body, color = '#c9c6c1') {
   const b = { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, ...body };
   const D = await loadFigureGLB(b.sex === 'male' ? 'male' : 'female');
@@ -75,6 +163,7 @@ export async function buildHumanGLB(body, color = '#c9c6c1') {
   const mix = (get) => { const a = get(x.variants.base).slice(); for (const [n, k] of Object.entries(w)) if (k) { const v = get(x.variants[n]), b0 = get(x.variants.base); for (let i = 0; i < 3; i++) a[i] += (v[i] - b0[i]) * k; } return a; };
   const J = Object.fromEntries(x.joints.map((n) => [n, mix((v) => v.joints[n])]));
   const eyes = [mix((v) => v.eyes.L), mix((v) => v.eyes.R)];
+  if (b.parts) { const dy = applyParts(P, J, eyes.map((e, i) => ({ v: e, set: (q) => { eyes[i] = q; } })), D.names, D.si, D.sw, b.parts); if (dy) for (const e of eyes) e[1] += dy; }
   // head ratio: measure this body's (top of head → chin), then scale the head about the neck
   let top = 0, chin = Infinity;
   for (let i = 0; i < x.eyeStart; i++) {

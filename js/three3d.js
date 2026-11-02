@@ -3,7 +3,7 @@
 // move / rotate / scale, per-joint posing, lighting and outlines. The scene is rendered with
 // WebGL into the layer's canvas, so it composites like any other layer (and can be clipped
 // to or rasterized). three.js is loaded only when a 3D layer is first edited.
-import { h, toast, dialog, field, switchRow, seg, uid, clamp, pickFile, makeCanvas, canvasToBlob } from './util.js';
+import { h, toast, dialog, field, switchRow, seg, uid, clamp, pickFile, makeCanvas, canvasToBlob, promptDialog } from './util.js';
 import { Layer } from './doc.js';
 import { touch } from './history.js';
 import { insertLayer, structCmd } from './layers.js';
@@ -842,7 +842,9 @@ export function tool3d(app) {
           h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => rebuildBody(() => { b.sex = v; if (v === 'male' && b.height < 1.68) b.height = 1.75; if (v === 'female' && b.height > 1.7) b.height = 1.62; }))),
           h('div', { class: 'p3d-lab' }, 'Body shape'), this.shapePad(o),
           field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => rebuildBody(() => { b.height = v; }) }),
-          field('Head-to-body ratio', { min: 5, max: 9, step: 0.1, value: b.heads, fmt: (v) => v.toFixed(1) + ' heads', onInput: (v) => rebuildBody(() => { b.heads = v; }) }),
+          field('Head-to-body ratio', { min: 3, max: 9, step: 0.1, value: b.heads, fmt: (v) => v.toFixed(1) + ' heads', onInput: (v) => rebuildBody(() => { b.heads = v; }) }),
+          h('div', { class: 'p3d-lab' }, 'Proportions — pick a part, then drag: across = width, up = length'), this.partsEditor(o),
+          grid(btn('Body presets…', () => this.bodyPresets(o)), btn('Reset body', () => rebuildBody(() => { delete b.parts; b.muscle = 0.5; b.fat = 0.5; b.heads = b.sex === 'male' ? 7.5 : 7.2; b.height = b.sex === 'male' ? 1.75 : 1.62; }))),
           h('div', { class: 'stack' }, h('label', {}, 'Armour'), seg([['none', 'None'], ['medieval', 'Medieval'], ['scifi', 'Sci-fi']], o.outfit || 'none', (v) => rebuildBody(() => { o.outfit = v; }))),
           switchRow('Guide lines (face & body centre, eye line)', b.guides !== false, (v) => { const m = e.fig && e.fig.mesh; this.edit('Guide lines', () => { b.guides = v; if (m && m.userData.setGuides) m.userData.setGuides(v); }); })));
       }
@@ -860,6 +862,84 @@ export function tool3d(app) {
           btn('Frame in view', () => this.frameObject(o.id, o.gen)), o.kind === 'weapon' && btn('Hold…', () => this.holdMenu()), btn('Material…', () => this.materialDialog())),
         h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), color)));
       return out;
+    },
+    // Clip Studio-style part editing: choose a body part, then a pad sets its width (across) and
+    // length (up). Left and right change together.
+    partsEditor(o) {
+      const box = h('div', { class: 'p3d-parts' });
+      const chips = h('div', { class: 'p3d-chips' });
+      const W = 290, Hh = 150, c = h('canvas', { class: 'p3d-pad', width: W * 2, height: Hh * 2 });
+      const val = h('div', { class: 'hint p3d-partval' });
+      let cur = this.partSel || 'shoulders';
+      const WMIN = 0.5, WMAX = 1.8, LMIN = 0.6, LMAX = 1.6;
+      const get = () => (o.body.parts && o.body.parts[cur]) || [1, 1];
+      const draw = () => {
+        const x = c.getContext('2d'); x.setTransform(2, 0, 0, 2, 0, 0); x.clearRect(0, 0, W, Hh);
+        x.fillStyle = 'rgba(0,0,0,0.28)'; x.fillRect(0, 0, W, Hh);
+        const cx = (1 - WMIN) / (WMAX - WMIN) * W, cy = (1 - (1 - LMIN) / (LMAX - LMIN)) * Hh;
+        x.strokeStyle = 'rgba(255,255,255,0.18)'; x.beginPath(); x.moveTo(cx, 0); x.lineTo(cx, Hh); x.moveTo(0, cy); x.lineTo(W, cy); x.stroke();
+        x.fillStyle = 'rgba(255,255,255,0.55)'; x.font = '11px system-ui';
+        x.fillText('longer', 6, 13); x.fillText('shorter', 6, Hh - 6); x.textAlign = 'right'; x.fillText('wider', W - 6, cy - 5); x.textAlign = 'left'; x.fillText('narrower', 6, cy - 5);
+        const [w, l] = get(), px = (w - WMIN) / (WMAX - WMIN) * W, py = (1 - (l - LMIN) / (LMAX - LMIN)) * Hh;
+        x.fillStyle = '#2f7dff'; x.strokeStyle = '#fff'; x.lineWidth = 2; x.beginPath(); x.arc(px, py, 8, 0, Math.PI * 2); x.fill(); x.stroke();
+        val.textContent = `${MH.BODY_PARTS.find((p) => p[0] === cur)[1]}: width ${Math.round(w * 100)}% · length ${Math.round(l * 100)}%`;
+      };
+      const drawChips = () => {
+        chips.innerHTML = '';
+        for (const [k, label] of MH.BODY_PARTS) {
+          const v = o.body.parts && o.body.parts[k], changed = v && (v[0] !== 1 || v[1] !== 1);
+          chips.append(h('button', { class: (k === cur ? 'on' : '') + (changed ? ' changed' : ''), onclick: () => { cur = this.partSel = k; drawChips(); draw(); } }, label));
+        }
+      };
+      const setPart = (w, l) => {
+        this.edit('Body proportions', () => {
+          const parts = o.body.parts = { ...(o.body.parts || {}) };
+          if (Math.abs(w - 1) < 0.02 && Math.abs(l - 1) < 0.02) delete parts[cur]; else parts[cur] = [+w.toFixed(3), +l.toFixed(3)];
+          if (!Object.keys(parts).length) delete o.body.parts;
+        }, true);
+        draw(); drawChips();
+      };
+      const set = (ev) => {
+        const r = c.getBoundingClientRect();
+        let w = WMIN + clamp((ev.clientX - r.left) / r.width, 0, 1) * (WMAX - WMIN), l = LMIN + clamp(1 - (ev.clientY - r.top) / r.height, 0, 1) * (LMAX - LMIN);
+        if (Math.abs(w - 1) < 0.04) w = 1; if (Math.abs(l - 1) < 0.04) l = 1; // snap back to normal
+        setPart(w, l);
+      };
+      c.addEventListener('pointerdown', (ev) => { c.setPointerCapture(ev.pointerId); set(ev); });
+      c.addEventListener('pointermove', (ev) => { if (c.hasPointerCapture(ev.pointerId)) set(ev); });
+      c.addEventListener('dblclick', () => setPart(1, 1));
+      box.append(chips, c, h('div', { class: 'p3d-partrow' }, val, h('button', { class: 'pill', onclick: () => setPart(1, 1) }, 'Reset part')));
+      drawChips(); draw();
+      return box;
+    },
+    // body shape presets: built-in types plus your own saved shapes (like registering a body as a material)
+    bodyPresets(o) {
+      const BUILTIN = [
+        ['Chibi', { heads: 3.2, parts: { head: [1.05, 1], neck: [0.9, 0.6], upperArms: [0.95, 0.75], forearms: [0.95, 0.75], thighs: [1.05, 0.7], calves: [1.05, 0.7], hands: [1.1, 0.9], feet: [1.1, 0.9] }, muscle: 0.4, fat: 0.6 }],
+        ['Child', { heads: 5.2, height: 1.25, parts: { shoulders: [0.95, 0.85], hips: [0.92, 1] }, muscle: 0.35, fat: 0.55 }],
+        ['Fashion model', { heads: 8.5, parts: { thighs: [0.92, 1.1], calves: [0.92, 1.12], waist: [0.85, 1.05], neck: [0.9, 1.15] }, muscle: 0.4, fat: 0.25 }],
+        ['Heroic', { heads: 8.2, parts: { shoulders: [1.1, 1.25], chest: [1.15, 1], waist: [0.9, 1], upperArms: [1.2, 1], forearms: [1.15, 1], thighs: [1.1, 1.05], neck: [1.25, 1] }, muscle: 0.95, fat: 0.35 }],
+        ['Stocky', { heads: 6.4, parts: { shoulders: [1.15, 1.1], chest: [1.15, 1], waist: [1.15, 1], hips: [1.1, 1], thighs: [1.15, 0.9], calves: [1.1, 0.9] }, muscle: 0.6, fat: 0.75 }],
+        ['Curvy', { parts: { hips: [1.2, 1], thighs: [1.12, 1], waist: [0.88, 1], chest: [1.08, 1] }, muscle: 0.4, fat: 0.6 }],
+      ];
+      const mine = store.prefs.get('bodyPresets', []);
+      const apply = (p) => this.edit('Body preset', () => { const b = o.body; Object.assign(b, { muscle: 0.5, fat: 0.5 }, JSON.parse(JSON.stringify(p))); if (!p.parts) delete b.parts; b.build = b.muscle; }, true);
+      const body = h('div', {}, h('div', { class: 'menu-section' }, 'Body types'),
+        h('div', { class: 'p3d-chips' }, ...BUILTIN.map(([n, p]) => h('button', { onclick: () => { apply(p); dlg.close(); } }, n))));
+      if (mine.length) body.append(h('div', { class: 'menu-section' }, 'Saved'), h('div', { class: 'p3d-chips' }, ...mine.map((m, i) => {
+        const bt = h('button', { onclick: () => { apply(m.body); dlg.close(); } }, m.name);
+        let t; bt.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; mine.splice(i, 1); store.prefs.set('bodyPresets', mine); dlg.close(); toast('Removed ' + m.name); }, 700); });
+        bt.addEventListener('pointerup', () => clearTimeout(t)); bt.addEventListener('pointerleave', () => clearTimeout(t));
+        return bt;
+      })), h('p', { class: 'hint' }, 'Hold a saved shape to delete it.'));
+      const dlg = dialog({ title: 'Body presets', body, actions: [
+        { label: 'Save this body…', onClick: async () => {
+          const name = await promptDialog('Name for this body shape', 'My body'); if (!name) return;
+          const b = o.body, keep = { sex: b.sex, height: b.height, heads: b.heads, muscle: b.muscle, fat: b.fat, parts: b.parts ? { ...b.parts } : undefined };
+          store.prefs.set('bodyPresets', [...store.prefs.get('bodyPresets', []), { name, body: keep }]); toast('Saved "' + name + '"');
+        } },
+        { label: 'Close', primary: true },
+      ] });
     },
     // Clip Studio's body-shape pad: across = body fat (lean → heavy), up = musculature
     shapePad(o) {
@@ -1054,6 +1134,20 @@ export function tool3d(app) {
       if (!lib) { toast('This older figure has no pose library — add a new figure'); return; }
       const body = h('div', { class: 'lib3d' });
       let cur = null;
+      // your own poses (like registering a pose as a material in Clip Studio)
+      const rigKey = e.rig === 'creature' ? 'creature:' + e.data.gen : e.rig;
+      const saved = store.prefs.get('savedPoses', []).filter((x) => x.rig === rigKey);
+      if (saved.length) {
+        body.append(h('div', { class: 'menu-section' }, 'My poses'));
+        const grid = h('div', { class: 'lib3d-grid' });
+        for (const sp of saved) {
+          const btn = h('button', { class: 'lib3d-item', onclick: () => { e.data.pose = JSON.parse(JSON.stringify(sp.pose)); syncObject(e); this.redraw(1); if (cur) cur.classList.remove('on'); btn.classList.add('on'); cur = btn; } }, sp.name);
+          let t; btn.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; store.prefs.set('savedPoses', store.prefs.get('savedPoses', []).filter((x) => x !== sp && !(x.name === sp.name && x.rig === sp.rig))); btn.remove(); toast('Removed ' + sp.name); }, 700); });
+          btn.addEventListener('pointerup', () => clearTimeout(t)); btn.addEventListener('pointerleave', () => clearTimeout(t));
+          grid.append(btn);
+        }
+        body.append(grid, h('p', { class: 'hint' }, 'Hold a saved pose to delete it.'));
+      }
       for (const [cat, poses] of Object.entries(lib)) {
         body.append(h('div', { class: 'menu-section' }, cat));
         const grid = h('div', { class: 'lib3d-grid' });
@@ -1069,7 +1163,13 @@ export function tool3d(app) {
         }
         body.append(grid);
       }
-      dialog({ title: (e.rig === 'human' ? 'Figure' : cname) + ' poses', wide: true, body, actions: [{ label: 'Done', primary: true }], onClose: () => this.commit('Pose preset', b) });
+      dialog({ title: (e.rig === 'human' ? 'Figure' : cname) + ' poses', wide: true, body, actions: [
+        { label: 'Save current pose…', onClick: async () => {
+          const name = await promptDialog('Name for this pose', 'My pose'); if (!name) return false;
+          store.prefs.set('savedPoses', [...store.prefs.get('savedPoses', []), { name, rig: rigKey, pose: JSON.parse(JSON.stringify(e.data.pose || {})) }]);
+          toast('Saved pose "' + name + '"');
+        } },
+        { label: 'Done', primary: true }], onClose: () => this.commit('Pose preset', b) });
     },
     handMenu() {
       const e = this.poseTarget(); if (!e || e.rig !== 'human') return;
