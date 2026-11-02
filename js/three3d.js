@@ -537,7 +537,8 @@ export function tool3d(app) {
     async enter() {
       this.off = false;
       const L = this.layer();
-      if (!L) { toast('Select a 3D layer (Layers › cube button, or Actions › Add › 3D layer)'); return; }
+      // like the cube button in the Layers panel: no 3D layer selected → add one and start editing it
+      if (!L) { if (!this._adding) { this._adding = true; try { await add3DLayer(app); } finally { this._adding = false; } } return; }
       try { await this.redraw(1); } catch (e) { console.error(e); toast('3D failed to start: ' + e.message); }
       this.openPanel();
     },
