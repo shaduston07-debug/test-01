@@ -891,7 +891,7 @@ export function tool3d(app) {
         field('Size', { min: 0.05, max: 10, step: 0.01, value: o.scale, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => this.edit('Scale object', () => { o.scale = v; syncObject(e); }) }),
         grid(btn('Stand on floor', () => { const b = this.snapshot(); o.pos = [o.pos[0], 0, o.pos[2]]; syncObject(e); this.commit('Move object', b); this.redraw(1); }),
           btn('Reset rotation', () => { const b = this.snapshot(); o.quat = [0, 0, 0, 1]; syncObject(e); this.commit('Rotate object', b); this.redraw(1); }),
-          btn('Frame in view', () => this.frameObject(o.id, o.gen)), o.kind === 'weapon' && btn('Hold…', () => this.holdMenu()), btn('Material…', () => this.materialDialog())),
+          btn('Frame in view', () => this.frameObject(o.id, o.gen)), btn('Save as my model…', () => this.savePreset(e)), o.kind === 'weapon' && btn('Hold…', () => this.holdMenu()), btn('Material…', () => this.materialDialog())),
         h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), color)));
       return out;
     },
@@ -1075,6 +1075,20 @@ export function tool3d(app) {
         grid(btn('Open a file… (.blend, .glb, .gltf, .fbx, .obj, .vrm, .zip)', () => this.importModel()), btn('Free models & materials (Poly Haven)…', () => this.assetMenu())));
       for (const [cat, items] of LIBRARY) body.append(h('div', { class: 'menu-section' }, cat), grid(...items.map(([gen, label]) => btn(label, () => this.addLibrary(gen)))));
       body.append(h('div', { class: 'menu-section' }, 'Shapes'), grid(...SHAPES.map(([k, l]) => btn(l, () => this.addShape(k, l)))));
+      // your saved models first (like Clip Studio's material library)
+      const mine = h('div');
+      body.insertBefore(mine, body.firstChild);
+      store.listAssets().then((all) => {
+        const list = all.filter((a) => a.kind === 'preset').sort((a, b) => b.added - a.added);
+        if (!list.length) return;
+        const g = grid(...list.map((rec) => {
+          const b = h('button', { class: 'lib3d-item my-model', onclick: pick(() => this.addPreset(rec)) }, rec.thumb ? h('img', { src: URL.createObjectURL(new Blob([rec.thumb], { type: 'image/png' })), alt: '' }) : null, h('span', {}, rec.name));
+          let t; b.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; closePopover(); dialog({ title: rec.name, body: h('p', {}, 'Delete this saved model?'), actions: [{ label: 'Cancel' }, { label: 'Delete', primary: true, onClick: () => store.deleteAsset(rec.id) }] }); }, 650); });
+          b.addEventListener('pointerup', () => clearTimeout(t)); b.addEventListener('pointerleave', () => clearTimeout(t));
+          return b;
+        }));
+        mine.append(h('div', { class: 'menu-section' }, 'My models'), g, h('p', { class: 'hint' }, 'Hold one to delete it.'));
+      });
       this.popAbove(anchor, { title: 'Add 3D', body, width: 520, key: '3d-models' });
     },
     modesMenu(anchor, setMode) {
@@ -1338,6 +1352,53 @@ export function tool3d(app) {
       toast('Loading ' + f.name + '…', 6000);
       try { await this.addObject({ id: uid(), kind: 'model', modelId: id, name: f.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Import model'); toast('Model added' + note + ' — use Move / Rotate / Scale', 4000); }
       catch (e) { console.error(e); L.models.delete(id); toast('Could not read that model: ' + e.message, 4500); }
+    },
+    // save the selected model as it is now (body shape, proportions, outfit, colour, material,
+    // pose, size) to reuse in any document
+    async savePreset(e) {
+      e = e || this.selEntry(); if (!e) { toast('Select a model first'); return; }
+      const name = await promptDialog('Name for this model', e.data.name || 'My model'); if (!name) return;
+      const L = this.layer(), o = JSON.parse(JSON.stringify(e.data));
+      delete o.id; delete o.attach; o.pos = [0, 0, 0]; o.name = name;
+      const files = {};
+      const keep = (k) => { const m = L.models.get(k); if (m && m.blob) files[k] = m; };
+      if (o.modelId) keep(o.modelId);
+      if (o.mat) for (const k of L.models.keys()) if (k.startsWith(o.mat.asset + ':')) keep(k);
+      const packed = {};
+      for (const [k, m] of Object.entries(files)) packed[k] = { ext: m.ext, name: m.name, real: m.real, type: m.blob.type, bytes: await m.blob.arrayBuffer() };
+      // thumbnail: the layer's current render, cropped around the model
+      let thumb = null;
+      try {
+        // render once without the manipulator / joint highlight for a clean picture
+        const wasOff = this.off; this.off = true; this.highlight(null); this.syncGizmo(); await render3D(L, app.doc, 1);
+        const snap = makeCanvas(L.canvas.width, L.canvas.height); snap.getContext('2d').drawImage(L.canvas, 0, 0);
+        this.off = wasOff; this.syncGizmo(); this.highlight(this.joint); this.redraw(1);
+        const rt = runtimes.get(L), c = snap, box = new T.Box3().setFromObject(e.node);
+        const pts = [box.min, box.max, new T.Vector3(box.min.x, box.max.y, box.min.z), new T.Vector3(box.max.x, box.min.y, box.max.z)].map((v) => v.clone().project(rt.camera));
+        const xs = pts.map((p) => (p.x + 1) / 2 * c.width), ys = pts.map((p) => (1 - p.y) / 2 * c.height);
+        let x0 = Math.max(0, Math.min(...xs)), x1 = Math.min(c.width, Math.max(...xs)), y0 = Math.max(0, Math.min(...ys)), y1 = Math.min(c.height, Math.max(...ys));
+        const side = Math.max(x1 - x0, y1 - y0, 20) * 1.1, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        const t = makeCanvas(160, 160), tx = t.getContext('2d');
+        tx.fillStyle = '#e9e9ee'; tx.fillRect(0, 0, 160, 160); tx.drawImage(c, cx - side / 2, cy - side / 2, side, side, 0, 0, 160, 160);
+        thumb = await (await canvasToBlob(t, 'image/png')).arrayBuffer();
+      } catch (err) { console.warn('preset thumbnail', err); }
+      await store.putAsset({ id: 'my:' + uid(), kind: 'preset', name, obj: o, files: packed, thumb, added: Date.now() });
+      toast(`Saved "${name}" — find it under ＋ Models › My models`, 3500);
+    },
+    async addPreset(rec) {
+      const L = this.layer(); if (!L) { toast('Select a 3D layer'); return; }
+      const o = JSON.parse(JSON.stringify(rec.obj));
+      const idMap = {};
+      for (const [k, f] of Object.entries(rec.files || {})) {
+        // material maps keep their key (shared by name); a model file gets a fresh id
+        const nk = o.modelId === k ? uid() : k; idMap[k] = nk;
+        if (!L.models.has(nk)) L.models.set(nk, { id: nk, ext: f.ext, name: f.name, real: f.real, blob: new Blob([f.bytes], { type: f.type || '' }) });
+      }
+      if (o.modelId) o.modelId = idMap[o.modelId] || o.modelId;
+      o.id = uid();
+      toast('Adding ' + rec.name + '…', 3000);
+      try { await this.addObject(o, 'Add ' + rec.name); }
+      catch (err) { console.error(err); toast('Could not add that model: ' + err.message, 4500); }
     },
     assetMenu() {
       AS.openAssetBrowser({

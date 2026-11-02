@@ -602,3 +602,5 @@ body.mode-animate #btn-3d-models { display: none; }
 .float-win .pop-body { touch-action: pan-y; overflow-x: hidden; overscroll-behavior: contain; }
 .float-win .pop-body .p3d-pad, .float-win .pop-body canvas { touch-action: none; }
 .float-win:has(.p3d) { height: min(74vh, 700px, calc(100vh - 24px)); }
+.lib3d-item.my-model { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.lib3d-item.my-model img { width: 72px; height: 72px; border-radius: 8px; object-fit: cover; }
