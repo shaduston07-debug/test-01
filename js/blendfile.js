@@ -8,6 +8,11 @@
 
 const OB_MESH = 1, OB_ARMATURE = 25;
 const MOD_MIRROR = 5, MOD_ARMATURE = 8;
+const PARBONE = 7, MOD_MIR_VGROUP = 64;
+// Blender's left / right name pairs (for a Mirror modifier's "Vertex Groups" flip)
+const flipName = (n) => n.replace(/([._\- ])([LlRr])$/, (m, d, c) => d + ({ L: 'R', R: 'L', l: 'r', r: 'l' })[c])
+  .replace(/^([LlRr])([._\- ])/, (m, c, d) => ({ L: 'R', R: 'L', l: 'r', r: 'l' })[c] + d)
+  .replace(/(Left|Right|left|right|LEFT|RIGHT)/, (m) => ({ Left: 'Right', Right: 'Left', left: 'right', right: 'left', LEFT: 'RIGHT', RIGHT: 'LEFT' })[m]);
 
 export async function blendToThree(buf, T) {
   const f = new BlendFile(await inflate(new Uint8Array(buf)));
@@ -253,7 +258,11 @@ function readMesh(f, me) {
 }
 
 // triangulated, per-corner geometry (normals: smooth faces share vertex normals)
-function meshGeometry(T, m, mirrorAxes) {
+function meshGeometry(T, m, mirrorAxes, mirrorSpace = null) {
+  // mirror object: work in its space (M = mesh → mirror object), mirror, then come back
+  const Mf = mirrorSpace ? mirrorSpace.elements : null, Mi = mirrorSpace ? mirrorSpace.clone().invert().elements : null;
+  const xf = (e, x, y, z) => [e[0] * x + e[4] * y + e[8] * z + e[12], e[1] * x + e[5] * y + e[9] * z + e[13], e[2] * x + e[6] * y + e[10] * z + e[14]];
+  const xd = (e, x, y, z) => [e[0] * x + e[4] * y + e[8] * z, e[1] * x + e[5] * y + e[9] * z, e[2] * x + e[6] * y + e[10] * z];
   const { pos, offs, cv, mat, smooth, uv, nf } = m, nv = pos.length / 3;
   const fn = new Float32Array(nf * 3), vn = new Float32Array(nv * 3);
   for (let i = 0; i < nf; i++) {
@@ -265,7 +274,7 @@ function meshGeometry(T, m, mirrorAxes) {
     fn.set([x, y, z], i * 3);
     if (smooth[i]) for (let k = 0; k < n; k++) { const v = cv[a + k] * 3; vn[v] += x; vn[v + 1] += y; vn[v + 2] += z; }
   }
-  const P = [], N = [], U = [], V = [], groups = new Map();
+  const P = [], N = [], U = [], V = [], MIR = [], groups = new Map();
   const sides = [[1, 1, 1]];
   for (const ax of mirrorAxes) for (const s of [...sides]) { const t = s.slice(); t[ax] = -1; sides.push(t); }
   for (const sgn of sides) {
@@ -279,8 +288,17 @@ function meshGeometry(T, m, mirrorAxes) {
         for (const c of tri) {
           const v = cv[c], nn = smooth[i] ? vn.subarray(v * 3, v * 3 + 3) : fn.subarray(i * 3, i * 3 + 3);
           list.push(P.length / 3);
-          P.push(pos[v * 3] * sgn[0], pos[v * 3 + 1] * sgn[1], pos[v * 3 + 2] * sgn[2]);
-          N.push(nn[0] * sgn[0], nn[1] * sgn[1], nn[2] * sgn[2]);
+          const mirrored = sgn[0] < 0 || sgn[1] < 0 || sgn[2] < 0;
+          if (Mf && mirrored) {
+            let q = xf(Mf, pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]); q = xf(Mi, q[0] * sgn[0], q[1] * sgn[1], q[2] * sgn[2]);
+            // normals: the same reflection (rotation part only; renormalised later)
+            let d = xd(Mf, nn[0], nn[1], nn[2]); d = xd(Mi, d[0] * sgn[0], d[1] * sgn[1], d[2] * sgn[2]);
+            P.push(q[0], q[1], q[2]); N.push(d[0], d[1], d[2]);
+          } else {
+            P.push(pos[v * 3] * sgn[0], pos[v * 3 + 1] * sgn[1], pos[v * 3 + 2] * sgn[2]);
+            N.push(nn[0] * sgn[0], nn[1] * sgn[1], nn[2] * sgn[2]);
+          }
+          MIR.push(mirrored ? 1 : 0);
           if (uv) U.push(uv[c * 2], uv[c * 2 + 1]);
           V.push(v);
         }
@@ -298,6 +316,7 @@ function meshGeometry(T, m, mirrorAxes) {
   g.setAttribute('normal', new T.BufferAttribute(nrm, 3));
   if (uv) g.setAttribute('uv', new T.BufferAttribute(re(U, 2), 2));
   g.userData.srcVert = Int32Array.from(order, (c) => V[c]);
+  g.userData.mirrored = Uint8Array.from(order, (c) => MIR[c]);
   return g;
 }
 
@@ -348,10 +367,29 @@ function worldMatrix(T, f, ob, memo) {
   const par = ob.item('parent');
   if (par) {
     const pinv = new T.Matrix4().fromArray(ob('parentinv')); // column-major in the file, as three.js expects
-    m = worldMatrix(T, f, par, memo).clone().multiply(pinv).multiply(m);
+    const bm = ob('partype') === PARBONE ? boneParentMatrix(T, f, ob, par) : null;
+    m = worldMatrix(T, f, par, memo).clone().multiply(bm ? bm.mat : new T.Matrix4()).multiply(pinv).multiply(m);
   }
   memo.set(ob.off, m);
   return m;
+}
+
+// Object parented to a bone: it hangs off the bone's tail, in the bone's frame.
+// Returns {name, mat (armature space, at the tail), tail (bone-local tail offset)}.
+function boneParentMatrix(T, f, ob, arm) {
+  const name = ob('parsubstr'); if (!name) return null;
+  let bone = null, chan = null;
+  const pose = arm.item('pose');
+  if (pose) for (const ch of f.list(pose.at('chanbase'), 'bPoseChannel')) if (ch('name') === name) { chan = ch; break; }
+  const data = arm.item('data');
+  const find = (lb) => { for (const b of f.list(lb, 'Bone')) { if (b('name') === name) return b; const r = find(b.at('childbase')); if (r) return r; } return null; };
+  if (data) bone = find(data.at('bonebase'));
+  if (!bone && !chan) return null;
+  const len = bone ? bone('length') || 0 : 0;
+  const tail = new T.Matrix4().makeTranslation(0, len, 0);
+  // the pose the file was saved in (what Blender shows), else the rest pose
+  const pm = chan && chan('pose_mat') ? new T.Matrix4().fromArray(chan('pose_mat')) : new T.Matrix4().fromArray(bone('arm_mat'));
+  return { name, mat: pm.clone().multiply(tail), tail, pose: pm };
 }
 
 function buildScene(f, T) {
@@ -383,21 +421,40 @@ function buildScene(f, T) {
     const pose = ob('type') === OB_ARMATURE && ob.item('pose');
     if (pose) for (const ch of f.list(pose.at('chanbase'), 'bPoseChannel')) { const c = ch.item('custom'); if (c) shapes.add(c.off); }
   }
+  // objects that live only in collections hidden in the viewport (spare copies, proxies…)
+  const hiddenObs = new Set(), shownObs = new Set();
+  try {
+    const cols = f.ofCode('GR');
+    const visit = (col, hidden) => {
+      const h = hidden || !!((col('flag') || 0) & 1);
+      for (const co of f.list(col.at('gobject'), 'CollectionObject')) { const o = co.item('ob'); if (o) (h ? hiddenObs : shownObs).add(o.off); }
+      for (const cc of f.list(col.at('children'), 'CollectionChild')) { const c = cc.item('collection'); if (c) visit(c, h); }
+    };
+    for (const col of cols) visit(col, false);
+  } catch (e) { /* older files: no collections */ }
   let meshes = 0;
   for (const ob of objects) {
     if (ob('type') !== OB_MESH || shapes.has(ob.off)) continue;
+    if (hiddenObs.has(ob.off) && !shownObs.has(ob.off)) continue;
     if ((ob('restrictflag') || 0) & 1) continue; // hidden in the viewport
     const meb = ob.item('data'); if (!meb) continue;
     const m = readMesh(f, meb); if (!m) continue;
     // modifiers: Mirror is applied; an Armature modifier (or armature parent) skins the mesh
-    const mirror = [], armObs = [];
+    const mirror = [], armObs = []; let mirrorOb = null, mirrorFlipGroups = false;
     for (const md of f.list(ob.at('modifiers'), 'ModifierData')) {
       if (!(md('mode') & 1)) continue; // off in the viewport
-      if (md('type') === MOD_MIRROR) { const mm = f.view('MirrorModifierData', md.off), fl = mm('flag'); [8, 16, 32].forEach((bit, ax) => { if (fl & bit) mirror.push(ax); }); }
+      if (md('type') === MOD_MIRROR) {
+        const mm = f.view('MirrorModifierData', md.off), fl = mm('flag'); [8, 16, 32].forEach((bit, ax) => { if (fl & bit) mirror.push(ax); });
+        if (fl & MOD_MIR_VGROUP) mirrorFlipGroups = true;
+        const mo = mm('mirror_ob') ? mm.item('mirror_ob') : null; if (mo) mirrorOb = mo;
+      }
       if (md('type') === MOD_ARMATURE) { const am = f.view('ArmatureModifierData', md.off); if (am && am('object')) armObs.push(am.item('object')); }
     }
     if (!armObs.length && ob('parent')) { const p = ob.item('parent'); if (p && p('type') === OB_ARMATURE) armObs.push(p); }
-    const geo = meshGeometry(T, m, mirror);
+    // a Mirror modifier with a mirror object mirrors across that object, not the mesh's own origin
+    let mirrorSpace = null;
+    if (mirror.length && mirrorOb) { const Wm = worldMatrix(T, f, mirrorOb, memo), Wo = worldMatrix(T, f, ob, memo); mirrorSpace = Wm.clone().invert().multiply(Wo); }
+    const geo = meshGeometry(T, m, mirror, mirrorSpace);
     const mats = m.mats.length ? m.mats.map((a) => readMaterial(f, a, T, matCache)) : [new T.MeshStandardMaterial({ color: '#cfcac2', roughness: 0.6 })];
     const W = worldMatrix(T, f, ob, memo);
     const rig = armObs.length && armatures.get(armObs[0].off);
@@ -405,9 +462,11 @@ function buildScene(f, T) {
     if (rig && m.dvert && m.groups) {
       // skin weights by vertex-group name → bone
       const idx = m.groups.map((n) => rig.bones.indexOf(rig.byName.get(n)));
-      const src = geo.userData.srcVert, n = src.length, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+      const idxFlip = m.groups.map((n) => { const b = rig.byName.get(flipName(n)) || rig.byName.get(n); return rig.bones.indexOf(b); });
+      const src = geo.userData.srcVert, mir = geo.userData.mirrored, n = src.length, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
       for (let i = 0; i < n; i++) {
-        const ws = (m.dvert[src[i]] || []).map(([g, w]) => [idx[g], w]).filter(([b]) => b >= 0).sort((x, y) => y[1] - x[1]).slice(0, 4);
+        const gi = mirrorFlipGroups && mir && mir[i] ? idxFlip : idx;
+        const ws = (m.dvert[src[i]] || []).map(([g, w]) => [gi[g], w]).filter(([b]) => b >= 0).sort((x, y) => y[1] - x[1]).slice(0, 4);
         const tot = ws.reduce((s, x) => s + x[1], 0) || 1;
         ws.forEach(([b, w], k) => { si[i * 4 + k] = b; sw[i * 4 + k] = w / tot; });
       }
@@ -420,8 +479,16 @@ function buildScene(f, T) {
       mesh.bind(new T.Skeleton(rig.bones), mesh.matrixWorld);
     } else {
       mesh = new T.Mesh(geo, mats.length > 1 ? mats : mats[0]);
-      mesh.matrixAutoUpdate = false; mesh.matrix.copy(W);
-      root.add(mesh);
+      const par = ob.item('parent'), arm = par && par('type') === OB_ARMATURE ? armatures.get(par.off) : null;
+      const bp = arm && ob('partype') === PARBONE ? boneParentMatrix(T, f, ob, par) : null;
+      const bone = bp && arm.byName.get(bp.name);
+      // position / rotation / scale (not a frozen matrix), so copies such as outlines line up
+      const setM = (M) => M.decompose(mesh.position, mesh.quaternion, mesh.scale);
+      if (bone) {
+        // rigid piece riding on a bone (segmented mannequins): moves when the bone is posed
+        setM(bp.tail.clone().multiply(new T.Matrix4().fromArray(ob('parentinv'))).multiply(localMatrix(T, ob)));
+        bone.add(mesh);
+      } else { setM(W); root.add(mesh); }
     }
     mesh.name = (ob.at('id')('name') || '').slice(2);
     meshes++;

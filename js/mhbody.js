@@ -417,10 +417,19 @@ const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 // its joint has turned since the bind pose. Unmatched bones (twists, extra spine) follow along.
 export function rigImported(node, mapNames) {
   node.updateMatrixWorld(true);
-  const skinned = [], bones = new Set();
+  const skinned = [], bones = new Set(), rigid = [], carrying = new Set();
   node.traverse((o) => { if (o.isSkinnedMesh) { skinned.push(o); for (const b of o.skeleton.bones) bones.add(b); } });
-  if (!skinned.length) return null;
-  const map = mapNames([...bones].map((b) => ({ name: b.userData.name || b.name, bone: b })));
+  // segmented mannequins: rigid pieces hanging off bones (Blender bone parenting)
+  node.traverse((o) => { if (o.isMesh && !o.isSkinnedMesh) { let p = o.parent; while (p && !p.isBone) p = p.parent; if (p) { rigid.push([o, p]); carrying.add(p); } } });
+  if (!skinned.length && !rigid.length) return null;
+  node.traverse((o) => { if (o.isBone) bones.add(o); });
+  // bones that really move geometry (deform bones) win over helper / control bones of the same name
+  for (const m of skinned) {
+    const si = m.geometry.attributes.skinIndex, sw = m.geometry.attributes.skinWeight; if (!si || !sw) continue;
+    for (let v = 0; v < si.count; v++) for (let k = 0; k < 4; k++) if (sw.getComponent(v, k) > 0.05) carrying.add(m.skeleton.bones[si.getComponent(v, k)]);
+  }
+  const blist = [...bones].sort((a, b) => (carrying.has(b) ? 1 : 0) - (carrying.has(a) ? 1 : 0));
+  const map = mapNames(blist.map((b) => ({ name: (b.userData.name || b.name).replace(/^(ORG|DEF|MCH|CTRL|CTL|ctrl)[-_.]/, ''), bone: b, rawName: b.userData.name || b.name })).filter((x) => !/^(MCH|VIS|WGT|IK|FK|tweak|root)$/i.test(x.rawName.split(/[-_.]/)[0]) || carrying.has(x.bone)));
   const need = ['pelvis', 'head', 'shoulderL', 'elbowL', 'handL', 'shoulderR', 'elbowR', 'handR', 'hipL', 'kneeL', 'footL', 'hipR', 'kneeR', 'footR'];
   if (!need.every((n) => map[n])) return null;
   const inv = new T.Matrix4().copy(node.matrixWorld).invert();
@@ -465,6 +474,7 @@ export function rigImported(node, mapNames) {
   // vertex → our joint: the matched joint of the bone it follows most (or its nearest matched parent)
   const jointOfBone = new Map();
   for (const b of bones) { let p = b; while (p && !byBone.has(p)) p = p.parent; jointOfBone.set(b, p ? byBone.get(p).joint.name : 'pelvis'); }
+  for (const [o, b] of rigid) { o.userData.joint = jointOfBone.get(b); o.frustumCulled = false; }
   for (const m of skinned) {
     const si = m.geometry.attributes.skinIndex, sw = m.geometry.attributes.skinWeight;
     m.userData.boneOf = (v) => { let b = 0, w = -1; for (let k = 0; k < 4; k++) { const x = sw.getComponent(v, k); if (x > w) { w = x; b = si.getComponent(v, k); } } return jointOfBone.get(m.skeleton.bones[b]); };

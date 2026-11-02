@@ -152,6 +152,7 @@ function addOutlines(root, widthRef) {
     if (o.isSkinnedMesh) c.bind(o.skeleton, o.bindMatrix);
     c.userData.outline = true; c.raycast = () => {};
     c.position.copy(o.position); c.quaternion.copy(o.quaternion); c.scale.copy(o.scale);
+    if (!o.matrixAutoUpdate) { c.matrixAutoUpdate = false; c.matrix.copy(o.matrix); }
     add.push([o.parent, c]);
   });
   for (const [p, c] of add) p.add(c);
