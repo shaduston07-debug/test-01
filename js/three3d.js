@@ -39,7 +39,7 @@ const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', ri
   body: sex === 'male' ? { sex: 'male', height: 1.75, heads: 7.5, build: 0.55, muscle: 0.65, fat: 0.42 } : { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, muscle: 0.45, fat: 0.45 } });
 // built-in library models (generated, no download)
 export const LIBRARY = [
-  ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour']]],
+  ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['mannequin-male', 'Mannequin'], ['mannequin-female', 'Mannequin (female)'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour']]],
   ['Creatures', [['dragon', 'Dragon'], ['werewolf', 'Werewolf'], ['orc', 'Orc brute'], ['demon', 'Winged demon'], ['ghoul', 'Ghoul'], ['xeno', 'Alien'], ['spider', 'Giant spider'], ['golem', 'Stone golem'], ['kraken', 'Kraken']]],
   ['Weapons', Object.entries(WD.WEAPONS).map(([k, w]) => ['w:' + k, w.label])],
   ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
@@ -215,6 +215,7 @@ function placeGizmo(rt) {
   for (const p of g.children) p.visible = !tg.joint || p.userData.handle[0] === 'r';
 }
 
+const mannequinBlobs = {};
 // ───────── runtime scene per layer ─────────
 const runtimes = new WeakMap();
 let hlMat = null;
@@ -266,6 +267,14 @@ async function buildObject(layer, rt, o) {
     const m = new T.Mesh(geo, new T.MeshStandardMaterial({ color: o.color || '#cfcac2', roughness: 0.7, side: o.prim === 'floor' ? T.DoubleSide : T.FrontSide }));
     if (o.prim === 'floor') m.rotation.x = -Math.PI / 2; else m.position.y = o.prim === 'sphere' ? 0.3 : o.prim === 'cube' ? 0.25 : 0.3;
     node = new T.Group(); node.add(m);
+  } else if (o.kind === 'mannequin') {
+    // segmented artist's mannequin (block head, plated torso, ball joints), rigged with our joints
+    const sex = o.sex === 'female' ? 'female' : 'male';
+    mannequinBlobs[sex] ||= fetch(new URL(`../vendor/models/mannequin-${sex}.glb`, import.meta.url)).then((r) => { if (!r.ok) throw new Error('mannequin model missing'); return r.blob(); });
+    node = await loadModel({ ext: 'glb', blob: await mannequinBlobs[sex] });
+    const hf = node && MH.rigImported(node, M.mapRigNames);
+    if (hf) { fig = hf; joints = hf.joints; rig = 'human'; o.pose ||= {}; }
+    if (o.color) node.traverse((m) => { if (m.isMesh && m.material && m.material.color) m.material.color.set(o.color); });
   } else if (o.kind === 'model') {
     node = await loadModel(layer.models.get(o.modelId));
     // a rigged human (Blender, Mixamo, Rigify, VRM…) poses exactly like the drawing figures
@@ -1135,6 +1144,10 @@ export function tool3d(app) {
     async addLibrary(gen) {
       const L = this.layer(), n = L.scene3d.objects.length;
       if (gen === 'figure-female' || gen === 'figure-male') return this.addFigure(gen === 'figure-male' ? 'male' : 'female');
+      if (gen === 'mannequin-male' || gen === 'mannequin-female') {
+        const sex = gen.endsWith('female') ? 'female' : 'male';
+        return this.addObject({ id: uid(), kind: 'mannequin', sex, name: sex === 'female' ? 'Mannequin (female)' : 'Mannequin', pos: [n * 0.7, 0, 0], quat: [0, 0, 0, 1], scale: sex === 'female' ? 0.95 : 1, pose: {}, color: '#e2e1dd' }, 'Add mannequin');
+      }
       if (gen === 'knight' || gen === 'scifi') { const o = figureObject(n * 0.7, gen === 'knight' ? 'male' : 'female'); o.outfit = gen === 'knight' ? 'medieval' : 'scifi'; o.name = gen === 'knight' ? 'Knight' : 'Sci-fi armour'; return this.addObject(o, 'Add ' + o.name); }
       if (gen.startsWith('w:')) return this.addWeapon(gen.slice(2));
       const big = ['castle', 'street', 'district', 'cyber', 'ruins', 'mountains', 'forest', 'desert'].includes(gen);

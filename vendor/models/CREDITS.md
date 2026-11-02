@@ -26,3 +26,6 @@ materials and displacement, baked to texture maps; no external images are used f
 | `castle.glb` | Inkwell's generated castle with Poly Haven stone, slate roof, wood and grass |
 | `street.glb`, `district.glb` | Inkwell's generated city: Poly Haven asphalt (with lane markings), paving, concrete; facade atlas composited from Poly Haven plaster with framed, partly lit windows |
 | `w-*.glb` (13 weapons) | Inkwell's sculpted weapons with steel, gold, Poly Haven leather and wood |
+
+## Mannequin (vendor/models/mannequin-*.glb)
+Built from scratch in Blender with scripts/blender-mannequin.py (original work, CC0).
