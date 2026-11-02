@@ -74,19 +74,20 @@ export function packGLB(json, files) {
 }
 
 // Files picked in the Files app (a Blender export): one model ready for the 3D layer.
-// Returns {ext, blob, name} or null. Handles .glb, .gltf + .bin + textures, .zip, .fbx, .obj, .blend (explains).
+// Returns {ext, blob, name} or null. Handles .glb, .gltf + .bin + textures, .zip, .fbx, .obj, .blend.
 export async function modelFromFiles(files) {
   files = [...files];
   const by = (re) => files.find((f) => re.test(f.name));
-  if (by(/\.blend\d*$/i) && !by(/\.(glb|gltf|fbx|obj|zip)$/i)) throw new Error('BLEND');
+  const blend = by(/\.blend\d*$/i);
+  if (blend && !by(/\.(glb|gltf|fbx|obj|zip)$/i)) return { ext: 'blend', name: blend.name, blob: blend };
   const zip = by(/\.zip$/i);
   if (zip) {
     await loadScript('vendor/jszip.min.js');
     const z = await window.JSZip.loadAsync(await zip.arrayBuffer());
     const entries = Object.values(z.files).filter((e) => !e.dir && !/__MACOSX|\/\./.test(e.name));
     const pick = (re) => entries.find((e) => re.test(e.name));
-    const main = pick(/\.glb$/i) || pick(/\.gltf$/i) || pick(/\.vrm$/i) || pick(/\.fbx$/i) || pick(/\.obj$/i);
-    if (!main) throw new Error(pick(/\.blend\d*$/i) ? 'BLEND' : 'No 3D model (.glb, .gltf, .fbx, .obj) inside that zip');
+    const main = pick(/\.glb$/i) || pick(/\.gltf$/i) || pick(/\.vrm$/i) || pick(/\.fbx$/i) || pick(/\.obj$/i) || pick(/\.blend$/i);
+    if (!main) throw new Error('No 3D model (.blend, .glb, .gltf, .fbx, .obj) inside that zip');
     const ext = main.name.split('.').pop().toLowerCase();
     if (ext !== 'gltf') return { ext, name: main.name.split('/').pop(), blob: new Blob([await main.async('uint8array')]) };
     const dir = main.name.includes('/') ? main.name.slice(0, main.name.lastIndexOf('/') + 1) : '';
@@ -105,7 +106,6 @@ export async function modelFromFiles(files) {
   const f = by(/\.(glb|vrm|fbx|obj)$/i);
   return f ? { ext: f.name.split('.').pop().toLowerCase(), name: f.name, blob: f } : null;
 }
-export const BLEND_HELP = 'Blender’s own .blend files can’t be read outside Blender. In Blender choose File › Export › glTF 2.0 (.glb) — keep “Materials: Export” on so its materials and textures come along — then open the .glb here (or a .zip of the exported folder).';
 
 // ───────── Poly Haven catalogue ─────────
 let catalog = { models: null, textures: null };

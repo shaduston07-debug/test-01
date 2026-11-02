@@ -15,7 +15,7 @@ import * as WD from './world3d.js';
 import * as MH from './mhbody.js';
 import * as AS from './assets3d.js';
 import * as store from './storage.js';
-import { openFloating, closeFloat, isFloating } from './ui.js';
+import { openFloating, closeFloat, isFloating, openPopover, closePopover } from './ui.js';
 
 let T = null;
 async function three() {
@@ -45,6 +45,7 @@ export const LIBRARY = [
   ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
   ['Places', [['castle', 'Castle'], ['street', 'City street'], ['district', 'City district'], ['cyber', 'Cyberpunk street'], ['ruins', 'Ruined city'], ['mountains', 'Mountains & lake'], ['forest', 'Forest hills'], ['desert', 'Desert dunes']]],
 ];
+const SHAPES = [['cube', 'Cube'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder'], ['cone', 'Cone'], ['floor', 'Floor plane']];
 // camera presets (PoseManiacs-style dynamic angles): [label, direction, lens, distance ×, aim up]
 const CAM_ANGLES = [['Front', [0, 0.05, 1], 35], ['Three-quarter', [0.7, 0.12, 1], 35], ['Side', [1, 0.05, 0], 35], ['Back', [-0.4, 0.1, -1], 35],
   ['High angle', [0.45, 1.3, 1], 40], ['Low angle', [0.4, -0.55, 1], 45, 0.85, 0.3], ['Dramatic', [0.8, -0.35, 0.9], 70, 0.55, 0.25], ['Top down', [0.01, 1, 0.02], 40, 1.2]];
@@ -431,6 +432,8 @@ async function loadModel(m) {
     root = g.scene;
   } else if (m.ext === 'fbx') root = new T.FBXLoader().parse(buf, '');
   else if (m.ext === 'obj') root = new T.OBJLoader().parse(new TextDecoder().decode(buf));
+  else if (m.ext === 'blend') root = (await import('./blendfile.js')).blendToThree(buf, T); // read directly, no export needed
+  if (root instanceof Promise) root = await root;
   if (!root) return null;
   let tris = 0;
   root.traverse((c) => {
@@ -540,7 +543,7 @@ export function tool3d(app) {
     },
     exit() {
       this.joint = null; this.off = true;
-      closeFloat('3d');
+      closeFloat('3d'); this.showModelsButton(false);
       const L = this.layer(); if (L && runtimes.get(L)) { this.highlight(null); this.redraw(1); }
     },
     // the manipulator follows the selection (never drawn once the tool is put away)
@@ -809,14 +812,10 @@ export function tool3d(app) {
       const btn = (label, fn) => h('button', { class: 'lib3d-item', onclick: fn }, label);
       const grid = (...b) => h('div', { class: 'lib3d-grid' }, ...b.filter(Boolean));
       const out = [];
-      // add (Clip Studio's 3D materials)
-      const lib = h('details', { class: 'p3d-sub' }, h('summary', {}, 'Library'));
-      for (const [cat, items] of LIBRARY) lib.append(h('div', { class: 'menu-section' }, cat), grid(...items.map(([gen, label]) => btn(label, () => this.addLibrary(gen)))));
-      out.push(sec('Add model', grid(btn('Female figure', () => this.addFigure('female')), btn('Male figure', () => this.addFigure('male')), btn('Shape…', () => this.shapeMenu()), btn('Import file…', () => this.importModel()), btn('Free assets…', () => this.assetMenu())), lib));
-      // objects in the layer
+      // objects in the layer (adding them: the ＋ Models button above the bar)
       out.push(sec('Objects', ...(s.objects.length ? s.objects.map((o) => h('div', { class: 'p3d-row' + (o.id === this.sel ? ' on' : '') },
         h('button', { class: 'p3d-name', onclick: () => { this.sel = o.id; this.joint = null; this.highlight(null); this.redraw(1); app.updateCtxBar(); this.panelRefresh(); } }, o.name || o.kind),
-        h('button', { class: 'p3d-x', title: 'Delete', onclick: () => { this.sel = o.id; this.deleteSel(); this.panelRefresh(); } }, '×'))) : [h('p', { class: 'hint' }, 'Nothing here yet — add a model above.')])));
+        h('button', { class: 'p3d-x', title: 'Delete', onclick: () => { this.sel = o.id; this.deleteSel(); this.panelRefresh(); } }, '×'))) : [h('p', { class: 'hint' }, 'Nothing here yet: tap ＋ Models above the bar.')])));
       if (e) out.push(...this.panelObject(e, sec, btn, grid));
       // light source
       out.push(sec('Light source', h('p', { class: 'hint' }, 'Drag the dot: the middle is light from above, the edge is light from the side. Bottom = from the front.'), this.lightPad(),
@@ -918,34 +917,63 @@ export function tool3d(app) {
     },
     bar() {
       const L = this.layer();
-      if (!L) return [h('span', { class: 'three-hint' }, 'Select a 3D layer to edit it')];
+      if (!L) { this.showModelsButton(false); return [h('span', { class: 'three-hint' }, 'Select a 3D layer to edit it')]; }
       const cb = (label, fn, on, cls = '') => h('button', { class: 'cb-btn' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), onclick: fn }, label);
       const sep = () => h('span', { class: 'cb-sep' });
       const setMode = (m) => { this.mode = m; if (m !== 'pose' && m !== 'object') { this.joint = null; this.highlight(null); } this.redraw(1); app.updateCtxBar(); };
-      const e = this.selEntry();
+      this.showModelsButton(true);
+      // short enough to fit without scrolling: adding models lives in the ＋ Models pop-up above the
+      // bar, everything about the selected model in the 3D panel
+      const other = !['object', 'pose'].includes(this.mode);
       const items = [
-        cb('Object', () => setMode('object'), this.mode === 'object'), sep(),
-        ...[['orbit', 'Orbit'], ['pan', 'Pan'], ['zoom', 'Zoom']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), cb('Camera…', () => this.cameraMenu()), sep(),
-        ...[['move', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale'], ['pose', 'Pose']].map(([m, l]) => cb(l, () => setMode(m), this.mode === m)), sep(),
-        cb('Panel', () => (isFloating('3d') ? closeFloat('3d') : this.openPanel()), isFloating('3d')), cb('Manipulator', () => { this.gizmoOn = !this.gizmoOn; this.redraw(1); app.updateCtxBar(); }, this.gizmoOn), sep(),
-        cb('＋ Figure', () => this.figureMenu()), cb('＋ Library…', () => this.libraryMenu()), cb('＋ Model…', () => this.importModel()), cb('＋ Assets…', () => this.assetMenu()), cb('＋ Shape', () => this.shapeMenu()),
-        cb('Light…', () => this.lightDialog()),
+        cb('Object', () => setMode('object'), this.mode === 'object'), cb('Pose', () => setMode('pose'), this.mode === 'pose'),
+        cb(other ? this.mode[0].toUpperCase() + this.mode.slice(1) + ' ▾' : 'Modes ▾', (ev) => this.modesMenu(ev.currentTarget, setMode), other), sep(),
+        cb('Camera…', () => this.cameraMenu()), cb('Panel', () => (isFloating('3d') ? closeFloat('3d') : this.openPanel()), isFloating('3d')),
       ];
-      if (e && e.data.kind === 'weapon') items.push(sep(), cb('Hold…', () => this.holdMenu()));
-      if (e) items.push(cb('Material…', () => this.materialDialog()));
-      if (this.mode === 'object') items.push(sep(), h('span', { class: 'three-hint' }, !e ? 'Tap a model to select it · drag empty space to orbit' : this.joint ? `${this.jointLabel(this.joint)} · drag the rings` : 'Drag the rings / arrows · tap a body part for its joint'));
-      if (this.mode === 'pose' || (this.mode === 'object' && e && e.joints)) {
-        const ikJoint = this.joint && M.IK_CHAINS[this.joint] && e && e.rig === 'human';
-        items.push(sep(), h('span', { class: 'three-hint' }, this.joint ? (ikJoint && this.ik ? `${this.jointLabel(this.joint)} · drag to move the limb` : `${this.jointLabel(this.joint)} · drag to bend`) : 'Tap a body part, then drag'));
-        if (e && e.rig === 'human') items.push(cb('IK', () => { this.ik = !this.ik; app.updateCtxBar(); }, this.ik));
-        items.push(cb('Poses…', () => this.poseMenu()));
-        if (e && e.rig === 'human') items.push(cb('Hands…', () => this.handMenu()), cb('Mirror', () => this.mirrorPose()), e.data.kind === 'figure' && cb('Body…', () => this.bodyDialog()), cb('BVH…', () => this.bvhMenu()));
-        if (e && e.joints) items.push(cb('Reset pose', () => this.resetPose()));
-      }
-      if (this.sel) items.push(sep(), cb('Delete object', () => this.deleteSel()));
-      items.push(sep(), cb('Reset camera', () => { const b = this.snapshot(); L.scene3d.camera = defaultScene().camera; this.commit('Reset camera', b); this.redraw(1); }), cb('Rasterize', () => this.rasterize(), false, 'primary'));
+      if (this.sel) items.push(sep(), cb('Delete', () => this.deleteSel()));
+      items.push(sep(), cb('Rasterize', () => this.rasterize(), false, 'primary'));
       return items;
     },
+    // a pop-up that opens upwards from a button at the bottom of the screen
+    popAbove(anchor, opts) {
+      const pop = openPopover(anchor, opts);
+      if (!pop) return null;
+      const r = anchor.getBoundingClientRect(), el = pop.el;
+      el.querySelector('.pop-arrow')?.remove();
+      el.style.maxHeight = Math.max(200, r.top - 20) + 'px';
+      el.style.top = Math.max(8, r.top - el.offsetHeight - 10) + 'px';
+      return pop;
+    },
+    showModelsButton(on) {
+      let b = document.getElementById('btn-3d-models');
+      if (!b && on) {
+        b = h('button', { id: 'btn-3d-models', class: 'glass', onclick: () => this.modelsMenu(b) }, '＋ Models');
+        document.getElementById('overlay-ui').append(b);
+      }
+      if (b) b.hidden = !on;
+    },
+    // everything you can add: figures, the model library, shapes, your own files, free assets
+    modelsMenu(anchor) {
+      const grid = (...b) => h('div', { class: 'lib3d-grid' }, ...b);
+      const pick = (fn) => () => { closePopover(); fn(); };
+      const btn = (label, fn) => h('button', { class: 'lib3d-item', onclick: pick(fn) }, label);
+      const body = h('div', { class: 'lib3d' },
+        h('div', { class: 'menu-section' }, 'Import'),
+        grid(btn('Open a file… (.blend, .glb, .gltf, .fbx, .obj, .vrm, .zip)', () => this.importModel()), btn('Free models & materials (Poly Haven)…', () => this.assetMenu())));
+      for (const [cat, items] of LIBRARY) body.append(h('div', { class: 'menu-section' }, cat), grid(...items.map(([gen, label]) => btn(label, () => this.addLibrary(gen)))));
+      body.append(h('div', { class: 'menu-section' }, 'Shapes'), grid(...SHAPES.map(([k, l]) => btn(l, () => this.addShape(k, l)))));
+      this.popAbove(anchor, { title: 'Add 3D', body, width: 520, key: '3d-models' });
+    },
+    modesMenu(anchor, setMode) {
+      const row = (m, label, hint) => h('button', { class: 'lib3d-item' + (this.mode === m ? ' on' : ''), onclick: () => { closePopover(); setMode(m); } }, h('b', {}, label), h('div', { class: 'hint' }, hint));
+      const body = h('div', { class: 'lib3d' }, h('div', { class: 'lib3d-grid' },
+        row('object', 'Object', 'Tap to select, manipulator, drag empty space to orbit'), row('pose', 'Pose', 'Tap a body part and drag it'),
+        row('orbit', 'Orbit', 'Drag to turn the camera'), row('pan', 'Pan', 'Drag to slide the camera'), row('zoom', 'Zoom', 'Drag up / down'),
+        row('move', 'Move', 'Drag a model'), row('rotate', 'Rotate', 'Drag to turn a model'), row('scale', 'Scale', 'Drag up / down')),
+      switchRow('Manipulator (rings & arrows)', this.gizmoOn, (v) => { this.gizmoOn = v; this.redraw(1); }));
+      this.popAbove(anchor, { title: '3D modes', body, width: 420, key: '3d-modes' });
+    },
+    addShape(k, l) { this.addObject({ id: uid(), kind: 'prim', prim: k, name: l, pos: [0.8, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cfcac2' }, 'Add ' + l); },
     selEntry() { const L = this.layer(), rt = L && runtimes.get(L); return rt && this.sel ? rt.objs.get(this.sel) : null; },
     jointLabel(j) {
       const side = /L\d?$/.test(j) ? 'left ' : /R\d?$/.test(j) ? 'right ' : '';
@@ -1144,28 +1172,24 @@ export function tool3d(app) {
     addFigure(sex = 'female') { const n = this.layer().scene3d.objects.filter((o) => o.kind === 'figure').length; this.addObject(figureObject(n * 0.7, sex), 'Add figure'); },
     shapeMenu() {
       dialog({ title: 'Add shape', body: '', actions: [
-        ...[['cube', 'Cube'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder'], ['cone', 'Cone'], ['floor', 'Floor plane']].map(([k, l]) => ({ label: l, onClick: () => this.addObject({ id: uid(), kind: 'prim', prim: k, name: l, pos: [0.8, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cfcac2' }, 'Add ' + l) })),
+        ...SHAPES.map(([k, l]) => ({ label: l, onClick: () => this.addShape(k, l) })),
         { label: 'Cancel', primary: true },
       ] });
     },
     async importModel() {
       const picked = await pickFile('.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.zip,.blend,.vrm,.fbx,.obj,.cs3c,.cs3o,.cs3s,.cmo,.csmf,.c2fc', true);
       if (!picked.length) return;
-      // Blender exports: .glb, .gltf with its .bin / textures, or a .zip of the export folder
+      // Blender's own .blend, or an export: .glb, .gltf with its .bin / textures, a .zip of the folder
       let f = picked[0];
-      if (picked.length > 1 || /\.(gltf|zip|blend\d*)$/i.test(f.name)) {
+      if (picked.length > 1 || /\.(gltf|zip)$/i.test(f.name)) {
         try {
           const r = await AS.modelFromFiles(picked);
           if (!r) { toast('No 3D model among those files', 4000); return; }
           f = new File([r.blob], r.name);
-        } catch (e) {
-          if (e.message === 'BLEND') dialog({ title: 'Blender file', body: h('p', {}, AS.BLEND_HELP), actions: [{ label: 'OK', primary: true }] });
-          else toast('Could not read that model: ' + e.message, 6000);
-          return;
-        }
+        } catch (e) { toast('Could not read that model: ' + e.message, 6000); return; }
       }
-      let ext = f.name.split('.').pop().toLowerCase(), blob = f, note = '';
-      if (!['glb', 'gltf', 'vrm', 'fbx', 'obj'].includes(ext)) {
+      let ext = f.name.split('.').pop().toLowerCase().replace(/^blend\d+$/, 'blend'), blob = f, note = '';
+      if (!['glb', 'gltf', 'vrm', 'fbx', 'obj', 'blend'].includes(ext)) {
         // Clip Studio (or unknown) file: look for a standard model embedded inside it
         toast('Looking inside ' + f.name + '…', 6000);
         const found = await extractEmbeddedModel(new Uint8Array(await f.arrayBuffer()));

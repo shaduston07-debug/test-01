@@ -489,6 +489,9 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 .lib3d-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 4px 0 10px; }
 .lib3d-item { padding: 11px 12px; border-radius: 12px; background: var(--fill-1); text-align: left; font-size: 14px; }
 .lib3d-item.on { background: var(--accent); color: #fff; }
+/* 3D: the ＋ Models button sits just above the tool bar */
+#btn-3d-models { position: absolute; bottom: calc(74px + var(--safe-b)); left: 50%; transform: translateX(-50%); border-radius: 999px; padding: 0 18px; min-height: 40px; font-size: 14px; font-weight: 600; z-index: 6; }
+body.mode-animate #btn-3d-models { display: none; }
 /* 3D property panel */
 .p3d .lib3d-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .p3d .lib3d-item { padding: 9px 10px; font-size: 13px; }
