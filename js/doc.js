@@ -431,7 +431,11 @@ export class Doc {
     const groups = this.groupMap();
     for (let i = from; i < to; i++) {
       const it = items[i];
-      if (it.type === 'group') continue;
+      if (it.type === 'group') {
+        // clipping layers right above a folder clip to the folder's contents
+        if (it.visible && items[i + 1] && items[i + 1].clip && (!o.filter || o.filter(it))) this.drawFolderClips(ctx, i, o);
+        continue;
+      }
       const grp = it.groupId ? groups.get(it.groupId) : null;
       if (grp && !grp.visible) continue;
       const gAlpha = grp ? grp.opacity : 1;
@@ -493,12 +497,44 @@ export class Doc {
     }
   }
 
+  drawFolderClips(ctx, hi, o) {
+    const items = this.items, reg = o.region || null, [bs] = this.blockOf(hi);
+    if (bs >= hi) return; // empty folder
+    const frame = o.frame ?? this.playhead;
+    // mask: what the folder's layers show (same drawing as the canvas, without background)
+    const M = reg ? this.tmpR(2, reg) : this.tmp(2), mx = M.getContext('2d');
+    this.composite(mx, { ...o, from: bs, to: hi, bg: false, underlay: null });
+    const T = reg ? this.tmpR(3, reg) : this.tmp(3), t = T.getContext('2d');
+    const at = reg ? [reg.x, reg.y] : [0, 0];
+    for (let j = hi + 1; j < items.length && items[j].clip; j++) {
+      const c = items[j];
+      if (!c.visible || (o.filter && !o.filter(c)) || (c.draft && o.drafts === false)) continue;
+      const cs = this.source(c, frame, o.preview || null, o.overlay || null); if (!cs) continue;
+      // T is reused per layer: clear the drawn area again
+      t.save(); t.setTransform(1, 0, 0, 1, 0, 0); t.clearRect(0, 0, T.width, T.height); t.restore();
+      t.globalCompositeOperation = 'source-over'; t.globalAlpha = c.opacity * cs.alpha; this.drawSource(t, cs);
+      t.globalAlpha = 1; t.globalCompositeOperation = 'destination-in'; t.drawImage(M, ...at); t.globalCompositeOperation = 'source-over';
+      const put = (k) => (reg ? k.drawImage(T, 0, 0, reg.w, reg.h, reg.x, reg.y, reg.w, reg.h) : k.drawImage(T, 0, 0));
+      ctx.save();
+      if (isCustomBlend(c.blend)) blendDraw(ctx, c.blend, put, null);
+      else { ctx.globalCompositeOperation = c.blend || 'source-over'; put(ctx); }
+      ctx.restore();
+    }
+  }
+
   // [start, end) of the active item's clipping group.
   activeGroup() {
     const items = this.items, a = this.active;
     if (!items[a]) return [0, 0];
     let s = a;
     if (items[a].clip) { const b = this.clipBase(a); if (b >= 0) s = b; }
+    // a folder with clipping layers on top: the folder's contents and those layers go together
+    let head = items[s].type === 'group' ? s : -1;
+    if (head < 0 && items[s].groupId) { const h = items.findIndex((x) => x.id === items[s].groupId); if (h >= 0 && items[h + 1] && items[h + 1].clip) head = h; }
+    if (head >= 0 && items[head + 1] && items[head + 1].clip) {
+      let e = head + 1; while (e < items.length && items[e].clip) e++;
+      return [Math.min(s, this.blockOf(head)[0]), Math.max(e, a + 1)];
+    }
     let e = s + 1;
     if (items[s].hasPixels) while (e < items.length && items[e].clip) e++;
     return [s, Math.max(e, a + 1)];
@@ -530,7 +566,8 @@ export class Doc {
   clipBase(i) {
     const items = this.items;
     for (let j = i - 1; j >= 0; j--) {
-      if (!items[j].clip) return items[j].hasPixels ? j : -1;
+      // a folder works as a base too: the clipping layer clips to everything inside it
+      if (!items[j].clip) return items[j].hasPixels || items[j].type === 'group' ? j : -1;
     }
     return -1;
   }
