@@ -17,14 +17,15 @@ function dilate(mask, w, h, r, box) {
       tmp[row + x] = count > 0 ? 1 : 0;
     }
   }
-  for (let x = bx0; x <= bx1; x++) {
-    let count = 0;
-    for (let y = by0; y < Math.min(by0 + r, by1 + 1); y++) count += tmp[y * w + x];
-    for (let y = by0; y <= by1; y++) {
-      if (y + r <= by1) count += tmp[(y + r) * w + x];
-      if (y - r - 1 >= by0) count -= tmp[(y - r - 1) * w + x];
-      out[y * w + x] = count > 0 ? 1 : 0;
-    }
+  // vertical pass row by row with running per-column counts (cache-friendly, unlike walking
+  // down each column)
+  const cw = bx1 - bx0 + 1, cnt = new Int32Array(cw);
+  for (let y = by0; y < Math.min(by0 + r, by1 + 1); y++) { const row = y * w + bx0; for (let c = 0; c < cw; c++) cnt[c] += tmp[row + c]; }
+  for (let y = by0; y <= by1; y++) {
+    if (y + r <= by1) { const row = (y + r) * w + bx0; for (let c = 0; c < cw; c++) cnt[c] += tmp[row + c]; }
+    if (y - r - 1 >= by0) { const row = (y - r - 1) * w + bx0; for (let c = 0; c < cw; c++) cnt[c] -= tmp[row + c]; }
+    const orow = y * w + bx0;
+    for (let c = 0; c < cw; c++) out[orow + c] = cnt[c] > 0 ? 1 : 0;
   }
   out.bbox = { x0: bx0, y0: by0, x1: bx1, y1: by1 };
   return out;
@@ -53,7 +54,29 @@ function scanFillWith(open, w, h, sx, sy) {
   out.bbox = { x0, y0, x1, y1 };
   return out;
 }
-const scanFill = (open, w, h, sx, sy) => scanFillWith((i) => open[i] === 1, w, h, sx, sy);
+// same scanline fill with direct array access (no per-pixel function call): fills where
+// mask[i] === want
+function scanFill(mask, w, h, sx, sy, want = 1) {
+  const out = new Uint8Array(w * h);
+  let x0 = sx, x1 = sx, y0 = sy, y1 = sy;
+  if (mask[sy * w + sx] !== want) { out.bbox = null; return out; }
+  const stack = [sx, sy];
+  while (stack.length) {
+    const y = stack.pop(); let x = stack.pop();
+    let i = y * w + x;
+    while (x > 0 && !out[i - 1] && mask[i - 1] === want) { x--; i--; }
+    if (x < x0) x0 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    let up = false, down = false;
+    for (; x < w && !out[i] && mask[i] === want; x++, i++) {
+      out[i] = 1;
+      if (y > 0) { const u = !out[i - w] && mask[i - w] === want; if (u && !up) { stack.push(x, y - 1); up = true; } else if (!u) up = false; }
+      if (y < h - 1) { const d = !out[i + w] && mask[i + w] === want; if (d && !down) { stack.push(x, y + 1); down = true; } else if (!d) down = false; }
+    }
+    if (x - 1 > x1) x1 = x - 1;
+  }
+  out.bbox = { x0, y0, x1, y1 };
+  return out;
+}
 
 // colour-distance test against the seed (premultiplied-ish so transparent pixels match
 // regardless of their rgb); evaluated lazily and memoised
@@ -76,25 +99,27 @@ function similarity(src, w, h, x, y, tolerance) {
 export function fillRegion(src, w, h, x, y, { tolerance = 0.1, gap = 0, expand = 1 } = {}) {
   x = Math.floor(x); y = Math.floor(y);
   if (x < 0 || y < 0 || x >= w || y >= h) return null;
-  const n = w * h, same = similarity(src, w, h, x, y, tolerance);
+  const n = w * h;
   let region;
+  // barrier map: 1 = line / different colour, 0 = open (one tight loop, same test as similarity())
+  const k = (y * w + x) * 4, sr = src[k], sg = src[k + 1], sb = src[k + 2], sa = src[k + 3], tol = tolerance * 255;
+  const srA = sr * sa / 255, sgA = sg * sa / 255, sbA = sb * sa / 255;
+  const barrier = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    const a = src[j + 3];
+    if (Math.abs(a - sa) > tol || Math.abs(src[j] * a / 255 - srA) > tol || Math.abs(src[j + 1] * a / 255 - sgA) > tol || Math.abs(src[j + 2] * a / 255 - sbA) > tol) barrier[i] = 1;
+  }
   if (gap > 0) {
-    // gap closing needs the whole barrier map
-    const open = new Uint8Array(n);
-    for (let i = 0; i < n; i++) open[i] = same(i) ? 1 : 0;
-    const barrier = new Uint8Array(n);
-    for (let i = 0; i < n; i++) barrier[i] = open[i] ? 0 : 1;
-    const thick = dilate(barrier, w, h, gap);
-    const open2 = new Uint8Array(n);
-    for (let i = 0; i < n; i++) open2[i] = thick[i] ? 0 : 1;
-    region = open2[y * w + x] ? scanFill(open2, w, h, x, y) : scanFill(open, w, h, x, y);
-    if (open2[y * w + x]) {
-      // grow back into the original open area that gap-closing shaved off
-      const grown = dilate(region, w, h, gap + 1, region.bbox);
-      for (let i = 0; i < n; i++) region[i] = grown[i] && open[i] ? 1 : 0;
-      region.bbox = grown.bbox;
-    }
-  } else region = scanFillWith(same, w, h, x, y); // only pixels the fill reaches are tested
+    const thick = dilate(barrier, w, h, gap); // 1 = barrier grown by the gap size
+    const s0 = y * w + x;
+    if (!thick[s0]) {
+      region = scanFill(thick, w, h, x, y, 0);
+      // grow back into the original open area that gap-closing shaved off (only around the fill)
+      const grown = dilate(region, w, h, gap + 1, region.bbox), gb = grown.bbox;
+      for (let yy = gb.y0; yy <= gb.y1; yy++) for (let i = yy * w + gb.x0, e = yy * w + gb.x1; i <= e; i++) region[i] = grown[i] && !barrier[i] ? 1 : 0;
+      region.bbox = gb;
+    } else region = scanFill(barrier, w, h, x, y, 0);
+  } else region = scanFill(barrier, w, h, x, y, 0);
   if (!region.bbox) return null;
   if (expand > 0) region = dilate(region, w, h, expand, region.bbox);
   return region;
@@ -105,11 +130,13 @@ export function regionToCanvas(region, w, h, color, selection) {
   const out = makeCanvas(w, h), ox = out.getContext('2d');
   const b = region.bbox || { x0: 0, y0: 0, x1: w - 1, y1: h - 1 };
   const bw = b.x1 - b.x0 + 1, bh = b.y1 - b.y0 + 1;
-  const id = ox.createImageData(bw, bh), d = id.data;
+  const id = ox.createImageData(bw, bh), d32 = new Uint32Array(id.data.buffer);
   const [r, g, bl] = color ? hexToRgb(color) : [0, 0, 0];
+  // one 32-bit write per pixel (RGBA bytes in memory order, little-endian)
+  const px = new Uint32Array(new Uint8Array([r, g, bl, 255]).buffer)[0];
   for (let y = 0; y < bh; y++) {
     const ri = (y + b.y0) * w + b.x0;
-    for (let x = 0, j = y * bw * 4; x < bw; x++, j += 4) if (region[ri + x]) { d[j] = r; d[j + 1] = g; d[j + 2] = bl; d[j + 3] = 255; }
+    for (let x = 0, j = y * bw; x < bw; x++, j++) if (region[ri + x]) d32[j] = px;
   }
   ox.putImageData(id, b.x0, b.y0);
   if (selection) { ox.globalCompositeOperation = 'destination-in'; ox.drawImage(selection, 0, 0); }
