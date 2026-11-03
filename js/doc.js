@@ -345,12 +345,28 @@ export class Doc {
     return { canvas: it.canvas, layer: it, scale: 1, matrix: null, toLocal: (x, y) => ({ x, y }) };
   }
 
-  tmp(i) {
-    let c = this._tmp[i];
-    if (!c || c.width !== this.width || c.height !== this.height) c = this._tmp[i] = makeCanvas(this.width, this.height);
+  // Scratch canvas covering only rectangle reg (doc px): drawn with a translate(-reg.x, -reg.y),
+  // so a clipping group repainted for a small changed area works on small images.
+  tmpR(i, reg) {
+    this._tmpR ||= [];
+    let c = this._tmpR[i];
+    if (!c) c = this._tmpR[i] = makeCanvas(reg.w, reg.h);
+    if (c.width !== reg.w || c.height !== reg.h) { c.width = reg.w; c.height = reg.h; }
     const x = c.getContext('2d');
     x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
     x.clearRect(0, 0, c.width, c.height);
+    x.setTransform(1, 0, 0, 1, -reg.x, -reg.y);
+    return c;
+  }
+  // reg: only that doc-space rectangle is cleared and drawn (clip path set on the context)
+  tmp(i, reg = null) {
+    let c = this._tmp[i];
+    if (!c || c.width !== this.width || c.height !== this.height) c = this._tmp[i] = makeCanvas(this.width, this.height);
+    const x = c.getContext('2d');
+    x.restore(); x.save(); // drop a clip left from the previous use
+    x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
+    if (reg) { x.clearRect(reg.x, reg.y, reg.w, reg.h); x.beginPath(); x.rect(reg.x, reg.y, reg.w, reg.h); x.clip(); }
+    else x.clearRect(0, 0, c.width, c.height);
     return c;
   }
 
@@ -437,14 +453,18 @@ export class Doc {
       // panel masks are a clip path on the destination — no off-screen passes
       if (masked) { this.panelPath(ctx); ctx.clip(); }
       const custom = isCustomBlend(it.blend);
+      // o.region (doc px): only that part changed — off-screen group work is limited to it
+      const reg = o.region || null;
+      const devRect = (c) => { if (!reg) return null; const m = c.getTransform(), xs = [], ys = []; for (const [x, y] of [[reg.x, reg.y], [reg.x + reg.w, reg.y], [reg.x, reg.y + reg.h], [reg.x + reg.w, reg.y + reg.h]]) { xs.push(m.a * x + m.c * y + m.e); ys.push(m.b * x + m.d * y + m.f); } const x0 = Math.max(0, Math.floor(Math.min(...xs)) - 1), y0 = Math.max(0, Math.floor(Math.min(...ys)) - 1); return { x: x0, y: y0, w: Math.min(c.canvas.width, Math.ceil(Math.max(...xs)) + 1) - x0, h: Math.min(c.canvas.height, Math.ceil(Math.max(...ys)) + 1) - y0 }; };
       ctx.globalAlpha = it.opacity * src.alpha * gAlpha; ctx.globalCompositeOperation = custom ? 'source-over' : it.blend;
       if (!visClips.length) {
-        if (custom) blendDraw(ctx, it.blend, (l) => this.drawSource(l, src)); else this.drawSource(ctx, src);
+        if (custom) blendDraw(ctx, it.blend, (l) => this.drawSource(l, src), devRect(ctx)); else this.drawSource(ctx, src);
         ctx.restore();
         continue;
       }
       // Group: base + clipping masks rendered off-screen.
-      const G = this.tmp(0), g = G.getContext('2d');
+      const G = reg ? this.tmpR(0, reg) : this.tmp(0), g = G.getContext('2d');
+      const at = reg ? [reg.x, reg.y] : [0, 0]; // where a scratch canvas sits in doc space
       this.drawSource(g, src);
       for (const c of visClips) {
         const cs = this.source(c, frame, preview, overlay); if (!cs) continue;
@@ -457,17 +477,18 @@ export class Doc {
         } else {
           // blend-mode clipping: compute blend(group, clip) off-screen, keep it only where the
           // clip layer has paint, then lay that atop the group (so the group's alpha is exact)
-          const T = this.tmp(1), t = T.getContext('2d'), a = c.opacity * cs.alpha;
-          t.drawImage(G, 0, 0);
-          if (isCustomBlend(c.blend)) { t.globalAlpha = a; blendDraw(t, c.blend, (l) => this.drawSource(l, cs)); t.globalAlpha = 1; }
+          const T = reg ? this.tmpR(1, reg) : this.tmp(1), t = T.getContext('2d'), a = c.opacity * cs.alpha;
+          t.drawImage(G, ...at);
+          if (isCustomBlend(c.blend)) { t.globalAlpha = a; blendDraw(t, c.blend, (l) => this.drawSource(l, cs), reg ? { x: 0, y: 0, w: reg.w, h: reg.h } : null); t.globalAlpha = 1; }
           else { t.globalCompositeOperation = c.blend; t.globalAlpha = a; this.drawSource(t, cs); }
           t.globalCompositeOperation = 'destination-in'; this.drawSource(t, cs);
-          g.globalCompositeOperation = 'source-atop'; g.drawImage(T, 0, 0);
+          g.globalCompositeOperation = 'source-atop'; g.drawImage(T, ...at);
         }
         g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
       }
-      if (custom) { const gc = G; blendDraw(ctx, it.blend, (l) => l.drawImage(gc, 0, 0)); }
-      else ctx.drawImage(G, 0, 0);
+      const put = (c) => (reg ? c.drawImage(G, 0, 0, reg.w, reg.h, reg.x, reg.y, reg.w, reg.h) : c.drawImage(G, 0, 0));
+      if (custom) blendDraw(ctx, it.blend, put, devRect(ctx));
+      else put(ctx);
       ctx.restore();
     }
   }

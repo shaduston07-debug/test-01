@@ -4,7 +4,7 @@ import { $, h, clamp, toast, dialog, confirmDialog, promptDialog, makeCanvas, cl
 import { ICONS } from './icons.js';
 import { Layer, Track, BLEND_MODES, blendShort } from './doc.js';
 import { withUndo, touch } from './history.js';
-import { openPopover, closePopover } from './ui.js';
+import { openPopover, closePopover, openColor } from './ui.js';
 import { blendDraw, isCustomBlend } from './blendgl.js';
 
 // ───────── structural undo ─────────
@@ -35,6 +35,10 @@ export function insertLayer(app, layer, index) {
       if (cur.type === 'group') { i = d.active; layer.groupId = cur.id; }
       else if (cur.groupId) layer.groupId = cur.groupId;
     }
+    // a new paint layer inside a clipping stack (between clipping layers, or added while working
+    // on one) becomes a clipping layer too, like Clip Studio
+    const paintable = layer.type === 'raster' || layer.type === 'track';
+    if (paintable && index == null && ((d.items[i] && d.items[i].clip) || (cur && cur.clip))) layer.clip = true;
     d.items.splice(i, 0, layer);
     d.active = i;
   });
@@ -181,14 +185,31 @@ export function openLayers(app, anchor) {
       if (grp && grp.collapsed) continue;
       list.append(rowFor(it, i, !!grp));
     }
-    const colorIn = h('input', { type: 'color', value: d.bg });
-    colorIn.oninput = () => { d.bg = colorIn.value; app.changed(); };
+    // the background gets the full colour panel (disc, sliders, history, palettes), with undo
+    const colorIn = h('button', { class: 'bg-swatch', title: 'Background colour', style: { background: d.bg }, onclick: (e) => { e.stopPropagation(); openBgColor(colorIn); } });
     list.append(h('div', { class: 'layer-row bg-row' }, h('div', { class: 'layer-thumb', style: { background: d.bg } }), h('div', { class: 'layer-name' }, h('b', {}, 'Background color')), colorIn,
       h('button', { class: 'layer-vis' + (d.bgVisible ? ' on' : ''), onclick: () => { d.bgVisible = !d.bgVisible; app.changed(); render(); } })));
     list.append(h('p', { class: 'hint layer-hint' }, `${d.rasterCount()} of ${app.maxRaster()} ${d.mode === 'animate' ? 'drawings' : 'layers'} at ${d.width}×${d.height} · hold & drag to reorder · tap a selected layer for options`));
     if (sheetFor && !d.items.includes(sheetFor.it)) closeSheet();
   };
 
+  const openBgColor = (btn) => {
+    let last = d.bg;
+    // the Layers popover closes when the colour panel opens: anchor to the Layers button then
+    const anchor = btn.closest('.float-win') ? btn : (document.getElementById('btn-layers') || btn);
+    openColor(app, anchor, {
+      title: 'Background colour', key: 'bg-color',
+      get: () => d.bg,
+      set: (hex, commit) => {
+        d.bg = hex; if (btn.isConnected) btn.style.background = hex; app.changed();
+        if (commit && hex !== last) {
+          const before = last, after = hex; last = hex;
+          app.history.push({ label: 'Background colour', undo() { d.bg = before; app.changed(); }, redo() { d.bg = after; app.changed(); } });
+        }
+      },
+      onClose: () => render(),
+    });
+  };
   const rowFor = (it, i, inGroup) => {
     const on = i === d.active;
     const vis = h('button', { class: 'layer-vis' + (it.visible ? ' on' : ''), onclick: (e) => { e.stopPropagation(); it.visible = !it.visible; app.changed(); render(); } });

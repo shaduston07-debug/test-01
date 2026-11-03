@@ -58,35 +58,48 @@ function gl() {
   return G;
 }
 
-let layerTmp = null;
-// draw(lctx) paints the layer (with its opacity) into a context that has ctx's transform / clip
-export function blendDraw(ctx, mode, draw) {
-  const W = ctx.canvas.width, H = ctx.canvas.height;
-  if (!layerTmp || layerTmp.width !== W || layerTmp.height !== H) layerTmp = makeCanvas(W, H);
+let layerTmp = null, backTmp = null;
+// draw(lctx) paints the layer (with its opacity) into a context that has ctx's transform / clip.
+// rect (target canvas pixels): only that part is blended — the rest of the target is untouched.
+export function blendDraw(ctx, mode, draw, rect = null) {
+  const CW = ctx.canvas.width, CH = ctx.canvas.height;
+  let rx = 0, ry = 0, W = CW, H = CH;
+  if (rect) { rx = Math.max(0, Math.floor(rect.x)); ry = Math.max(0, Math.floor(rect.y)); W = Math.min(CW, Math.ceil(rect.x + rect.w)) - rx; H = Math.min(CH, Math.ceil(rect.y + rect.h)) - ry; if (W <= 0 || H <= 0) return; }
+  // scratch canvases exactly the blended size: uploads and copies stay small for small areas
+  if (!layerTmp) { layerTmp = makeCanvas(W, H); backTmp = makeCanvas(W, H); }
+  if (layerTmp.width !== W || layerTmp.height !== H) { layerTmp.width = W; layerTmp.height = H; backTmp.width = W; backTmp.height = H; }
   const l = layerTmp.getContext('2d');
-  l.setTransform(1, 0, 0, 1, 0, 0); l.globalAlpha = 1; l.globalCompositeOperation = 'source-over'; l.clearRect(0, 0, W, H);
-  l.setTransform(ctx.getTransform()); l.globalAlpha = ctx.globalAlpha;
+  l.setTransform(1, 0, 0, 1, 0, 0); l.globalAlpha = 1; l.globalCompositeOperation = 'source-over'; l.clearRect(0, 0, layerTmp.width, layerTmp.height);
+  const m = ctx.getTransform();
+  l.setTransform(m.a, m.b, m.c, m.d, m.e - rx, m.f - ry); l.globalAlpha = ctx.globalAlpha;
   draw(l);
   l.setTransform(1, 0, 0, 1, 0, 0); l.globalAlpha = 1;
+  // the backdrop: that rectangle of the target
+  const bk = backTmp.getContext('2d');
+  bk.setTransform(1, 0, 0, 1, 0, 0); bk.globalCompositeOperation = 'copy'; bk.globalAlpha = 1;
+  bk.drawImage(ctx.canvas, rx, ry, W, H, 0, 0, W, H);
+  bk.globalCompositeOperation = 'source-over';
+  const TW = layerTmp.width, TH = layerTmp.height;
   const R = gl();
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.beginPath(); ctx.rect(rx, ry, W, H); ctx.clip();
   if (R) {
     const { c, g } = R;
-    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
-    g.viewport(0, 0, W, H);
-    g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, R.tb); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, ctx.canvas);
+    if (c.width !== TW || c.height !== TH) { c.width = TW; c.height = TH; }
+    g.viewport(0, 0, TW, TH);
+    g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, R.tb); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, backTmp);
     g.activeTexture(g.TEXTURE1); g.bindTexture(g.TEXTURE_2D, R.ts); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, layerTmp);
     g.uniform1i(R.mode, CUSTOM_BLENDS[mode]);
     g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
-    ctx.globalCompositeOperation = 'copy'; ctx.drawImage(c, 0, 0);
+    ctx.globalCompositeOperation = 'copy'; ctx.drawImage(c, 0, 0, W, H, rx, ry, W, H);
   } else {
     // CPU fallback
-    const b = ctx.getImageData(0, 0, W, H), s = l.getImageData(0, 0, W, H), bd = b.data, sd = s.data, m = CUSTOM_BLENDS[mode];
+    const b = bk.getImageData(0, 0, W, H), s = l.getImageData(0, 0, W, H), bd = b.data, sd = s.data, md = CUSTOM_BLENDS[mode];
     const lum = (r, g2, bl) => 0.3 * r + 0.59 * g2 + 0.11 * bl;
     const burn = (y, x) => (y >= 1 ? 1 : x <= 0 ? 0 : 1 - Math.min(1, (1 - y) / x)), dodge = (y, x) => (y <= 0 ? 0 : x >= 1 ? 1 : Math.min(1, y / (1 - x)));
     const f = (y, x) => {
-      switch (m) {
+      switch (md) {
         case 1: return Math.max(y + x - 1, 0); case 3: return Math.min(y + x, 1);
         case 5: return x <= 0.5 ? burn(y, 2 * x) : dodge(y, 2 * x - 1);
         case 6: return Math.min(1, Math.max(0, y + 2 * x - 1));
@@ -100,12 +113,12 @@ export function blendDraw(ctx, mode, draw) {
       const as = sd[i + 3] / 255; if (!as) continue;
       const ab = bd[i + 3] / 255, cb = [bd[i] / 255, bd[i + 1] / 255, bd[i + 2] / 255], cs = [sd[i] / 255, sd[i + 1] / 255, sd[i + 2] / 255];
       let Bv;
-      if (m === 2 || m === 4) { const pick = m === 2 ? lum(...cs) < lum(...cb) : lum(...cs) > lum(...cb); Bv = pick ? cs : cb; } else Bv = cb.map((y, k) => f(y, cs[k]));
+      if (md === 2 || md === 4) { const pick = md === 2 ? lum(...cs) < lum(...cb) : lum(...cs) > lum(...cb); Bv = pick ? cs : cb; } else Bv = cb.map((y, k) => f(y, cs[k]));
       const ao = as + ab * (1 - as);
       for (let k = 0; k < 3; k++) { const cr = (1 - ab) * cs[k] + ab * Bv[k], co = as * cr + (1 - as) * ab * cb[k]; bd[i + k] = Math.round(co / (ao || 1) * 255); }
       bd[i + 3] = Math.round(ao * 255);
     }
-    ctx.putImageData(b, 0, 0);
+    ctx.putImageData(b, rx, ry);
   }
   ctx.restore();
 }

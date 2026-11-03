@@ -604,3 +604,4 @@ body.mode-animate #btn-3d-models { display: none; }
 .float-win:has(.p3d) { height: min(74vh, 700px, calc(100vh - 24px)); }
 .lib3d-item.my-model { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .lib3d-item.my-model img { width: 72px; height: 72px; border-radius: 8px; object-fit: cover; }
+.bg-swatch { width: 44px; height: 30px; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25), 0 1px 3px rgba(0, 0, 0, 0.3); margin-left: auto; }

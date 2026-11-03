@@ -245,9 +245,12 @@ const COLOR_TABS = [
 ];
 // Color panel: Triangle (hue ring + SV triangle), Classic square, Values, Palettes —
 // with Hue / Saturation / Brightness bars underneath that work in every mode.
-export function openColor(app, anchor) {
-  let [hh, s, v] = rgbToHsv(...hexToRgb(app.color));
-  const prev = app.color;
+// target (optional): another colour to edit with the full panel, e.g. the background:
+// { get(): hex, set(hex, commit), title, key }
+export function openColor(app, anchor, target = null) {
+  const curHex = () => (target ? target.get() : app.color);
+  let [hh, s, v] = rgbToHsv(...hexToRgb(curHex()));
+  const prev = curHex();
   let tab = store.prefs.get('colorTab', 'ring');
   let selfSet = false;
   const body = h('div', { class: 'color-panel' });
@@ -264,8 +267,8 @@ export function openColor(app, anchor) {
   body.append(view, bars, histHead, histQuick, tabsEl);
 
   const hex = () => rgbToHex(...hsvToRgb(hh, s, v));
-  const commit = () => { app.setColor(hex(), true); };
-  const apply = () => { selfSet = true; app.setColor(hex(), false); selfSet = false; refresh(); };
+  const commit = () => { if (target) target.set(hex(), true); else app.setColor(hex(), true); };
+  const apply = () => { selfSet = true; if (target) target.set(hex(), false); else app.setColor(hex(), false); selfSet = false; refresh(); };
   const setFromHex = (c) => { [hh, s, v] = rgbToHsv(...hexToRgb(c)); apply(); commit(); renderTab(); };
   const drag = (el, fn) => {
     let on = false;
@@ -462,13 +465,13 @@ export function openColor(app, anchor) {
     dialog({ title: 'Swatch', body: h('div', { class: 'swatch-big', style: { background: pal.colors[ci] } }), actions: [
       { label: 'Cancel' },
       { label: 'Delete', onClick: () => { pal.colors.splice(ci, 1); savePals(list); } },
-      { label: 'Replace with current', primary: true, onClick: () => { pal.colors[ci] = app.color; savePals(list); } },
+      { label: 'Replace with current', primary: true, onClick: () => { pal.colors[ci] = curHex(); savePals(list); } },
     ] });
   };
   const swatchGrid = (pal) => {
     const row = h('div', { class: 'swatches' });
     pal.colors.forEach((c, ci) => row.append(swatchBtn(c, () => swatchMenu(pal.id, ci))));
-    row.append(h('button', { class: 'add', title: 'Add current color', onclick: () => { const list = pals(); const p2 = list.find((x) => x.id === pal.id); p2.colors.push(app.color); savePals(list); } }, '+'));
+    row.append(h('button', { class: 'add', title: 'Add current color', onclick: () => { const list = pals(); const p2 = list.find((x) => x.id === pal.id); p2.colors.push(curHex()); savePals(list); } }, '+'));
     return row;
   };
   const buildPalettes = () => {
@@ -512,7 +515,7 @@ export function openColor(app, anchor) {
     const grid = h('div', { class: 'pal-tiles' });
     pal.colors.forEach((c, ci) => grid.append(swatchBtn(c, () => swatchMenu(pal.id, ci))));
     const cells = Math.max(30, Math.ceil((pal.colors.length + 1) / 10) * 10);
-    for (let i = pal.colors.length; i < cells; i++) grid.append(h('button', { class: 'empty', title: 'Add current colour', onclick: () => { const l2 = pals(); const p2 = l2.find((x) => x.id === pal.id); p2.colors.push(app.color); savePals(l2); } }));
+    for (let i = pal.colors.length; i < cells; i++) grid.append(h('button', { class: 'empty', title: 'Add current colour', onclick: () => { const l2 = pals(); const p2 = l2.find((x) => x.id === pal.id); p2.colors.push(curHex()); savePals(l2); } }));
     quick.append(h('div', { class: 'col-sec' }, pick), grid);
   };
   body.insertBefore(quick, tabsEl);
@@ -545,9 +548,9 @@ export function openColor(app, anchor) {
     // swatch rows only change when the history does (not on every drag step)
     if (app.colorHistory.join() !== histKey) { histKey = app.colorHistory.join(); renderSw && renderSw(); quick.render(); }
   };
-  app.colorListeners.add(listener);
+  if (!target) app.colorListeners.add(listener);
   renderTab();
-  openPopover(anchor, { title: 'Colours', body, head: [head], width: 400, key: 'color', float: true, onClose: () => app.colorListeners.delete(listener) });
+  openPopover(anchor, { title: target ? target.title : 'Colours', body, head: [head], width: 400, key: target ? target.key || 'color-target' : 'color', float: true, onClose: () => { app.colorListeners.delete(listener); target && target.onClose && target.onClose(); } });
 }
 
 // ───────── brush previews ─────────

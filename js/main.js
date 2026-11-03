@@ -997,6 +997,21 @@ class App {
     const ctx = this.ctx;
     ctx.save();
     if (clip) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.beginPath(); ctx.rect(clip.x, clip.y, clip.w, clip.h); ctx.clip(); }
+    // the changed area in document pixels: clipping groups only rebuild that part
+    this.partialDoc = null;
+    if (clip) {
+      const inv = this.viewMatrix().inverse(), dpr = this.dpr, xs = [], ys = [];
+      for (const [x, y] of [[clip.x, clip.y], [clip.x + clip.w, clip.y], [clip.x, clip.y + clip.h], [clip.x + clip.w, clip.y + clip.h]]) { const q = inv.transformPoint({ x: x / dpr, y: y / dpr }); xs.push(q.x); ys.push(q.y); }
+      // margin: image filtering when zoomed out reads several document pixels per screen pixel
+      const d = this.doc, pad = 3 + Math.ceil(4 / Math.min(1, this.view.zoom));
+      const x0 = Math.max(0, Math.floor(Math.min(...xs)) - pad), y0 = Math.max(0, Math.floor(Math.min(...ys)) - pad);
+      const x1 = Math.min(d.width, Math.ceil(Math.max(...xs)) + pad), y1 = Math.min(d.height, Math.ceil(Math.max(...ys)) + pad);
+      // snap to a 64 px grid so the browser's downscaling filters the tile exactly like the
+      // whole image (its reduced-size levels line up with the full canvas)
+      const G = 64, ax0 = Math.floor(x0 / G) * G, ay0 = Math.floor(y0 / G) * G;
+      const ax1 = Math.min(d.width, Math.ceil(x1 / G) * G), ay1 = Math.min(d.height, Math.ceil(y1 / G) * G);
+      this.partialDoc = ax1 > ax0 && ay1 > ay0 ? { x: ax0, y: ay0, w: ax1 - ax0, h: ay1 - ay0 } : null;
+    }
     this.renderScene();
     ctx.restore();
     this.lastFrameW = this.canvas.width; this.lastFrameH = this.canvas.height;
@@ -1039,7 +1054,7 @@ class App {
       this.ensureCaches();
       const [gs, ge] = this.group;
       ctx.drawImage(this.belowCache, 0, 0, d.width, d.height);
-      d.composite(ctx, { from: gs, to: ge, bg: false, preview, overlay });
+      d.composite(ctx, { from: gs, to: ge, bg: false, preview, overlay, region: this.partialDoc });
       if (ge < d.items.length) {
         if (this.aboveFlat) ctx.drawImage(this.aboveCache, 0, 0, d.width, d.height);
         else d.composite(ctx, { from: ge, bg: false });
