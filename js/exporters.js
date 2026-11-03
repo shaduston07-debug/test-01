@@ -43,7 +43,8 @@ function rleChannel(rgba, w, h, ch) {
   const wr = new W().bytes(counts.out()); for (const r of rows) wr.bytes(r);
   return wr.out();
 }
-const PSD_BLEND = { 'source-over': 'norm', multiply: 'mul ', screen: 'scrn', overlay: 'over', darken: 'dark', lighten: 'lite', 'color-dodge': 'div ', 'color-burn': 'idiv', 'hard-light': 'hLit', 'soft-light': 'sLit', difference: 'diff', exclusion: 'smud', hue: 'hue ', saturation: 'sat ', color: 'colr', luminosity: 'lum ', lighter: 'lddg' };
+const PSD_BLEND = { 'source-over': 'norm', multiply: 'mul ', screen: 'scrn', overlay: 'over', darken: 'dark', lighten: 'lite', 'color-dodge': 'div ', 'color-burn': 'idiv', 'hard-light': 'hLit', 'soft-light': 'sLit', difference: 'diff', exclusion: 'smud', hue: 'hue ', saturation: 'sat ', color: 'colr', luminosity: 'lum ', lighter: 'lddg',
+  'x-linear-burn': 'lbrn', 'x-darker-color': 'dkCl', 'x-linear-dodge': 'lddg', 'x-lighter-color': 'lgCl', 'x-vivid-light': 'vLit', 'x-linear-light': 'lLit', 'x-pin-light': 'pLit', 'x-hard-mix': 'hMix', 'x-subtract': 'fsub', 'x-divide': 'fdiv' };
 
 // layers: [{ name, canvas (doc size), opacity, blend, visible, clip, alphaLock }] bottom → top
 export function writePSD(width, height, layers, merged) {

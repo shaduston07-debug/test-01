@@ -12,6 +12,7 @@ async function blobFor(c) {
 }
 function seedBlob(c, blob) { if (blob instanceof Blob) { c._blob = blob; c._blobVer = c._ver || 0; } }
 
+import { blendDraw, isCustomBlend } from './blendgl.js';
 export const BLEND_MODES = [
   ['source-over', 'Normal', 'N'], ['multiply', 'Multiply', 'M'], ['screen', 'Screen', 'S'],
   ['overlay', 'Overlay', 'O'], ['darken', 'Darken', 'D'], ['lighten', 'Lighten', 'L'],
@@ -19,6 +20,10 @@ export const BLEND_MODES = [
   ['soft-light', 'Soft Light', 'SL'], ['difference', 'Difference', 'Di'], ['exclusion', 'Exclusion', 'E'],
   ['hue', 'Hue', 'H'], ['saturation', 'Saturation', 'Sa'], ['color', 'Color', 'C'], ['luminosity', 'Luminosity', 'Lu'],
   ['lighter', 'Add (Glow)', 'A'],
+  // Clip Studio / Photoshop modes drawn by js/blendgl.js
+  ['x-linear-burn', 'Linear Burn', 'LB'], ['x-darker-color', 'Darker Color', 'DC'], ['x-linear-dodge', 'Linear Dodge (Add)', 'LD'],
+  ['x-lighter-color', 'Lighter Color', 'LC'], ['x-vivid-light', 'Vivid Light', 'VL'], ['x-linear-light', 'Linear Light', 'LL'],
+  ['x-pin-light', 'Pin Light', 'PL'], ['x-hard-mix', 'Hard Mix', 'HM'], ['x-subtract', 'Subtract', 'Su'], ['x-divide', 'Divide', 'Dv'],
 ];
 export const blendShort = (b) => (BLEND_MODES.find((m) => m[0] === b) || BLEND_MODES[0])[2];
 
@@ -431,9 +436,10 @@ export class Doc {
       ctx.save();
       // panel masks are a clip path on the destination — no off-screen passes
       if (masked) { this.panelPath(ctx); ctx.clip(); }
-      ctx.globalAlpha = it.opacity * src.alpha * gAlpha; ctx.globalCompositeOperation = it.blend;
+      const custom = isCustomBlend(it.blend);
+      ctx.globalAlpha = it.opacity * src.alpha * gAlpha; ctx.globalCompositeOperation = custom ? 'source-over' : it.blend;
       if (!visClips.length) {
-        this.drawSource(ctx, src);
+        if (custom) blendDraw(ctx, it.blend, (l) => this.drawSource(l, src)); else this.drawSource(ctx, src);
         ctx.restore();
         continue;
       }
@@ -453,13 +459,15 @@ export class Doc {
           // clip layer has paint, then lay that atop the group (so the group's alpha is exact)
           const T = this.tmp(1), t = T.getContext('2d'), a = c.opacity * cs.alpha;
           t.drawImage(G, 0, 0);
-          t.globalCompositeOperation = c.blend; t.globalAlpha = a; this.drawSource(t, cs);
+          if (isCustomBlend(c.blend)) { t.globalAlpha = a; blendDraw(t, c.blend, (l) => this.drawSource(l, cs)); t.globalAlpha = 1; }
+          else { t.globalCompositeOperation = c.blend; t.globalAlpha = a; this.drawSource(t, cs); }
           t.globalCompositeOperation = 'destination-in'; this.drawSource(t, cs);
           g.globalCompositeOperation = 'source-atop'; g.drawImage(T, 0, 0);
         }
         g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
       }
-      ctx.drawImage(G, 0, 0);
+      if (custom) { const gc = G; blendDraw(ctx, it.blend, (l) => l.drawImage(gc, 0, 0)); }
+      else ctx.drawImage(G, 0, 0);
       ctx.restore();
     }
   }

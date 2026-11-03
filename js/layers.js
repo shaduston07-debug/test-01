@@ -5,6 +5,7 @@ import { ICONS } from './icons.js';
 import { Layer, Track, BLEND_MODES, blendShort } from './doc.js';
 import { withUndo, touch } from './history.js';
 import { openPopover, closePopover } from './ui.js';
+import { blendDraw, isCustomBlend } from './blendgl.js';
 
 // ───────── structural undo ─────────
 const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint', 'draft', 'express', 'border', 'borderWidth', 'borderColor'];
@@ -422,10 +423,10 @@ const LAYER_TINTS = ['#3d7bff', '#2fb8ff', '#7a5cff', '#ff4d6d', '#ff8a2a', '#f2
 // Procreate-style grouping of the blend modes
 const BLEND_GROUPS = [
   ['', ['source-over']],
-  ['Darken', ['multiply', 'darken', 'color-burn']],
-  ['Lighten', ['screen', 'lighten', 'color-dodge', 'lighter']],
-  ['Contrast', ['overlay', 'soft-light', 'hard-light']],
-  ['Difference', ['difference', 'exclusion']],
+  ['Darken', ['multiply', 'darken', 'color-burn', 'x-linear-burn', 'x-darker-color']],
+  ['Lighten', ['screen', 'lighten', 'color-dodge', 'lighter', 'x-linear-dodge', 'x-lighter-color']],
+  ['Contrast', ['overlay', 'soft-light', 'hard-light', 'x-vivid-light', 'x-linear-light', 'x-pin-light', 'x-hard-mix']],
+  ['Difference', ['difference', 'exclusion', 'x-subtract', 'x-divide']],
   ['Color', ['hue', 'saturation', 'color', 'luminosity']],
 ];
 
@@ -630,7 +631,10 @@ function mergeDown(app, i) {
   const beforePx = cloneCanvas(low.canvas);
   const before = captureStruct(d);
   const x = low.canvas.getContext('2d');
-  x.save(); x.globalAlpha = up.opacity; x.globalCompositeOperation = up.clip ? 'source-atop' : up.blend; x.drawImage(up.canvas, 0, 0); x.restore();
+  x.save(); x.globalAlpha = up.opacity;
+  if (!up.clip && isCustomBlend(up.blend)) blendDraw(x, up.blend, (l) => l.drawImage(up.canvas, 0, 0));
+  else { x.globalCompositeOperation = up.clip ? 'source-atop' : up.blend; x.drawImage(up.canvas, 0, 0); }
+  x.restore();
   const afterPx = cloneCanvas(low.canvas);
   d.layers.splice(i, 1); d.active = i - 1;
   const after = captureStruct(d);
