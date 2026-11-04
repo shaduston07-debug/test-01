@@ -226,6 +226,25 @@
         <button role="radio" data-width="none">Full</button>
       </div>
 
+      <h3 class="setting-section">Underlines</h3>
+      <p class="underline-preview"><span class="u-spell">mispelled</span> spelling mistake &nbsp;·&nbsp; <span class="u-hint">vordr</span> possible translation</p>
+      <p class="setting-label">Spelling mistakes</p>
+      <div class="underline-row">
+        <div class="segmented" id="spell-choice" role="radiogroup" aria-label="Spelling mistakes">
+          <button role="radio" data-spell="on">Show</button>
+          <button role="radio" data-spell="off">Hide</button>
+        </div>
+        <div class="colour-dots" id="spell-colours" role="radiogroup" aria-label="Spelling underline colour"></div>
+      </div>
+      <p class="setting-label">Possible translations</p>
+      <div class="segmented" id="hint-choice" role="radiogroup" aria-label="Possible translations">
+        <button role="radio" data-hints="off">Off</button>
+        <button role="radio" data-hints="lookalikes">Look-alikes</button>
+        <button role="radio" data-hints="all">All translatable</button>
+      </div>
+      <div class="colour-dots" id="hint-colours" role="radiogroup" aria-label="Translation underline colour"></div>
+      <p class="modal-hint"><b>Look-alikes:</b> words that aren't English but are almost a Norse, Latin, Greek, argot, Lingala or Tshiluba word, like <i>vordr</i> (vǫrðr). <b>All translatable:</b> also every English or French word the built-in lists can translate.</p>
+
       <section class="claude-settings" id="claude-settings">
         <h3 class="setting-section">Claude (optional)</h3>
         <p class="modal-hint">With your own Anthropic API key, this app translates whole phrases into every language (Old Norse, Greek and argot included), solves handwritten maths and writes missing definitions. The key stays on this device and is only sent to Anthropic. Use is billed to your Anthropic account. Create a key at platform.claude.com.</p>

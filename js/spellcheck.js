@@ -69,6 +69,17 @@ const SpellCheck = (() => {
     return checkCache.get(word);
   }
 
+  // A word the reader means as-is: English, or one they added or ignored
+  // (unlike isCorrect, words from the translation lists don't count).
+  function isOwnWord(raw) {
+    if (!typo) return true;
+    const word = normalize(raw);
+    if (shouldSkip(word)) return true;
+    const lower = word.toLowerCase();
+    if (personal.has(lower) || ignored.has(lower) || MODERN_WORDS.has(lower)) return true;
+    return typo.check(word) || (/'s$/i.test(word) && typo.check(word.slice(0, -2)));
+  }
+
   function suggest(raw, limit = 6) {
     const word = normalize(raw);
     if (!typo) return [];
@@ -77,7 +88,7 @@ const SpellCheck = (() => {
       const candidates = [
         ...[...personal.values()].filter(p => editDistance(p.toLowerCase(), lower) <= 2),
         ...[...MODERN_WORDS].filter(m => editDistance(m, lower) <= 1),
-        ...typo.suggest(word, limit + 4),
+        ...typo.suggest(word, limit + 4).filter(w => !/\d/.test(w)),   // not "v03rdr"
       ];
       // Collapse case variants ("Dispelled"/"dispelled"), preferring the plain form,
       // then rank the closest matches first (ties keep Typo's own order).
@@ -173,6 +184,7 @@ const SpellCheck = (() => {
     init,
     get ready() { return !!typo; },
     isCorrect,
+    isOwnWord,
     suggest,
     addPersonal,
     merge,

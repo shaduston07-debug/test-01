@@ -194,6 +194,23 @@ At most 8 words. If there is no good equivalent, reply {"words": []}.`, { modelT
     return lang.cache.get(key);
   }
 
+  // A non-English word that is (nearly) a word in one of the lists: "vordr" or
+  // "voror" for vǫrðr. Kept strict so ordinary English typos stay spelling mistakes.
+  function lookalike(word) {
+    const typed = word.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (typed.length < 4) return false;
+    for (const lang of languages.values()) {
+      for (const key of lang.headwords.keys()) {
+        if (key.includes(' ') || Math.abs(key.length - typed.length) > 1) continue;
+        if (editDistance(typed, key) <= 1) return true;
+      }
+    }
+    return false;
+  }
+
+  // Whether any list can translate this (English or French) word.
+  const translatable = word => [...languages.keys()].some(id => translate(id, word).length > 0);
+
   // Every single word in the lists, as written and in a–z letters (for the spell-checker).
   function words() {
     const out = new Set();
@@ -207,5 +224,5 @@ At most 8 words. If there is no good equivalent, reply {"words": []}.`, { modelT
     return out;
   }
 
-  return { register, get, list, plain, translate, similar, more, words };
+  return { register, get, list, plain, translate, similar, more, words, lookalike, translatable };
 })();

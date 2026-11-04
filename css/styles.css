@@ -419,8 +419,15 @@ svg {
 .editor .sketch svg { display: block; width: 100%; height: auto; stroke: none; }
 
 ::highlight(misspelled) {
-  text-decoration: underline wavy var(--misspelled);
+  text-decoration: underline wavy var(--spell-underline, var(--misspelled));
   text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+/* Words that may be translations: a different colour and a dotted line, so they
+   can be told apart without relying on colour alone. */
+::highlight(translatable) {
+  text-decoration: underline dotted var(--hint-underline, #2f73d9);
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
 ::highlight(lookup) {
@@ -1666,3 +1673,32 @@ html.native-app .sketch-bar { padding-top: calc(8px + env(safe-area-inset-top, 0
 .sync-message.error { color: var(--misspelled); }
 .sync-summary { padding: 12px; margin: 10px 0; border-radius: 12px; background: var(--sidebar); }
 .sync-summary p { margin: 0; }
+
+/* ---------- Underline settings ---------- */
+
+.underline-preview { margin: 6px 0 2px; font-size: 15px; color: var(--muted); }
+.underline-preview .u-spell, .underline-preview .u-hint { color: var(--text); text-underline-offset: 3px; }
+.underline-preview .u-spell { text-decoration: underline wavy var(--spell-underline, var(--misspelled)); text-decoration-thickness: 1.5px; }
+.underline-preview .u-hint { text-decoration: underline dotted var(--hint-underline, #2f73d9); text-decoration-thickness: 2px; }
+.underline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.underline-row .segmented { flex: 1 1 160px; }
+.colour-dots { display: flex; gap: 8px; margin-top: 8px; }
+.underline-row .colour-dots { margin-top: 0; }
+.colour-dot {
+  width: 28px;
+  height: 28px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 2px var(--bg);
+}
+.colour-dot[aria-checked="true"] { border-color: var(--swatch); }
+
+/* The word card for a blue (look-alike) word leads with the translations. */
+.spelling.lookalike { display: flex; flex-direction: column; }
+.spelling.lookalike .xlat-guess { order: 2; margin: 4px 0 8px; padding-top: 0; border-top: none; }
+.spelling.lookalike .suggestions { order: 4; }
+.spelling.lookalike .card-actions { order: 5; }
+.spelling.lookalike .misspelled-word { order: 1; text-decoration: underline dotted var(--hint-underline, #2f73d9); text-decoration-thickness: 2px; }
+.spelling.lookalike .card-label { order: 0; }
+.spelling.lookalike::after { content: "Or, if you meant English:"; order: 3; margin: 6px 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }

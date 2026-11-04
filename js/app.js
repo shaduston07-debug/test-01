@@ -390,11 +390,43 @@
     scanTimer = setTimeout(scanSpelling, 350);
   }
 
+  /* Underlines: red (wavy) for spelling mistakes, blue (dotted) for words that may be translations. */
+
+  const UNDERLINE_KEY = 'inkwell.underlines';
+  const UNDERLINE_DEFAULTS = { spell: 'on', spellColour: '#e5352b', hints: 'lookalikes', hintColour: '#2f73d9' };
+  const underlineSettings = () => {
+    try { return { ...UNDERLINE_DEFAULTS, ...JSON.parse(localStorage.getItem(UNDERLINE_KEY)) }; } catch { return { ...UNDERLINE_DEFAULTS }; }
+  };
+  const hintCache = new Map();
+
+  // A word from another language, or nearly one: "mobali", "vordr", "voror".
+  // Not English and not in your Personal Dictionary.
+  function isForeign(word) {
+    const key = 'f:' + word.toLowerCase();
+    if (!hintCache.has(key)) hintCache.set(key, !SpellCheck.isOwnWord(word) && Lexicon.lookalike(word));
+    return hintCache.get(key);
+  }
+
+  // 'spell', 'hint' or '' for one word, given the underline settings.
+  function underlineFor(word, settings) {
+    if (settings.hints !== 'off') {
+      if (isForeign(word)) return 'hint';
+      if (settings.hints === 'all' && SpellCheck.isOwnWord(word)) {
+        const key = 't:' + word.toLowerCase();
+        if (!hintCache.has(key)) hintCache.set(key, Lexicon.translatable(word));
+        if (hintCache.get(key)) return 'hint';
+      }
+    }
+    return settings.spell === 'on' && !SpellCheck.isCorrect(word) ? 'spell' : '';
+  }
+
   function scanSpelling() {
     if (!supportsHighlights || !SpellCheck.ready) return;
     const sel = getSelection();
     const caret = typing && sel.rangeCount && sel.isCollapsed ? { node: sel.anchorNode, offset: sel.anchorOffset } : null;
+    const settings = underlineSettings();
     const ranges = [];
+    const hints = [];
     const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement.closest(XLAT)) continue; // translated words aren't English
@@ -403,14 +435,16 @@
         const end = m.index + m[0].length;
         // Don't nag about the word that's still being typed.
         if (caret && caret.node === node && caret.offset === end) continue;
-        if (SpellCheck.isCorrect(m[0])) continue;
+        const kind = underlineFor(m[0], settings);
+        if (!kind) continue;
         const range = document.createRange();
         range.setStart(node, m.index);
         range.setEnd(node, end);
-        ranges.push(range);
+        (kind === 'spell' ? ranges : hints).push(range);
       }
     }
     CSS.highlights.set('misspelled', new Highlight(...ranges));
+    CSS.highlights.set('translatable', new Highlight(...hints));
   }
 
   function setLookupHighlight(range) {
@@ -498,9 +532,10 @@
       showCard();
       showLang(spanLang(hit.xlat), hit.xlat.dataset.original, token);
     } else if (misspelled) {
+      const lookalike = underlineSettings().hints !== 'off' && isForeign(hit.word);
       card.innerHTML = `
-        <div class="spelling">
-          <p class="card-label">Spelling</p>
+        <div class="spelling${lookalike ? ' lookalike' : ''}">
+          <p class="card-label">${lookalike ? 'Possible translation' : 'Spelling'}</p>
           <p class="misspelled-word"></p>
           <div class="suggestions"><span class="muted">Finding suggestions…</span></div>
           <div class="card-actions">
@@ -531,7 +566,7 @@
           const guess = card.querySelector('.xlat-guess');
           guess.hidden = false;
           guess.innerHTML = guesses.map(g =>
-            `<p class="card-label">Did you mean the ${esc(g.lang.name)}</p>` +
+            `<p class="card-label">${lookalike ? '' : 'Did you mean '}the ${esc(g.lang.name)}</p>` +
             g.entries.map(e => xlatOption(e, false)).join('')).join('');
         }
         positionCard();
@@ -545,7 +580,13 @@
         <div class="definition"></div>
         <div class="xlat-panel"></div>`;
       showCard();
-      switchTab(pref(TAB_KEY, 'define'));
+      // A blue (translatable) word opens on a language that can translate it.
+      let tab = pref(TAB_KEY, 'define');
+      if (underlineSettings().hints === 'all' && Lexicon.translatable(hit.word) &&
+          (tab === 'define' || !Lexicon.get(tab) || !Lexicon.translate(tab, hit.word).length)) {
+        tab = (Lexicon.list().find(l => Lexicon.translate(l.id, hit.word).length) || { id: tab }).id;
+      }
+      switchTab(tab);
     }
   }
 
@@ -1124,7 +1165,8 @@
     if (!SpellCheck.ready || e.detail > 1 || !getSelection().isCollapsed) return;
     const hit = wordAtPoint(e.clientX, e.clientY);
     if (!hit) return closeCard();
-    const misspelled = !hit.xlat && !SpellCheck.isCorrect(hit.word);
+    const misspelled = !hit.xlat && (!SpellCheck.isCorrect(hit.word) ||
+      (underlineSettings().hints !== 'off' && isForeign(hit.word)));
     if (!misspelled && !defineToggle.checked) return closeCard();
     if (active && active.range.startContainer === hit.range.startContainer &&
         active.range.startOffset === hit.range.startOffset) return; // same word, already open
@@ -1380,6 +1422,7 @@
   let dictionarySynced = false;
   let lastSavedWords = '';
   SpellCheck.onChange(() => {
+    hintCache.clear();
     scanSpelling();
     Sync.schedule();
     if (!dictModal.hidden) renderDictionary();
@@ -1558,10 +1601,40 @@
     if (btn.dataset.font) setPage({ font: btn.dataset.font });
     if (btn.closest('#size-choice')) setPage({ size: btn.dataset.size });
     if (btn.dataset.width) setPage({ width: btn.dataset.width });
+    if (btn.dataset.spell || btn.dataset.spellColour || btn.dataset.hints || btn.dataset.hintColour) {
+      setUnderlines({
+        ...(btn.dataset.spell && { spell: btn.dataset.spell }),
+        ...(btn.dataset.spellColour && { spellColour: btn.dataset.spellColour }),
+        ...(btn.dataset.hints && { hints: btn.dataset.hints }),
+        ...(btn.dataset.hintColour && { hintColour: btn.dataset.hintColour }),
+      });
+    }
   });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyAppearance);
   applyAppearance();
   applyPage();
+
+  const SPELL_COLOURS = [['Red', '#e5352b'], ['Orange', '#e8812c'], ['Pink', '#d6458a'], ['Purple', '#8a52d6']];
+  const HINT_COLOURS = [['Blue', '#2f73d9'], ['Teal', '#13958d'], ['Green', '#2f9e5b'], ['Purple', '#8a52d6'], ['Gold', '#c99a06']];
+
+  function setUnderlines(change) {
+    try { localStorage.setItem(UNDERLINE_KEY, JSON.stringify({ ...underlineSettings(), ...change })); } catch { /* this visit only */ }
+    applyUnderlines();
+    scanSpelling();
+  }
+
+  function applyUnderlines() {
+    const u = underlineSettings();
+    root.style.setProperty('--spell-underline', u.spellColour);
+    root.style.setProperty('--hint-underline', u.hintColour);
+    document.querySelectorAll('#spell-choice [data-spell]').forEach(b => b.setAttribute('aria-checked', b.dataset.spell === u.spell));
+    document.querySelectorAll('#hint-choice [data-hints]').forEach(b => b.setAttribute('aria-checked', b.dataset.hints === u.hints));
+    const dots = (list, key, current) => list.map(([name, c]) =>
+      `<button role="radio" class="colour-dot" data-${key}="${c}" aria-checked="${c === current}" title="${name}" aria-label="${name}" style="--swatch:${c}"></button>`).join('');
+    $('#spell-colours').innerHTML = dots(SPELL_COLOURS, 'spell-colour', u.spellColour);
+    $('#hint-colours').innerHTML = dots(HINT_COLOURS, 'hint-colour', u.hintColour);
+  }
+  applyUnderlines();
 
   /* Claude with your own API key (not needed, and hidden, on claude.ai) */
 
