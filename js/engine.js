@@ -408,6 +408,20 @@ export class StrokeEngine {
     return out;
   }
 
+  // The stroke buffer is an 8-bit premultiplied canvas: hundreds of faint overlapping dabs drift
+  // its colour (rounding), so soft edges / light pressure came out a different shade from the
+  // chosen colour ("a second layer" over a fill of the same colour). A paint stroke is one colour,
+  // so the buffer's colour is reset to exactly that colour, keeping only its alpha.
+  trueColor(r) {
+    if (this.kind !== 'paint' || !this.o.color || r.w <= 0 || r.h <= 0) return;
+    const b = this.bctx;
+    // 'source-in' is unbounded: clip to the rectangle or it would wipe the rest of the stroke
+    b.save(); b.setTransform(1, 0, 0, 1, 0, 0); b.beginPath(); b.rect(r.x, r.y, r.w, r.h); b.clip();
+    b.globalAlpha = 1; b.globalCompositeOperation = 'source-in';
+    b.fillStyle = this.o.color; b.fillRect(r.x, r.y, r.w, r.h);
+    b.restore();
+  }
+
   updatePreview() {
     if (!this.active || this.kind === 'smudge') return;
     if (this.fast) { this.dirty = emptyRect(); return; }
@@ -430,6 +444,7 @@ export class StrokeEngine {
       } else b.drawImage(sel, x, y, w, h, x, y, w, h);
       b.restore();
     }
+    this.trueColor(r);
     // only the changed rectangle is recomposited (source-rect copies, no full-canvas clip draws)
     const p = this.preview.getContext('2d');
     p.globalAlpha = 1; p.globalCompositeOperation = 'source-over';
@@ -474,6 +489,7 @@ export class StrokeEngine {
       before.getContext('2d').drawImage(this.target.canvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
     }
     if (this.kind !== 'smudge' && rect.w > 0 && rect.h > 0) {
+      this.trueColor(rect);
       const t = this.tctx;
       t.save();
       t.globalAlpha = this.opacity; t.globalCompositeOperation = this.op;

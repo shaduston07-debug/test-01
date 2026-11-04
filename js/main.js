@@ -1,5 +1,5 @@
 // Inkwell Studio — app core: view, input & gestures, tools, rendering, persistence.
-import { $, $$, h, clamp, emptyRect, growRect, toast, makeCanvas, rgbToHex, canvasToBlob, dist, confirmDialog } from './util.js';
+import { $, $$, h, clamp, emptyRect, growRect, toast, makeCanvas, rgbToHex, hexToRgb, canvasToBlob, dist, confirmDialog } from './util.js';
 import { ICONS } from './icons.js';
 import { Doc, Layer } from './doc.js';
 import { History, snapshot, pixelCmd, withUndo } from './history.js';
@@ -1166,7 +1166,7 @@ class App {
     const w = ref.width, hh = ref.height;
     const src = ref.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, hh).data;
     const sel = this.selection.active ? this.selection.mask : null;
-    const region = await fillRegionAsync(src, w, hh, x, y, { tolerance: tolerance ?? s.fillTolerance, gap: s.fillGap, expand: s.fillExpand });
+    const region = await fillRegionAsync(src, w, hh, x, y, { tolerance: tolerance ?? s.fillTolerance, gap: s.fillGap, expand: s.fillExpand, color: hexToRgb(color) });
     if (!region || this.doc !== d) return false;
     const fill = regionToCanvas(region, w, hh, color, sel);
     withUndo(this.history, target.canvas, 'Fill', (c) => {

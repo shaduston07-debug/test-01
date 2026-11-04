@@ -96,7 +96,7 @@ function similarity(src, w, h, x, y, tolerance) {
 // refCanvas: what boundaries are read from (doc space). Returns a doc-sized canvas with the fill.
 // Pure flood-fill core (runs on the main thread or in a worker): returns the filled region
 // as a 0/1 mask, or null when nothing would be filled.
-export function fillRegion(src, w, h, x, y, { tolerance = 0.1, gap = 0, expand = 1 } = {}) {
+export function fillRegion(src, w, h, x, y, { tolerance = 0.1, gap = 0, expand = 1, color = null } = {}) {
   x = Math.floor(x); y = Math.floor(y);
   if (x < 0 || y < 0 || x >= w || y >= h) return null;
   const n = w * h;
@@ -121,6 +121,21 @@ export function fillRegion(src, w, h, x, y, { tolerance = 0.1, gap = 0, expand =
     } else region = scanFill(barrier, w, h, x, y, 0);
   } else region = scanFill(barrier, w, h, x, y, 0);
   if (!region.bbox) return null;
+  // soak into touching soft edges already painted in the fill colour (faint brush edges,
+  // anti-aliasing), so no lighter half-transparent band is left between the fill and earlier
+  // paint. Only see-through pixels of that colour join; solid paint stays a wall, so the fill
+  // can't travel through it into other areas.
+  if (color) {
+    const [cr, cg, cb] = color, ct = 40;
+    let any = false;
+    const m = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      if (region[i]) { m[i] = 1; continue; }
+      const a = src[j + 3];
+      if (a > 0 && a < 250 && Math.abs(src[j] - cr) <= ct && Math.abs(src[j + 1] - cg) <= ct && Math.abs(src[j + 2] - cb) <= ct) { m[i] = 1; any = true; }
+    }
+    if (any) region = scanFill(m, w, h, x, y, 1);
+  }
   if (expand > 0) region = dilate(region, w, h, expand, region.bbox);
   return region;
 }
