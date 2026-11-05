@@ -36,7 +36,9 @@ export const DEFAULT_BRUSHES = [
   B({ id: 'bristle', name: 'Dry Bristle', category: 'Painting', tip: 'bristle', follow: true, size: 60, maxSize: 300, sizePressure: 0.3, flowPressure: 0.6, flow: 0.7, spacing: 0.03, streamline: 0.2 }),
   B({ id: 'watercolor', name: 'Watercolor Wash', category: 'Painting', hardness: 0.2, size: 90, maxSize: 500, sizePressure: 0.4, flow: 0.12, opacity: 0.8, grain: 'paper', grainDepth: 0.6, grainScale: 1.5, streamline: 0.2, spacing: 0.06 }),
   B({ id: 'marker', name: 'Marker', category: 'Painting', hardness: 0.92, roundness: 0.7, rotation: 30, size: 24, maxSize: 150, sizePressure: 0.15, flow: 1, opacity: 0.55, streamline: 0.3, spacing: 0.03, taper: 0 }),
-  B({ id: 'blender', name: 'Soft Blender', category: 'Painting', hardness: 0.3, size: 60, maxSize: 400, sizePressure: 0.4, flowPressure: 0.6, smudgeStrength: 0.85 }),
+  B({ id: 'blender', name: 'Soft Blender', category: 'Painting', hardness: 0.3, size: 60, maxSize: 400, sizePressure: 0.4, flowPressure: 0.5, smudgeStrength: 0.55, spacing: 0.08 }),
+  B({ id: 'blender-blur', name: 'Blur Blender', category: 'Painting', hardness: 0.15, size: 80, maxSize: 500, sizePressure: 0.3, flowPressure: 0.5, smudgeMode: 'blur', spacing: 0.1 }),
+  B({ id: 'blender-finger', name: 'Finger Smudge', category: 'Painting', hardness: 0.55, size: 40, maxSize: 300, sizePressure: 0.5, flowPressure: 0.5, smudgeStrength: 0.85, spacing: 0.06 }),
   // Airbrush
   B({ id: 'soft-air', name: 'Soft Airbrush', category: 'Airbrush', hardness: 0, size: 160, maxSize: 800, sizePressure: 0.2, flowPressure: 0.8, flow: 0.08, spacing: 0.05, streamline: 0.1, taper: 0 }),
   B({ id: 'med-air', name: 'Medium Airbrush', category: 'Airbrush', hardness: 0.5, size: 80, maxSize: 600, sizePressure: 0.2, flowPressure: 0.8, flow: 0.12, spacing: 0.05, taper: 0 }),

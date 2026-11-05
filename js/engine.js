@@ -3,6 +3,7 @@
 // the stroke opacity (so overlapping stamps never exceed it, like Procreate's "glaze").
 // Smudge works directly on the layer.
 import { makeCanvas, emptyRect, growRect, clampRect, clamp } from './util.js';
+import { mixDab } from './smudgegl.js';
 import { snapshot, getBackup, pixelCmd } from './history.js';
 import { getTintedTip, getTipMask, getGrain, isInkBrush, steadyInk } from './brushes.js';
 
@@ -203,7 +204,7 @@ export class StrokeEngine {
       pt.v = this.vSm;
       this.travelNow = this.travel + pos;
       // stampAt returns the un-jittered size so spacing needn't recompute it
-      this.carry = Math.max(0.4 / this.scale, this.stampAt(pt) * Math.max(0.01, this.brush.spacing));
+      this.carry = Math.max(0.4 / this.scale, this.stampAt(pt) * Math.max(this.kind === 'smudge' ? 0.12 : 0.01, this.brush.spacing)); // smudge: fewer, distance-scaled dabs
     }
     this.carry -= len - pos;
     this.travel += len;
@@ -228,7 +229,7 @@ export class StrokeEngine {
     }
     return Math.max(0.3, s / this.scale);
   }
-  spacingAt(pt) { return Math.max(0.4 / this.scale, this.sizeAt(pt) * Math.max(0.01, this.brush.spacing)); }
+  spacingAt(pt) { return Math.max(0.4 / this.scale, this.sizeAt(pt) * Math.max(this.kind === 'smudge' ? 0.12 : 0.01, this.brush.spacing)); }
 
   stampAt(pt) {
     const b = this.brush;
@@ -247,6 +248,7 @@ export class StrokeEngine {
       if (k > 1) k = 1 + (k - 1) * this.blobK;
       alpha = Math.min(1, alpha * (k + (1 - k) * smooth((this.travelNow ?? this.travel) * this.scale / fadeLen(b.fadeStartLen, this.size))));
     }
+    if (this.kind === 'smudge') this.smP = pt.p ?? 1;
     let x = pt.x, y = pt.y;
     if (b.scatter) { x += (Math.random() - 0.5) * 2 * size * b.scatter; y += (Math.random() - 0.5) * 2 * size * b.scatter; }
     let ang = (b.rotation || 0) * Math.PI / 180 + (b.follow ? this.dir : 0) + (Math.random() - 0.5) * TAU * (b.angleJitter || 0);
@@ -352,33 +354,126 @@ export class StrokeEngine {
     ctx.drawImage(this.stampC, 0, 0, S, S, x - r, y - r, S, S);
   }
 
+  // Smudge / blend, like Procreate's smudge and Clip Studio's blend tools.
+  // · Strength doesn't depend on how densely dabs are laid down: each dab's share is scaled by
+  //   the distance it covers (a fraction of the brush diameter).
+  // · Pressure sets how much paint moves (light = gentle), on top of the tool's opacity.
+  // · The tip carries the paint it picked up and mixes in fresh paint as it travels
+  //   (Smudge strength = how far colour is dragged).
+  // · Mixing is a true premultiplied blend, so it also pulls see-through areas into paint and
+  //   paint into empty areas (no hard rim, no darkening).
+  // · smudgeMode 'blur' softens what is under the tip instead of dragging it.
   smudgeStamp(x, y, size, alpha) {
     const S = this.smS, buf = this.smudgeBuf, bx = buf.getContext('2d');
     const sx = x - size / 2, sy = y - size / 2;
+    const tgt = this.target.canvas;
+    const blur = this.brush.smudgeMode === 'blur';
     if (!this.smudgeInit) {
-      bx.clearRect(0, 0, S, S);
-      bx.drawImage(this.target.canvas, sx, sy, size, size, 0, 0, S, S);
-      this.smudgeInit = true;
-      return;
+      bx.globalCompositeOperation = 'copy'; bx.globalAlpha = 1;
+      bx.drawImage(tgt, sx, sy, size, size, 0, 0, S, S);
+      bx.globalCompositeOperation = 'source-over';
+      this.smudgeInit = true; this.smLast = { x, y };
+      if (!blur) return;
     }
+    // distance covered since the last dab, as a fraction of the diameter
+    const d = this.smLast ? Math.hypot(x - this.smLast.x, y - this.smLast.y) : size * 0.1;
+    this.smLast = { x, y };
+    const step = clamp(d / Math.max(1, size), 0.02, 1);
+    const p = this.smP ?? 1;
     const strength = clamp(this.brush.smudgeStrength ?? 0.7, 0, 1);
-    const t = this.smudgeTmp.getContext('2d');
-    t.globalCompositeOperation = 'source-over';
-    t.clearRect(0, 0, S, S);
-    t.drawImage(buf, 0, 0);
-    t.globalCompositeOperation = 'destination-in';
-    t.drawImage(this.mask, 0, 0, S, S);
-    t.globalCompositeOperation = 'source-over';
+    // how much of the canvas under the tip is replaced per brush-diameter of travel
+    const perDiam = clamp(alpha * this.opacity, 0, 1) * (0.25 + 0.6 * p) * (blur ? 0.9 : 0.75);
+    const a = 1 - Math.pow(1 - clamp(perDiam, 0, 0.98), step);
+    if (a <= 0.002) return;
+    // work on a whole-pixel box at 1:1, so pixels outside the tip are copied back unchanged
+    const ix = Math.floor(sx), iy = Math.floor(sy), W = Math.min(2048, Math.ceil(sx + size) - ix + 1);
+    const ox = sx - ix, oy = sy - iy; // where the tip sits inside the box
+    if (!this.smW || this.smW.width < W) { this.smW = makeCanvas(W, W); this.smudgeTmp2 = makeCanvas(W, W); this.smudgeTmp3 = makeCanvas(W, W); this.smU = makeCanvas(W, W); }
+    const t = this.smW.getContext('2d'), t2 = this.smudgeTmp2.getContext('2d');
+    const tipMask = (c) => c.drawImage(this.mask, 0, 0, this.mask.width, this.mask.height, ox, oy, size, size);
+    // source: the carried paint, or a softened copy of what is under the tip
+    let src = buf;
+    if (blur) {
+      // a softened copy of the area: shrink and enlarge again (works everywhere, no filters)
+      const t3 = this.smudgeTmp3.getContext('2d'), k = Math.max(3, Math.min(W, 6)); // blur radius ≈ 1/3 of the tip
+      // (a separate small canvas: drawing a canvas onto itself with 'copy' would clear it first)
+      if (!this.smSmall) this.smSmall = makeCanvas(8, 8);
+      const sm = this.smSmall.getContext('2d');
+      sm.globalCompositeOperation = 'copy'; sm.imageSmoothingQuality = 'high';
+      // sample twice the tip's area around it, so the blur reaches past the tip's own box
+      sm.drawImage(tgt, ix - W / 2, iy - W / 2, W * 2, W * 2, 0, 0, k, k);
+      t3.globalCompositeOperation = 'copy'; t3.globalAlpha = 1; t3.imageSmoothingQuality = 'high';
+      t3.drawImage(this.smSmall, 0, 0, k, k, -W / 2, -W / 2, W * 2, W * 2);
+      t3.globalCompositeOperation = 'source-over';
+    }
+    // T1 = source × tip (premultiplied), placed where the tip is in the box
+    t.globalCompositeOperation = 'copy'; t.globalAlpha = 1;
+    if (blur) t.drawImage(this.smudgeTmp3, 0, 0, W, W, 0, 0, W, W);
+    else t.drawImage(buf, 0, 0, S, S, ox, oy, size, size);
+    t.globalCompositeOperation = 'destination-in'; tipMask(t);
+    // the mix, on a 1:1 copy of the canvas box (T2):
+    t2.globalCompositeOperation = 'copy'; t2.globalAlpha = 1;
+    t2.drawImage(tgt, ix, iy, W, W, 0, 0, W, W);
     const tc = this.tctx;
+    // GPU (float) mix: exact, no colour drift. Inputs as exact W×W canvases.
+    if (!this.smGL || this.smGL.d.width !== W) {
+      this.smGL = { d: makeCanvas(W, W), s: makeCanvas(W, W), m: makeCanvas(W, W) };
+    }
+    const G = this.smGL, gd = G.d.getContext('2d'), gs = G.s.getContext('2d'), gm = G.m.getContext('2d');
+    gd.globalCompositeOperation = 'copy'; gd.drawImage(tgt, ix, iy, W, W, 0, 0, W, W);
+    gs.globalCompositeOperation = 'copy';
+    if (blur) gs.drawImage(this.smudgeTmp3, 0, 0, W, W, 0, 0, W, W);
+    else { gs.clearRect(0, 0, W, W); gs.globalCompositeOperation = 'source-over'; gs.drawImage(buf, 0, 0, S, S, ox, oy, size, size); }
+    gm.globalCompositeOperation = 'copy'; gm.clearRect(0, 0, W, W); gm.globalCompositeOperation = 'source-over'; tipMask(gm);
+    const mixed = mixDab(G.d, G.s, G.m, W, a, this.alphaLock);
+    if (mixed) {
+      tc.save(); tc.beginPath(); tc.rect(ix, iy, W, W); tc.clip();
+      tc.globalCompositeOperation = 'copy'; tc.drawImage(mixed, 0, 0, W, W, ix, iy, W, W);
+      tc.restore();
+    } else {
     tc.save();
-    tc.globalAlpha = clamp(alpha * this.opacity, 0, 1);
-    tc.globalCompositeOperation = this.alphaLock ? 'source-atop' : 'source-over';
-    tc.drawImage(this.smudgeTmp, 0, 0, S, S, sx, sy, size, size);
+    tc.beginPath(); tc.rect(ix, iy, W, W); tc.clip();
+    // 1. colour: blend the source in over existing paint, keeping its opacity exactly
+    //    (so solid paint stays solid however long you blend — no slow fading from rounding)
+    t2.globalCompositeOperation = 'source-atop'; t2.globalAlpha = a;
+    t2.drawImage(this.smW, 0, 0, W, W, 0, 0, W, W);
+    if (!this.alphaLock) {
+      // 2. where the source itself is see-through, thin the paint (smudging empty areas into
+      //    paint): tip × (1 − source opacity) — the source's own alpha, not the tip's soft edge
+      const u = this.smU.getContext('2d');
+      u.globalCompositeOperation = 'copy'; u.globalAlpha = 1; tipMask(u);
+      u.globalCompositeOperation = 'destination-out';
+      if (blur) u.drawImage(this.smudgeTmp3, 0, 0, W, W, 0, 0, W, W); else u.drawImage(buf, 0, 0, S, S, ox, oy, size, size);
+      u.globalCompositeOperation = 'source-over';
+      t2.globalCompositeOperation = 'destination-out'; t2.globalAlpha = a;
+      t2.drawImage(this.smU, 0, 0, W, W, 0, 0, W, W);
+      // 3. where the canvas is empty, lay the source down (smudging paint into empty areas)
+      t2.globalCompositeOperation = 'destination-over'; t2.globalAlpha = a;
+      t2.drawImage(this.smW, 0, 0, W, W, 0, 0, W, W);
+    }
+    t2.globalAlpha = 1; t2.globalCompositeOperation = 'source-over';
+    tc.globalCompositeOperation = 'copy';
+    tc.drawImage(this.smudgeTmp2, 0, 0, W, W, ix, iy, W, W);
     tc.restore();
-    // pick up colour from the canvas under the tip
-    bx.globalAlpha = 1 - strength;
-    bx.drawImage(this.target.canvas, sx, sy, size, size, 0, 0, S, S);
-    bx.globalAlpha = 1;
+    }
+    t.globalCompositeOperation = 'source-over';
+    // the tip mixes in fresh paint from under it as it travels (exact lerp as well)
+    if (!blur) {
+      const keep = Math.pow(0.12 + 0.83 * strength, step); // colour left on the tip after this dab
+      // GPU mix (exact) of the tip's paint with what's under it; canvas fallback otherwise
+      if (!this.smPick || this.smPick.s.width !== S) { this.smPick = { s: makeCanvas(S, S), m: makeCanvas(S, S) }; const mm = this.smPick.m.getContext('2d'); mm.fillStyle = '#fff'; mm.fillRect(0, 0, S, S); }
+      const ps = this.smPick.s.getContext('2d');
+      ps.globalCompositeOperation = 'copy'; ps.drawImage(tgt, sx, sy, size, size, 0, 0, S, S);
+      const picked = mixDab(buf, this.smPick.s, this.smPick.m, S, 1 - keep, false, 'pick');
+      if (picked) { bx.globalCompositeOperation = 'copy'; bx.drawImage(picked, 0, 0, S, S, 0, 0, S, S); bx.globalCompositeOperation = 'source-over'; }
+      else {
+        const u = this.smudgeTmp.getContext('2d');
+        u.globalCompositeOperation = 'copy'; u.globalAlpha = keep; u.drawImage(buf, 0, 0, S, S, 0, 0, S, S);
+        u.globalCompositeOperation = 'lighter'; u.globalAlpha = 1 - keep; u.drawImage(tgt, sx, sy, size, size, 0, 0, S, S);
+        u.globalAlpha = 1; u.globalCompositeOperation = 'source-over';
+        bx.globalCompositeOperation = 'copy'; bx.drawImage(this.smudgeTmp, 0, 0, S, S, 0, 0, S, S); bx.globalCompositeOperation = 'source-over';
+      }
+    }
   }
 
   // QuickShape: replace the stroke with a clean path (local coords, each {x,y,p,t}).
