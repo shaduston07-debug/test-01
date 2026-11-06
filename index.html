@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Inkwell">
+<meta name="theme-color" content="#151517">
+<title>Inkwell Studio</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <!-- ───────── Gallery ───────── -->
+  <section id="gallery" class="screen">
+    <header class="gal-head">
+      <div class="brand"><span class="logo"></span>Inkwell <em>Studio</em></div>
+      <div class="gal-actions">
+        <button class="pill" id="gal-folder">＋ Folder</button>
+        <button class="pill" id="gal-import">Import</button>
+        <button class="pill" id="gal-backup">Backup</button>
+        <button class="pill" id="gal-settings">Settings</button>
+        <button class="pill primary" id="gal-new">＋ New</button>
+      </div>
+    </header>
+    <div class="gal-modes">
+      <button class="mode-card" data-mode="paint">
+        <span class="mc-ico paint"></span><b>Illustrate</b><small>Painting &amp; drawing</small>
+      </button>
+      <button class="mode-card" data-mode="animate">
+        <span class="mc-ico anim"></span><b>Animate</b><small>Timeline, tracks, performance capture</small>
+      </button>
+      <button class="mode-card" data-mode="webtoon">
+        <span class="mc-ico toon"></span><b>Webtoon</b><small>Long canvas, panels, balloons, slicing</small>
+      </button>
+    </div>
+    <div id="gal-crumb" class="gal-crumb" hidden></div>
+    <div id="gal-grid" class="gal-grid"></div>
+    <input type="file" id="file-any" hidden>
+  </section>
+
+  <!-- ───────── Studio ───────── -->
+  <section id="studio" class="screen" hidden>
+    <canvas id="view"></canvas>
+    <div id="overlay-ui">
+      <header id="topbar">
+        <div class="tb-left">
+          <button class="tb-text" id="btn-gallery">Gallery</button>
+          <button class="ico" id="btn-actions" title="Actions"></button>
+          <button class="ico" id="btn-adjust" title="Adjustments"></button>
+          <button class="ico tool" data-tool="select" title="Selection (S)"></button>
+          <button class="ico tool" data-tool="transform" title="Transform (V)"></button>
+          <span class="tb-sep"></span>
+          <button class="ico tool" data-tool="fill" title="Fill (G)"></button>
+          <button class="ico tool" data-tool="eyedropper" title="Eyedropper (I)"></button>
+          <span class="mode-only still">
+            <button class="ico tool" data-tool="balloon" title="Text &amp; speech bubbles (T)"></button>
+            <button class="ico tool" data-tool="3d" title="3D layer: orbit, move, pose (D)"></button>
+          </span>
+          <span class="mode-only toon">
+            <button class="ico tool" data-tool="panel" title="Panel / frame tool (P)"></button>
+          </span>
+          <span class="mode-only anim">
+            <button class="ico tool" data-tool="move" title="Move track / perform (M)"></button>
+          </span>
+        </div>
+        <div class="tb-title" id="doc-title"></div>
+        <div class="tb-right">
+          <button class="ico tool" data-tool="brush" title="Paint (B)"></button>
+          <button class="ico tool" data-tool="smudge" title="Smudge (S)"></button>
+          <button class="ico tool" data-tool="eraser" title="Erase (E)"></button>
+          <button class="ico" id="btn-layers" title="Layers (L)"></button>
+          <button id="btn-color" title="Color — drag onto canvas to fill"><span></span></button>
+        </div>
+      </header>
+
+      <aside id="sidebar">
+        <div class="vslider" id="sl-size"><div class="fill"></div><div class="knob"></div></div>
+        <button class="sb-mod" id="btn-modify" title="Eyedropper (hold)"></button>
+        <div class="vslider" id="sl-opacity"><div class="fill"></div><div class="knob"></div></div>
+        <button class="sb-btn" id="btn-points" title="Saved brush sizes"></button>
+        <button class="sb-btn" id="btn-undo" title="Undo"></button>
+        <button class="sb-btn" id="btn-redo" title="Redo"></button>
+      </aside>
+      <div id="slider-bubble" hidden></div>
+
+      <div id="ctxbar" hidden></div>
+      <div id="timeline" hidden></div>
+    </div>
+    <div id="loupe" hidden><div></div></div>
+    <div id="popover" hidden></div>
+    <div id="hud" hidden></div>
+  </section>
+
+  <div id="modal-root"></div>
+  <div id="toast" hidden></div>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
