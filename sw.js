@@ -3,7 +3,7 @@
  * are served from a cache and refreshed in the background. Dictionary and
  * Wiktionary lookups still go to the network.
  */
-const CACHE = 'inkwell-v6';
+const CACHE = 'inkwell-v7';
 const SHELL = [
   './',
   'index.html',

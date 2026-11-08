@@ -150,7 +150,13 @@ const Cloud = (() => {
   const errorListeners = new Set();
   const timers = new Map();
 
+  // While GitHub sync is on, it is the one place notes are synced; the
+  // claude.ai account copy stops being read or written (so deletions stick).
+  let notesPaused = false;
+  const pauseNotes = paused => { notesPaused = paused; };
+
   async function loadNotes() {
+    if (notesPaused) return null;
     const s = await storePromise;
     if (!s) return null;
     const snap = await notesCollection(s).get();
@@ -159,6 +165,7 @@ const Cloud = (() => {
 
   // Coalesce typing into one write per pause.
   function saveNote(note) {
+    if (notesPaused) return;
     clearTimeout(timers.get(note.id));
     timers.set(note.id, setTimeout(async () => {
       const s = await storePromise;
@@ -169,6 +176,7 @@ const Cloud = (() => {
   }
 
   async function deleteNote(id) {
+    if (notesPaused) return;
     clearTimeout(timers.get(id));
     const s = await storePromise;
     if (s) write('note:' + id, () => notesCollection(s).doc(id).delete());
@@ -208,6 +216,7 @@ const Cloud = (() => {
     downloads: () => downloadsPromise,
     loadNotes,
     saveNote,
+    pauseNotes,
     deleteNote,
     loadDictionary,
     saveDictionary,

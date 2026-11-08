@@ -365,7 +365,8 @@ svg {
 .editor-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 18px clamp(20px, 6vw, 72px) 120px;
+  /* Room below the last line, so what you're writing never has to sit at the screen's edge. */
+  padding: 18px clamp(20px, 6vw, 72px) 55vh;
 }
 
 .note-date {

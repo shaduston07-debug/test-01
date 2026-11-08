@@ -1134,9 +1134,43 @@
 
   let saveTimer = null;
 
+  /* Keep the line you're writing comfortably up the screen, not at the bottom edge. */
+
+  const WRITING_LINE = 0.6;   // the caret stays above 60% of the visible height
+
+  function caretRect() {
+    const sel = getSelection();
+    if (!sel.rangeCount || !editor.contains(sel.anchorNode)) return null;
+    const range = sel.getRangeAt(0).cloneRange();
+    range.collapse(false);
+    const rect = range.getClientRects()[0];
+    if (rect && rect.height) return rect;
+    // An empty line has no text to measure: use its element instead.
+    const el = sel.anchorNode.nodeType === Node.ELEMENT_NODE ? sel.anchorNode : sel.anchorNode.parentElement;
+    return el ? el.getBoundingClientRect() : null;
+  }
+
+  function keepCaretComfortable() {
+    const rect = caretRect();
+    if (!rect) return;
+    const box = editorScroll.getBoundingClientRect();
+    // The on-screen keyboard shrinks the visual viewport; measure what's really visible.
+    const viewBottom = window.visualViewport ? window.visualViewport.offsetTop + window.visualViewport.height : window.innerHeight;
+    const top = Math.max(box.top, 0);
+    const bottom = Math.min(box.bottom, viewBottom);
+    const limit = top + (bottom - top) * WRITING_LINE;
+    if (rect.bottom > limit) {
+      autoScrolling = true;   // our own scroll: don't close the answer bubble or cards
+      editorScroll.scrollTop += rect.bottom - limit;
+      requestAnimationFrame(() => requestAnimationFrame(() => { autoScrolling = false; }));
+    }
+  }
+  let autoScrolling = false;
+
   editor.addEventListener('input', () => {
     typing = true;
     fixTranslatedSpans();
+    keepCaretComfortable();
     checkMath();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCurrent, 300);
@@ -1211,6 +1245,7 @@
     }
   });
   editorScroll.addEventListener('scroll', () => {
+    if (autoScrolling) return;
     closeCard();
     hideMath();
     hideSelectionBar();
@@ -1891,6 +1926,7 @@
   const isPristineWelcome = n => n.welcome && n.html === WELCOME.trim();
 
   // Bring in notes saved from other devices, and upload ones only this device has.
+  Cloud.pauseNotes(!!Sync.config());   // GitHub sync, when on, is the one place notes sync
   Cloud.loadNotes().then(remote => {
     if (!remote) return;
     if (remote.length) notes = notes.filter(n => !isPristineWelcome(n));
@@ -1958,8 +1994,7 @@
 
   function renderSyncLine(status = Sync.status()) {
     const line = $('#sync-line');
-    line.textContent = Cloud.onClaude ? 'Synced with your claude.ai account'
-      : status.state === 'off' ? 'Off'
+    line.textContent = status.state === 'off' ? (Cloud.onClaude ? 'claude.ai account' : 'Off')
         : status.state === 'syncing' ? 'Syncing\u2026'
           : status.state === 'error' ? 'Needs attention'
             : status.last ? 'Synced ' + syncedAt(status.last) : 'On';
@@ -1969,10 +2004,22 @@
   function renderSync() {
     const status = Sync.status();
     const cfg = Sync.config();
-    if (Cloud.onClaude) {
+    if (Cloud.onClaude && !cfg) {
+      // On claude.ai the page reaches GitHub through the viewer's GitHub connector.
       syncBody.innerHTML = `
-        <p class="modal-hint">Here on claude.ai your notes are already saved to your claude.ai account, so they're on every device where you open this page.</p>
-        <p class="modal-hint">To sync the installed iPad and iPhone app, set up Cloud sync inside the app. To move notes from here into it, use Share \u203A Back up all notes, then Restore a backup in the app.</p>`;
+        <p class="modal-hint">Right now notes on this page are saved to your claude.ai account. To share them with the Inkwell app on your iPad and phone, connect this page to the same private GitHub repository the app uses (normally <b>inkwell-notes</b>).</p>
+        <ol class="sync-steps">
+          <li>Make sure GitHub is connected in claude.ai: Settings \u203A Connectors \u203A GitHub.</li>
+          <li>Set up Cloud sync in the app first, so the repository exists.</li>
+          <li>Connect below. claude.ai will ask you to allow this page to use your GitHub connector.</li>
+        </ol>
+        <form class="sync-form" id="sync-form" data-mode="connector">
+          <input id="sync-repo" type="text" value="inkwell-notes" autocomplete="off" spellcheck="false" aria-label="Repository name">
+          <input id="sync-branch" type="text" value="main" autocomplete="off" spellcheck="false" aria-label="Branch">
+          <button type="submit" class="primary-btn">Connect with my GitHub connector</button>
+        </form>
+        <p class="sync-message" id="sync-message">${status.state === 'error' ? esc(status.message) : ''}</p>
+        <p class="modal-hint">Your notes here and in the app are combined; nothing is lost. From then on this page syncs through GitHub instead of your claude.ai account.</p>`;
       return;
     }
     if (!cfg) {
@@ -1994,7 +2041,7 @@
     }
     syncBody.innerHTML = `
       <div class="sync-summary">
-        <p><b>${esc(cfg.owner)}/${esc(cfg.repo)}</b></p>
+        <p><b>${esc(cfg.owner)}/${esc(cfg.repo)}</b>${cfg.mode === 'connector' ? ' \u00B7 through your GitHub connector' : ''}</p>
         <p class="sync-message${status.state === 'error' ? ' error' : ''}">${
           status.state === 'syncing' ? 'Syncing\u2026'
             : status.state === 'error' ? esc(status.message)
@@ -2026,18 +2073,22 @@
     if (btn.dataset.sync === 'disconnect') {
       if (!confirmByTapping(btn, 'Tap again to stop syncing on this device. Your notes stay here and on GitHub.')) return;
       Sync.disconnect();
+      Cloud.pauseNotes(false);
       renderSync();
     }
   });
   syncModal.addEventListener('submit', async e => {
     e.preventDefault();
-    const token = $('#sync-token').value.trim();
     const repo = $('#sync-repo').value.trim() || 'inkwell-notes';
     const message = $('#sync-message');
-    if (!token) return (message.textContent = 'Paste the access key first.');
+    const viaConnector = e.target.dataset.mode === 'connector';
+    const token = viaConnector ? '' : $('#sync-token').value.trim();
+    if (!viaConnector && !token) return (message.textContent = 'Paste the access key first.');
     message.textContent = 'Connecting\u2026';
     try {
-      await Sync.connect(token, repo);
+      if (viaConnector) await Sync.connectConnector(repo, $('#sync-branch').value.trim() || 'main');
+      else await Sync.connect(token, repo);
+      Cloud.pauseNotes(true);
       renderSync();
       await Sync.syncNow();
       flash('Cloud sync is on');
@@ -2045,7 +2096,7 @@
       message.textContent = {
         bad_token: 'GitHub didn\u2019t accept that key. Check you copied all of it.',
         offline: 'No connection. Try again when you\u2019re online.',
-      }[err.code] || err.message;
+      }[err.code] || Sync.message(err.code) || err.message;
     }
   });
 

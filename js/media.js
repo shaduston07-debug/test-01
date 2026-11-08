@@ -39,7 +39,8 @@ const Media = (() => {
 
   // Store a file; resolves { ref, url } where url can be shown right away.
   async function save(blob, kind) {
-    if (kind === 'image') {
+    // With GitHub sync on, pictures stay on this device and sync through GitHub.
+    if (kind === 'image' && !(typeof Sync !== 'undefined' && Sync.config())) {
       const assets = await Cloud.assets();
       if (assets) {
         try {
