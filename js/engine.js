@@ -426,7 +426,8 @@ export class StrokeEngine {
     const step = clamp(d / Math.max(1, size), 0.02, 1);
     const p = this.smP ?? 1;
     const strength = clamp(this.brush.smudgeStrength ?? 0.7, 0, 1);
-    const perDiam = clamp(alpha * this.opacity, 0, 1) * (0.25 + 0.6 * p) * (blur ? 0.9 : 0.75);
+    // per brush-width of travel: ~45% at light pressure, ~85–95% when pressing firmly
+    const perDiam = clamp(alpha * this.opacity, 0, 1) * (0.5 + 0.5 * p) * (blur ? 1.1 : 1.15);
     const a = 1 - Math.pow(1 - clamp(perDiam, 0, 0.98), step);
     if (a <= 0.002) return;
     // blur source: a box-averaged copy of the area (radius ≈ a third of the tip), N×N

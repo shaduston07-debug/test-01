@@ -20,6 +20,9 @@ import { QUALITIES as TL_QUALITIES } from './timelapse.js';
 import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask, wandRegion, regionToCanvas, GRADIENT_PRESETS } from './tools.js';
 import { parallelAdjust, wandRegionAsync } from './pool.js';
 import * as store from './storage.js';
+import { openStacks } from './stacks.js';
+import { openOutline } from './filters.js';
+import { pickedLayers, membersOf } from './layers.js';
 import * as Toon from './webtoon.js';
 import { insertLayer, structCmd, openLayers, onDocChanged, closeLayerSheet } from './layers.js';
 export { insertLayer, structCmd, openLayers, onDocChanged, closeLayerSheet };
@@ -29,7 +32,10 @@ export { insertLayer, structCmd, openLayers, onDocChanged, closeLayerSheet };
 // window: draggable by its title bar, stays open while you paint, remembers its position.
 let pop = null;
 const floats = new Map();
-export function openPopover(anchor, { title, body, width = 340, head = [], onClose, key, float = false, side = false }) {
+// sticky: the popover stays open while the canvas is touched (pinch / pan / zoom the view), e.g.
+// adjustments with a live preview — they finish only with their own Apply / Cancel
+export const popoverSticky = () => !!(pop && pop.sticky);
+export function openPopover(anchor, { title, body, width = 340, head = [], onClose, key, float = false, side = false, sticky = false }) {
   const k = key || title;
   if (floats.has(k)) { const f = floats.get(k).el; f.classList.remove('flash'); void f.offsetWidth; f.classList.add('flash'); return null; }
   if (pop && pop.key === k) { closePopover(); return null; }
@@ -59,8 +65,17 @@ export function openPopover(anchor, { title, body, width = 340, head = [], onClo
     place();
     // re-place whenever the content grows (e.g. more save points), so it never runs off screen
     if (window.ResizeObserver) { const ro = new ResizeObserver(() => { if (el.hidden) ro.disconnect(); else place(); }); ro.observe(el); }
-  } else el.append(h('div', { class: 'pop-arrow', style: { left: clamp(r.left + r.width / 2 - left, 24, W - 24) + 'px' } }));
-  pop = { el, anchor, onClose, key: k, body: bodyEl };
+  } else {
+    const arrow = h('div', { class: 'pop-arrow', style: { left: clamp(r.left + r.width / 2 - left, 24, W - 24) + 'px' } });
+    el.append(arrow);
+    // anchored low on the screen (the bottom context bar): open above it
+    if (r.top > innerHeight * 0.6) {
+      el.style.maxHeight = Math.max(160, r.top - 28) + 'px';
+      el.style.top = Math.max(8, r.top - 12 - el.offsetHeight) + 'px';
+      arrow.classList.add('below');
+    } else el.style.maxHeight = '';
+  }
+  pop = { el, anchor, onClose, key: k, body: bodyEl, sticky };
   const floatify = () => {
     const rect = el.getBoundingClientRect();
     pop = null; el.hidden = true;
@@ -490,8 +505,28 @@ export function openColor(app, anchor, target = null) {
           swatchGrid(pal));
       }
     };
+    // palettes of this project (from inserted pictures): ☆ copies one to your palettes
+    const projBox = h('div');
+    const renderProj = () => {
+      projBox.innerHTML = '';
+      const d = app.doc, pp = d ? d.projPalettes : [];
+      if (!pp.length) return;
+      projBox.append(h('div', { class: 'menu-section' }, 'This project (from pictures)'));
+      for (const pal of pp) {
+        const star = h('button', { class: 'pal-star' + (pal.starred ? ' on' : ''), title: pal.starred ? 'Saved to your palettes' : 'Keep in your palettes (all projects)', onclick: () => {
+          if (pal.starred) { toast('Already in your palettes'); return; }
+          pal.starred = true; app.dirtySave = true;
+          addPalette(pal.name, [...pal.colors]); toast(`“${pal.name}” added to your palettes`); renderProj();
+        } }, pal.starred ? '★' : '☆');
+        const del = h('button', { class: 'pal-more', title: 'Remove from this project', onclick: () => { d.projPalettes.splice(d.projPalettes.indexOf(pal), 1); app.dirtySave = true; renderProj(); } }, '×');
+        const row = h('div', { class: 'swatches' }); pal.colors.forEach((c) => row.append(swatchBtn(c)));
+        projBox.append(h('div', { class: 'pal-head proj' }, h('span', { class: 'pal-name' }, pal.name), del, star), row);
+      }
+    };
+    refreshProj = renderProj;
+    renderProj();
     box.append(h('div', { class: 'pal-top' }, h('div', { class: 'menu-section' }, 'History'), h('button', { class: 'pill', onclick: newPaletteMenu }, '＋ New palette')),
-      histRow, h('p', { class: 'hint' }, 'Tap a swatch to use it · hold to replace or delete'), palBox);
+      histRow, h('p', { class: 'hint' }, 'Tap a swatch to use it · hold to replace or delete'), projBox, palBox);
     renderSw();
     return { el: box, draw: () => {} };
   };
@@ -1143,6 +1178,7 @@ export function openSettings(app) {
     field('Memory budget for layers', { min: 300, max: 4000, step: 50, value: s.memoryMB, fmt: (v) => v + ' MB', onInput: (v) => { s.memoryMB = v; save(); } }),
     h('p', { class: 'hint' }, 'Sets how many layers you can add. M-series iPads start at 2000 MB (≈115 layers at 2048×2048). Drawing speed does not depend on layer count. If the app ever reloads by itself, lower this.'),
     switchRow('Autosave', s.autosave, (v) => { s.autosave = v; save(); }),
+    switchRow('Make a project palette from inserted pictures', s.picturePalette !== false, (v) => { s.picturePalette = v; save(); }),
   );
   const dlg = dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });
 }
@@ -1164,10 +1200,16 @@ function helpDialog() {
   });
 }
 
+let refreshProj = null;
+export function refreshPalettes() { refreshProj && refreshProj(); }
+
 // ───────── adjustments ─────────
 export function openAdjustments(app, anchor) {
   app.finishTransient();
   const body = h('div');
+  body.append(menuItem('adjust', 'Liquify', () => { closePopover(); app.setTool('liquify'); }));
+  body.append(menuItem('adjust', 'Outline', () => { closePopover(); setTimeout(() => openOutline(app, anchor), 0); }));
+  body.append(menuItem('adjust', 'Colouring stacks (layer presets)', () => { closePopover(); setTimeout(() => openStacks(app, anchor), 0); }));
   for (const [k, a] of Object.entries(ADJUSTMENTS)) body.append(menuItem('adjust', a.name, () => openAdjust(app, k, anchor)));
   openPopover(anchor, { title: 'Adjustments', body, width: 330 });
 }
@@ -1205,17 +1247,23 @@ function gradientEditor(params, run) {
 
 function openAdjust(app, key, anchor) {
   const adj = ADJUSTMENTS[key];
-  const target = app.doc.getTarget(false);
-  if (!target) { toast('Select a raster layer (or a drawing in the timeline)'); return; }
-  const c = target.canvas, ctx = c.getContext('2d');
-  let bb = alphaBounds(c);
-  if (!bb) { toast('This layer is empty'); return; }
+  // several layers picked in the Layers panel: each one gets the adjustment (and stays its own layer)
+  const picked = pickedLayers(app);
+  let canvases;
+  if (picked.length > 1) canvases = membersOf(app.doc, picked).filter((x) => x.type === 'raster' && !app.doc.isLocked(x)).map((x) => x.canvas);
+  else { const target = app.doc.getTarget(false); canvases = target ? [target.canvas] : []; }
+  if (!canvases.length) { toast('Select a raster layer (or a drawing in the timeline)'); return; }
   const pad = key === 'blur' || key === 'sharpen' ? 64 : 0;
-  const x0 = Math.max(0, bb.x - pad), y0 = Math.max(0, bb.y - pad);
-  bb = { x: x0, y: y0, w: Math.min(c.width, bb.x + bb.w + pad) - x0, h: Math.min(c.height, bb.y + bb.h + pad) - y0 };
-  snapshot(c);
-  const orig = ctx.getImageData(bb.x, bb.y, bb.w, bb.h);
-  const maskData = app.selection.active ? app.selection.mask.getContext('2d').getImageData(bb.x, bb.y, bb.w, bb.h).data : null;
+  const T = [];
+  for (const c of canvases) {
+    let bb = alphaBounds(c);
+    if (!bb) continue;
+    const x0 = Math.max(0, bb.x - pad), y0 = Math.max(0, bb.y - pad);
+    bb = { x: x0, y: y0, w: Math.min(c.width, bb.x + bb.w + pad) - x0, h: Math.min(c.height, bb.y + bb.h + pad) - y0 };
+    const ctx = c.getContext('2d');
+    T.push({ c, ctx, bb, orig: ctx.getImageData(bb.x, bb.y, bb.w, bb.h), maskData: app.selection.active ? app.selection.mask.getContext('2d').getImageData(bb.x, bb.y, bb.w, bb.h).data : null });
+  }
+  if (!T.length) { toast(canvases.length > 1 ? 'Those layers are empty' : 'This layer is empty'); return; }
   const params = Object.fromEntries(adj.params.map(([k, , , , def]) => [k, def]));
   let pending = false, done = false, busy = false, again = false, ticket = 0, applying = false;
   // runs on all worker cores in parallel bands; newest slider value wins
@@ -1225,16 +1273,20 @@ function openAdjust(app, key, anchor) {
       pending = false; if (done) return;
       if (busy) { again = true; return; }
       busy = true; const my = ++ticket;
-      const data = await parallelAdjust(key, { ...params, color: app.color }, orig.data, bb.w, bb.h);
+      const outs = [];
+      for (const t of T) outs.push(await parallelAdjust(key, { ...params, color: app.color }, t.orig.data, t.bb.w, t.bb.h));
       busy = false;
       if (done || my !== ticket) return;
       if (again) { again = false; run(); }
-      const img = new ImageData(data, bb.w, bb.h);
-      if (maskData) {
-        const o = orig.data, n = img.data;
-        for (let i = 0; i < n.length; i += 4) { const m = maskData[i + 3] / 255; if (m >= 1) continue; for (let k = 0; k < 4; k++) n[i + k] = o[i + k] + (n[i + k] - o[i + k]) * m; }
-      }
-      ctx.putImageData(img, bb.x, bb.y);
+      T.forEach((t, i) => {
+        const img = new ImageData(outs[i], t.bb.w, t.bb.h);
+        if (t.maskData) {
+          const o = t.orig.data, n = img.data, md = t.maskData;
+          for (let k = 0; k < n.length; k += 4) { const m = md[k + 3] / 255; if (m >= 1) continue; for (let q = 0; q < 4; q++) n[k + q] = o[k + q] + (n[k + q] - o[k + q]) * m; }
+        }
+        t.ctx.putImageData(img, t.bb.x, t.bb.y);
+        touch(t.c);
+      });
       app.requestRender();
     });
   };
@@ -1243,19 +1295,22 @@ function openAdjust(app, key, anchor) {
     // let the latest preview finish on the workers before committing it
     while (busy || pending || again) await new Promise((r) => setTimeout(r, 16));
     done = true;
-    const cmd = pixelCmd(c, { x: bb.x, y: bb.y, w: bb.w, h: bb.h }, adj.name, () => app.requestRender());
-    if (cmd) app.history.push(cmd);
+    const after = T.map((t) => t.ctx.getImageData(t.bb.x, t.bb.y, t.bb.w, t.bb.h));
+    const put = (imgs) => { T.forEach((t, i) => { t.ctx.putImageData(imgs[i], t.bb.x, t.bb.y); touch(t.c); }); app.requestRender(); };
+    const before = T.map((t) => t.orig);
+    app.history.push({ label: adj.name + (T.length > 1 ? ` (${T.length} layers)` : ''), bytes: T.reduce((a, t) => a + t.bb.w * t.bb.h * 8, 0), undo() { put(before); app.changed(); }, redo() { put(after); app.changed(); } });
     app.changed();
   };
-  const cancel = () => { if (done) return; done = true; ctx.putImageData(orig, bb.x, bb.y); app.requestRender(); };
+  const cancel = () => { if (done) return; done = true; for (const t of T) { t.ctx.putImageData(t.orig, t.bb.x, t.bb.y); touch(t.c); } app.requestRender(); };
   const body = h('div');
+  if (T.length > 1) body.append(h('p', { class: 'hint' }, `Applies to the ${T.length} layers picked in the Layers panel (each stays its own layer).`));
   for (const [k, label, min, max, def, step] of adj.params) body.append(field(label, { min, max, step, value: def, fmt: (v) => (step < 1 ? (+v).toFixed(2) : Math.round(v)), onInput: (v) => { params[k] = v; run(); } }));
   if (key === 'gradientMap') { params.stops = store.prefs.get('gmapStops', GRADIENT_PRESETS[0].stops); body.append(gradientEditor(params, run)); }
   if (!adj.params.length) body.append(h('p', { class: 'hint' }, 'Preview shown on canvas.'));
   if (app.selection.active) body.append(h('p', { class: 'hint' }, 'Limited to the current selection.'));
   const head = [h('button', { class: 'small-btn', onclick: () => { cancel(); closePopover(); } }, 'Cancel'), h('button', { class: 'small-btn on', onclick: () => { apply(); closePopover(); } }, 'Apply')];
   setTimeout(() => {
-    openPopover(anchor, { title: adj.name, body, head, width: 340, key: 'adj-' + key, onClose: () => apply() });
+    openPopover(anchor, { title: adj.name, body, head, width: 340, key: 'adj-' + key, sticky: true, onClose: () => apply() });
     run();
   }, 0);
 }
@@ -1289,7 +1344,9 @@ export function selectTool(app) {
   };
   const saved = (app.savedSelections ||= []);
   const t = {
-    mode: store.prefs.get('selMode', 'freehand'), op: 'replace', wandRef: 'layer', wandTol: 0.2,
+    // like Procreate: a new selection adds to the current one by default, so a stray tap or a
+    // second lasso never wipes what is already selected (New / Subtract / Intersect are there too)
+    mode: store.prefs.get('selMode', 'freehand'), op: store.prefs.get('selOp', 'add'), wandRef: 'layer', wandTol: 0.2,
     poly: null, // lasso in progress: [{x,y}]
     // leaving the tool closes an open lasso (like Procreate) instead of throwing it away
     exit() { if (this.poly && this.poly.length >= 3) this.closeLasso(); this.poly = null; this.drag = null; this.wand = null; },
@@ -1462,7 +1519,7 @@ export function selectTool(app) {
       const items = [
         ...[['auto', 'Automatic'], ['freehand', 'Freehand'], ['rect', 'Rectangle'], ['ellipse', 'Ellipse']].map(([v, l]) => cbBtn(l, () => setMode(v), t.mode === v)),
         cbSep(),
-        ...[['replace', 'New'], ['add', 'Add'], ['subtract', 'Subtract'], ['intersect', 'Intersect']].map(([v, l]) => cbBtn(l, () => { t.op = v; app.updateCtxBar(); }, t.op === v)),
+        ...[['replace', 'New'], ['add', 'Add'], ['subtract', 'Subtract'], ['intersect', 'Intersect']].map(([v, l]) => cbBtn(l, () => { t.op = v; store.prefs.set('selOp', v); app.updateCtxBar(); }, t.op === v)),
       ];
       if (t.mode === 'auto') items.push(cbSep(), h('span', { class: 'cb-label' }, 'Reads'),
         cbBtn('Layer', () => { t.wandRef = 'layer'; app.updateCtxBar(); }, t.wandRef === 'layer'),
@@ -1524,62 +1581,154 @@ export function selectTool(app) {
 }
 
 export function transformTool(app) {
-  const HANDLE = 22;
+  const HANDLE = 24;
+  const pref = (k, d) => store.prefs.get(k, d), setPref = (k, v) => store.prefs.set(k, v);
+  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y }), add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y }), mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const done = () => { t.commit(); app.setTool(app.prevTool && app.prevTool !== 'transform' ? app.prevTool : 'brush'); };
+  // affine that scales by (kx, ky) along the shape's own axes e1/e2 around O
+  const axisScale = (O, e1, e2, kx, ky) => {
+    const B = new DOMMatrix([e1.x, e1.y, e2.x, e2.y, 0, 0]);
+    if (Math.abs(e1.x * e2.y - e2.x * e1.y) < 1e-9) return new DOMMatrix();
+    return new DOMMatrix().translate(O.x, O.y).multiply(B).scale(kx, ky).multiply(B.inverse()).translate(-O.x, -O.y);
+  };
+  const inBasis = (v, e1, e2) => { const den = e1.x * e2.y - e2.x * e1.y || 1e-9; return { a: (v.x * e2.y - e2.x * v.y) / den, b: (e1.x * v.y - v.x * e1.y) / den }; };
   const t = {
-    uniform: true,
+    get mode() { return pref('tf.mode', 'uniform'); },
+    set mode(m) { setPref('tf.mode', m); },
+    get snap() { return pref('tf.snap', true); },
+    get fromCenter() { return pref('tf.center', false); },
+    get snapPx() { return pref('tf.snapPx', 10); },
+    guides: null,
     enter() {
       this.entered = true;
       const tg = app.doc.getTarget(false);
       if (!tg) { toast('Select a raster layer to transform'); return; }
       snapshot(tg.canvas);
       app.transform = new FloatingTransform(tg, app.selection);
+      if (this.mode === 'warp') { app.transform.toWarp(); app.transform.update(); }
+      this.undoStack = [];
       app.requestRender(); app.updateCtxBar();
     },
     exit() { if (app.transform) this.commit(); this.entered = false; },
     toDoc(pt) { const T = app.transform; return T.target.matrix ? T.target.matrix.transformPoint(pt) : pt; },
-    handles() {
+    scr(pt) { const q = this.toDoc(pt); return app.docToScreen(q.x, q.y); },
+    setMode(m) {
+      this.mode = m;
       const T = app.transform;
-      const cs = T.corners().map((p) => this.toDoc(p));
-      const sc = cs.map((p) => app.docToScreen(p.x, p.y));
-      const mid = { x: (sc[0].x + sc[1].x) / 2, y: (sc[0].y + sc[1].y) / 2 };
-      const cen = { x: sc.reduce((a, p) => a + p.x, 0) / 4, y: sc.reduce((a, p) => a + p.y, 0) / 4 };
-      const L = Math.hypot(mid.x - cen.x, mid.y - cen.y) || 1;
-      const rot = { x: mid.x + (mid.x - cen.x) / L * 40, y: mid.y + (mid.y - cen.y) / L * 40 };
-      return { sc, rot, cen };
+      if (T && m === 'warp') { T.toWarp(); T.update(); app.requestRender(); }
+      app.updateCtxBar(); app.requestRender();
+    },
+    handles() {
+      const T = app.transform, q = T.corners(), sc = q.map((p) => this.scr(p));
+      const sides = [0, 1, 2, 3].map((i) => this.scr(mid(q[i], q[(i + 1) % 4])));
+      const top = sides[0], cen = this.scr(T.center);
+      const L = Math.hypot(top.x - cen.x, top.y - cen.y) || 1;
+      const rot = { x: top.x + (top.x - cen.x) / L * 42, y: top.y + (top.y - cen.y) / L * 42 };
+      const warp = T.warp ? T.warp.map((p) => this.scr(p)) : null;
+      return { sc, sides, rot, cen, warp };
+    },
+    hit(p) {
+      const T = app.transform, hd = this.handles(), m = this.mode, near = (c) => Math.hypot(p.sx - c.x, p.sy - c.y) < HANDLE;
+      if (m === 'warp') {
+        let best = -1, bd = HANDLE;
+        hd.warp.forEach((c, i) => { const d = Math.hypot(p.sx - c.x, p.sy - c.y); if (d < bd) { bd = d; best = i; } });
+        if (best >= 0) return { type: 'wpt', idx: best };
+        return { type: this.inside(p) ? 'wfall' : 'move' };
+      }
+      if (near(hd.rot)) return { type: 'rotate' };
+      for (let i = 0; i < 4; i++) if (near(hd.sc[i])) return { type: 'corner', idx: i };
+      if (m !== 'uniform') for (let i = 0; i < 4; i++) if (near(hd.sides[i])) return { type: 'side', idx: i };
+      return { type: 'move' };
+    },
+    inside(p) {
+      const T = app.transform, pts = T.outline(16).map((q) => this.scr(q));
+      let c = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const a = pts[i], b = pts[j];
+        if ((a.y > p.sy) !== (b.y > p.sy) && p.sx < ((b.x - a.x) * (p.sy - a.y)) / (b.y - a.y) + a.x) c = !c;
+      }
+      return c;
     },
     down(p) {
       if (!app.transform) { this.enter(); if (!app.transform) return false; }
-      const T = app.transform, hd = this.handles();
-      const local = T.target.toLocal(p.x, p.y);
-      let type = 'move', corner = -1;
-      if (Math.hypot(p.sx - hd.rot.x, p.sy - hd.rot.y) < HANDLE) type = 'rotate';
-      else hd.sc.forEach((c, i) => { if (Math.hypot(p.sx - c.x, p.sy - c.y) < HANDLE) { type = 'scale'; corner = i; } });
-      this.drag = { type, corner, l0: local, s0: { tx: T.tx, ty: T.ty, sx: T.sx, sy: T.sy, rot: T.rot } };
+      const T = app.transform;
+      this.drag = { ...this.hit(p), l0: T.target.toLocal(p.x, p.y), s0: T.state() };
     },
     move(p) {
       const T = app.transform, g = this.drag; if (!T || !g) return;
-      const l = T.target.toLocal(p.x, p.y), s0 = g.s0;
-      const C = { x: T.center.x + s0.tx, y: T.center.y + s0.ty };
-      if (g.type === 'move') { T.tx = s0.tx + l.x - g.l0.x; T.ty = s0.ty + l.y - g.l0.y; }
-      else if (g.type === 'scale') {
-        if (this.uniform) {
-          const k = Math.hypot(l.x - C.x, l.y - C.y) / (Math.hypot(g.l0.x - C.x, g.l0.y - C.y) || 1);
-          T.sx = s0.sx * k; T.sy = s0.sy * k;
-        } else {
-          const a = -s0.rot * Math.PI / 180, rotP = (q) => ({ x: (q.x - C.x) * Math.cos(a) - (q.y - C.y) * Math.sin(a), y: (q.x - C.x) * Math.sin(a) + (q.y - C.y) * Math.cos(a) });
-          const u = rotP(l), u0 = rotP(g.l0);
-          if (Math.abs(u0.x) > 1) T.sx = s0.sx * u.x / u0.x;
-          if (Math.abs(u0.y) > 1) T.sy = s0.sy * u.y / u0.y;
-        }
+      const l = T.target.toLocal(p.x, p.y), dl = sub(l, g.l0), m = this.mode;
+      T.setState(g.s0);
+      this.guides = null;
+      const q = T.corners().map((c) => ({ ...c })), C = T.center;
+      const e1 = sub(q[1], q[0]), e2 = sub(q[3], q[0]);
+      if (g.type === 'move') {
+        let d = dl;
+        if (this.snap) d = this.snapMove(T, d);
+        T.affine(new DOMMatrix().translate(d.x, d.y));
       } else if (g.type === 'rotate') {
-        let r = s0.rot + (Math.atan2(l.y - C.y, l.x - C.x) - Math.atan2(g.l0.y - C.y, g.l0.x - C.x)) * 180 / Math.PI;
-        const sn = Math.round(r / 15) * 15; if (Math.abs(r - sn) < 3) r = sn;
-        T.rot = r;
-        app.showHud(Math.round(((r % 360) + 360) % 360) + '°');
+        let r = (Math.atan2(l.y - C.y, l.x - C.x) - Math.atan2(g.l0.y - C.y, g.l0.x - C.x)) * 180 / Math.PI;
+        const base = Math.atan2(e1.y, e1.x) * 180 / Math.PI;
+        if (this.snap) { const tot = base + r, sn = Math.round(tot / 15) * 15; if (Math.abs(tot - sn) < 3) r = sn - base; }
+        T.affine(new DOMMatrix().translate(C.x, C.y).rotate(r).translate(-C.x, -C.y));
+        app.showHud(Math.round((((base + r) % 360) + 360) % 360) + '°');
+      } else if (g.type === 'corner') {
+        const i = g.idx;
+        if (m === 'distort') this.distortCorner(T, i, dl);
+        else {
+          const O = this.fromCenter ? C : q[(i + 2) % 4], v0 = sub(q[i], O), v = add(v0, dl);
+          let kx, ky;
+          if (m === 'uniform') { const k = (v.x * v0.x + v.y * v0.y) / ((v0.x * v0.x + v0.y * v0.y) || 1); kx = ky = k; }
+          else { const b0 = inBasis(v0, e1, e2), b1 = inBasis(v, e1, e2); kx = Math.abs(b0.a) > 1e-6 ? b1.a / b0.a : 1; ky = Math.abs(b0.b) > 1e-6 ? b1.b / b0.b : 1; }
+          T.affine(axisScale(O, e1, e2, kx, ky));
+          this.sizeHud(T);
+        }
+      } else if (g.type === 'side') {
+        const i = g.idx, sm = mid(q[i], q[(i + 1) % 4]);
+        if (m === 'distort') { this.distortCorner(T, i, dl); this.distortCorner(T, (i + 1) % 4, dl); }
+        else {
+          const O = this.fromCenter ? C : mid(q[(i + 2) % 4], q[(i + 3) % 4]), v0 = sub(sm, O), v = add(v0, dl);
+          const b0 = inBasis(v0, e1, e2), b1 = inBasis(v, e1, e2);
+          const horiz = i === 1 || i === 3;
+          const k = horiz ? (Math.abs(b0.a) > 1e-6 ? b1.a / b0.a : 1) : (Math.abs(b0.b) > 1e-6 ? b1.b / b0.b : 1);
+          T.affine(axisScale(O, e1, e2, horiz ? k : 1, horiz ? 1 : k));
+          this.sizeHud(T);
+        }
+      } else if (g.type === 'wpt') {
+        T.warp[g.idx] = add(T.warp[g.idx], dl);
+      } else if (g.type === 'wfall') {
+        const cs = T.corners(), diag = Math.hypot(cs[2].x - cs[0].x, cs[2].y - cs[0].y) || 100, sg = diag * 0.28;
+        T.warp = T.warp.map((w) => { const d2 = (w.x - g.l0.x) ** 2 + (w.y - g.l0.y) ** 2, k = Math.exp(-d2 / (2 * sg * sg)); return { x: w.x + dl.x * k, y: w.y + dl.y * k }; });
       }
-      T.update(); app.requestRender('active');
+      T.update(12); app.requestRender('active');
     },
-    up() { this.drag = null; },
+    // move one corner; a warped shape follows with bilinear weights
+    distortCorner(T, i, d) {
+      if (!T.warp) { T.q[i] = add(T.q[i], d); return; }
+      const cu = i === 1 || i === 2 ? 1 : 0, cv = i >= 2 ? 1 : 0;
+      T.warp = T.warp.map((w, k) => { const u = (k % 4) / 3, v = Math.floor(k / 4) / 3, wt = (cu ? u : 1 - u) * (cv ? v : 1 - v); return { x: w.x + d.x * wt, y: w.y + d.y * wt }; });
+    },
+    sizeHud(T) {
+      const q = T.corners(), b = T.bbox;
+      const w = Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y), hh = Math.hypot(q[3].x - q[0].x, q[3].y - q[0].y);
+      app.showHud(`${Math.round(w)} × ${Math.round(hh)} px · ${Math.round((w / b.w) * 100)}%`);
+    },
+    // magnetic snapping of the shape's centre / edges to the canvas centre / edges
+    snapMove(T, d) {
+      const pts = T.outline(8).map((p) => this.toDoc(add(p, d))), D = app.doc, thr = this.snapPx / app.view.zoom;
+      const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+      const bx = [Math.min(...xs), (Math.min(...xs) + Math.max(...xs)) / 2, Math.max(...xs)], by = [Math.min(...ys), (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...ys)];
+      const best = (vals, targets) => { let o = null; for (const v of vals) for (const tg of targets) { const dd = tg - v; if (Math.abs(dd) < thr && (!o || Math.abs(dd) < Math.abs(o.d))) o = { d: dd, at: tg }; } return o; };
+      const sx = best(bx, [0, D.width / 2, D.width]), sy = best(by, [0, D.height / 2, D.height]);
+      this.guides = { x: sx ? sx.at : null, y: sy ? sy.at : null };
+      return { x: d.x + (sx ? sx.d : 0), y: d.y + (sy ? sy.d : 0) };
+    },
+    up() {
+      const T = app.transform;
+      if (this.drag && T) { this.undoStack.push(this.drag.s0); if (this.undoStack.length > 50) this.undoStack.shift(); T.update(24); app.requestRender('active'); }
+      this.drag = null; this.guides = null;
+    },
+    act(fn) { const T = app.transform; if (!T) return; this.undoStack.push(T.state()); fn(T); T.update(24); app.requestRender(); },
+    stepBack() { const T = app.transform, s = this.undoStack && this.undoStack.pop(); if (!T || !s) return false; T.setState(s); T.update(24); app.requestRender(); return true; },
     commit() {
       const T = app.transform; if (!T) return;
       T.commit();
@@ -1596,39 +1745,85 @@ export function transformTool(app) {
     },
     overlay(ctx, px) {
       const T = app.transform; if (!T) return;
-      const cs = T.corners().map((q) => this.toDoc(q));
       ctx.save();
       ctx.lineWidth = 1.5 * px; ctx.strokeStyle = '#3d8bff';
-      ctx.beginPath(); cs.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke();
+      const out = T.outline(32).map((q) => this.toDoc(q));
+      ctx.beginPath(); out.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke();
+      if (T.warp && this.mode === 'warp') {
+        // mesh lines through the patch
+        const f = T.mapper(); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(61,139,255,0.7)';
+        for (let k = 1; k < 4; k++) for (const dir of [0, 1]) {
+          ctx.beginPath();
+          for (let s = 0; s <= 24; s++) { const q = this.toDoc(dir ? f(k / 4, s / 24) : f(s / 24, k / 4)); s ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }
+          ctx.stroke();
+        }
+      }
+      if (this.guides) {
+        const D = app.doc; ctx.strokeStyle = '#ff9f1a'; ctx.lineWidth = 1 * px; ctx.setLineDash([6 * px, 4 * px]);
+        if (this.guides.x != null) { ctx.beginPath(); ctx.moveTo(this.guides.x, 0); ctx.lineTo(this.guides.x, D.height); ctx.stroke(); }
+        if (this.guides.y != null) { ctx.beginPath(); ctx.moveTo(0, this.guides.y); ctx.lineTo(D.width, this.guides.y); ctx.stroke(); }
+      }
       ctx.restore();
     },
     overlayScreen(ctx) {
       if (!app.transform) return;
-      const hd = this.handles();
+      const hd = this.handles(), m = this.mode;
       ctx.save();
       ctx.strokeStyle = '#3d8bff'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo((hd.sc[0].x + hd.sc[1].x) / 2, (hd.sc[0].y + hd.sc[1].y) / 2); ctx.lineTo(hd.rot.x, hd.rot.y); ctx.stroke();
-      for (const c of [...hd.sc, hd.rot]) {
-        ctx.beginPath(); ctx.arc(c.x, c.y, c === hd.rot ? 9 : 8, 0, Math.PI * 2);
-        ctx.fillStyle = c === hd.rot ? '#3d8bff' : '#fff'; ctx.fill(); ctx.strokeStyle = '#3d8bff'; ctx.stroke();
-      }
+      const dot = (c, r, fill) => { ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = '#3d8bff'; ctx.stroke(); };
+      if (m === 'warp') { hd.warp.forEach((c, i) => dot(c, [0, 3, 12, 15].includes(i) ? 8 : 6, '#fff')); ctx.restore(); return; }
+      ctx.beginPath(); ctx.moveTo(hd.sides[0].x, hd.sides[0].y); ctx.lineTo(hd.rot.x, hd.rot.y); ctx.stroke();
+      for (const c of hd.sc) dot(c, 8, m === 'distort' ? '#ffe9a8' : '#fff');
+      if (m !== 'uniform') for (const c of hd.sides) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(c.x - 6, c.y - 6, 12, 12, 3) : ctx.rect(c.x - 6, c.y - 6, 12, 12); ctx.fillStyle = '#fff'; ctx.fill(); ctx.stroke(); }
+      dot(hd.rot, 9, '#3d8bff');
       ctx.restore();
     },
-    bar() {
+    // bounds of the shape in layer space
+    bounds(T) { const o = T.outline(12), xs = o.map((p) => p.x), ys = o.map((p) => p.y); return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) }; },
+    fit(cover) {
+      this.act((T) => {
+        const d = app.doc, b = this.bounds(T), w = b.x1 - b.x0, hh = b.y1 - b.y0;
+        const k = (cover ? Math.max : Math.min)(d.width / w, d.height / hh);
+        const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+        T.affine(new DOMMatrix().translate(d.width / 2, d.height / 2).scale(k).translate(-cx, -cy));
+      });
+    },
+    rotateBy(deg) { this.act((T) => { const C = T.center; T.affine(new DOMMatrix().translate(C.x, C.y).rotate(deg).translate(-C.x, -C.y)); }); },
+    flip(hz) { this.act((T) => { const C = T.center; T.affine(new DOMMatrix().translate(C.x, C.y).scale(hz ? -1 : 1, hz ? 1 : -1).translate(-C.x, -C.y)); }); },
+    more(anchor) {
       const T = app.transform;
-      const upd = () => { if (app.transform) { app.transform.update(); app.requestRender(); } };
+      const body = h('div', { class: 'tf-more' },
+        switchRow('Magnetic snapping (canvas centre & edges, 15° angles)', this.snap, (v) => { setPref('tf.snap', v); app.updateCtxBar(); }),
+        field('Snapping distance', { min: 2, max: 40, step: 1, value: this.snapPx, fmt: (v) => v + ' px', onInput: (v) => setPref('tf.snapPx', v) }),
+        switchRow('Scale from the centre (instead of the opposite corner)', this.fromCenter, (v) => setPref('tf.center', v)),
+        h('div', { class: 'tf-grid' },
+          cbBtn('↺ 90°', () => this.rotateBy(-90)), cbBtn('↻ 90°', () => this.rotateBy(90)),
+          cbBtn('↺ 45°', () => this.rotateBy(-45)), cbBtn('180°', () => this.rotateBy(180)),
+          cbBtn('Fill canvas', () => this.fit(true)), cbBtn('Centre', () => this.act((T2) => { const b = this.bounds(T2), d = app.doc; T2.affine(new DOMMatrix().translate(d.width / 2 - (b.x0 + b.x1) / 2, d.height / 2 - (b.y0 + b.y1) / 2)); })),
+          cbBtn('Actual size', () => this.act((T2) => { const q = T2.corners(), b = T2.bbox, e1 = sub(q[1], q[0]), e2 = sub(q[3], q[0]); const kx = b.w / (Math.hypot(e1.x, e1.y) || 1), ky = b.h / (Math.hypot(e2.x, e2.y) || 1); T2.affine(axisScale(T2.center, e1, e2, kx, ky)); })),
+          cbBtn('Straighten', () => this.act((T2) => { const q = T2.corners(), a = Math.atan2(q[1].y - q[0].y, q[1].x - q[0].x) * 180 / Math.PI, C = T2.center; T2.affine(new DOMMatrix().translate(C.x, C.y).rotate(-a).translate(-C.x, -C.y)); })),
+          cbBtn('Undo step', () => { if (!this.stepBack()) toast('Nothing to undo in this transform'); }),
+          cbBtn('Flatten warp', () => this.act((T2) => { if (T2.warp) { const q = T2.corners().map((p) => ({ ...p })); T2.warp = null; T2.q = q; } else toast('No warp to remove'); })),
+        ));
+      openPopover(anchor, { title: 'Transform options', body, width: 330, key: 'tf-more' });
+      return T;
+    },
+    bar() {
+      const m = this.mode;
+      const moreBtn = cbBtn('More…', (e) => this.more(e.currentTarget));
       return [
-        cbBtn('Uniform', () => { t.uniform = true; app.updateCtxBar(); }, t.uniform),
-        cbBtn('Freeform', () => { t.uniform = false; app.updateCtxBar(); }, !t.uniform), cbSep(),
-        cbBtn('Flip H', () => { if (T) { T.flipX *= -1; upd(); } }), cbBtn('Flip V', () => { if (T) { T.flipY *= -1; upd(); } }),
-        cbBtn('Rotate 90°', () => { if (T) { T.rot = (T.rot + 90) % 360; upd(); } }),
-        cbBtn('Fit to canvas', () => {
-          if (!T) return; const d = app.doc, b = T.bbox, k = Math.min(d.width / b.w, d.height / b.h);
-          T.sx = T.sy = k; T.rot = 0; T.tx = d.width / 2 - T.center.x; T.ty = d.height / 2 - T.center.y; upd();
-        }),
-        cbBtn('Reset', () => { if (T) { Object.assign(T, { tx: 0, ty: 0, sx: 1, sy: 1, rot: 0, flipX: 1, flipY: 1 }); upd(); } }),
-        cbBtn(T && !T.smooth ? 'Nearest' : 'Bilinear', () => { if (T) { T.smooth = !T.smooth; upd(); app.updateCtxBar(); } }),
-        cbSep(), cbBtn('Cancel', () => t.cancel()), cbBtn('Done', () => { t.commit(); app.setTool(app.prevTool && app.prevTool !== 'transform' ? app.prevTool : 'brush'); }, false, 'primary'),
+        cbBtn('Freeform', () => this.setMode('freeform'), m === 'freeform'),
+        cbBtn('Uniform', () => this.setMode('uniform'), m === 'uniform'),
+        cbBtn('Distort', () => this.setMode('distort'), m === 'distort'),
+        cbBtn('Warp', () => this.setMode('warp'), m === 'warp'), cbSep(),
+        cbBtn('Snapping', () => { setPref('tf.snap', !this.snap); app.updateCtxBar(); }, this.snap),
+        cbBtn('Flip H', () => this.flip(true)), cbBtn('Flip V', () => this.flip(false)),
+        cbBtn('Rotate 45°', () => this.rotateBy(45)),
+        cbBtn('Fit to canvas', () => this.fit(false)),
+        cbBtn(app.transform && !app.transform.smooth ? 'Nearest' : 'Bilinear', () => this.act((T) => { T.smooth = !T.smooth; app.updateCtxBar(); }), !!(app.transform && app.transform.smooth)),
+        cbBtn('Reset', () => this.act((T) => T.reset())),
+        moreBtn,
+        cbSep(), cbBtn('Cancel', () => t.cancel()), cbBtn('Done', done, false, 'primary'),
       ];
     },
   };

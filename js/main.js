@@ -7,6 +7,8 @@ import { StrokeEngine, detectShape, shapePoints } from './engine.js';
 import { DEFAULT_BRUSHES, preloadBrush } from './brushes.js';
 import { IBIS_PRESETS } from './ibis.js';
 import { Selection, FloatingTransform, regionToCanvas, tracePath } from './tools.js';
+import { liquifyTool } from './liquify.js';
+import * as Pal from './palettes.js';
 import { fillRegionAsync, warmUp } from './pool.js';
 import * as store from './storage.js';
 import * as UI from './ui.js';
@@ -285,7 +287,8 @@ class App {
 
   changed(kind) {
     this.dirtySave = true;
-    this.requestRender(kind === 'active' ? 'active' : undefined);
+    // 'patched': pixels changed but the tool already marked the area (markDirty)
+    this.requestRender(kind === 'active' ? 'active' : kind === 'patched' ? 'view' : undefined);
     UI.onDocChanged(this);
     if (this.doc && this.doc.mode === 'animate') this.timeline.refreshSoon();
     this.tlapse.schedule();
@@ -550,7 +553,7 @@ class App {
   onDown(e) {
     if (!this.doc) return;
     e.preventDefault();
-    UI.closePopover();
+    if (!UI.popoverSticky()) UI.closePopover();
     try { this.canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     this.lastMoveTime = e.timeStamp;
     if (e.pointerType === 'pen' && !this.pendingStroke) { this.spdLast = null; this.penStat = null; }
@@ -601,6 +604,8 @@ class App {
       return;
     }
     if (this.active) return; // one drawing pointer at a time
+    // an adjustment (gradient map, curves…) is previewing: the view can move, nothing is drawn
+    if (UI.popoverSticky()) { if (e.pointerType === 'touch') this.pan1 = { id: e.pointerId, sx: p.sx, sy: p.sy, view: { ...this.view } }; return; }
     const toolName = this.tool;
     const tool = this.tools[toolName];
     if (!tool || !tool.down) return;
@@ -872,7 +877,7 @@ class App {
     if (tl && tl.undoStep && tl.undoStep()) return;
     this.flushStroke();
     if (this.engine.active) return;
-    if (this.transform) { this.tools.transform.cancel(); return; }
+    if (this.transform) { if (!this.tools.transform.stepBack()) this.tools.transform.cancel(); return; }
     const c = this.history.undo();
     if (c) { this.showHud('Undo ' + (c.label || '')); this.changed(); }
   }
@@ -901,6 +906,12 @@ class App {
     // any other 'active' change (3D layer, text, transform, fill…) repaints the whole frame
     const en = this.engine, f = en && en.frame;
     const strokeArea = en && (en.active || (f && f.x1 > f.x0 && f.y1 > f.y0));
+    // the whole-scene cache: a stroke only invalidates its own area, other edits all of it
+    if (kind === 'active') {
+      const b = en && en.bounds;
+      if (strokeArea && b && b.x1 > b.x0) { if (this.fullDirty !== 'all') { const r = this.fullDirty || (this.fullDirty = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }); r.x0 = Math.min(r.x0, b.x0); r.y0 = Math.min(r.y0, b.y0); r.x1 = Math.max(r.x1, b.x1); r.y1 = Math.max(r.y1, b.y1); } }
+      else this.fullDirty = 'all';
+    } else if (kind !== 'view' && kind !== 'cursor') this.fullDirty = 'all';
     if (kind === 'cursor' || (kind === 'active' && strokeArea)) { if (this.pendingPartial !== false) this.pendingPartial = true; }
     else this.pendingPartial = false;
     if (this.raf) return;
@@ -979,8 +990,54 @@ class App {
       d.composite(above.getContext('2d'), { from: ge, bg: false });
     }
     this.group = [gs, ge];
+    this.fullDirty = 'all';
   }
-  dropCaches() { for (const k of ['belowCache', 'aboveCache']) if (this[k]) { this[k].width = this[k].height = 0; this[k] = null; } this.cacheKey = null; }
+  // Whole scene (all layers + paper) at cache resolution: frames that only move the view draw
+  // one image instead of re-blending every layer. Strokes patch just their area; other edits
+  // rebuild it once things settle (until then frames composite live).
+  fullScene() {
+    const d = this.doc, dirty = this.fullDirty;
+    if (!dirty && this.fullCache) return this.fullCache;
+    const sc = this.cacheSc;
+    const paint = (x, reg) => {
+      const d = this.doc, [gs, ge] = this.group;
+      x.drawImage(this.belowCache, 0, 0, d.width, d.height);
+      d.composite(x, { from: gs, to: ge, bg: false, preview: (c) => this.previewFor(c), region: reg });
+      if (ge < d.items.length) { if (this.aboveFlat && this.aboveCache) x.drawImage(this.aboveCache, 0, 0, d.width, d.height); else d.composite(x, { from: ge, bg: false, region: reg }); }
+    };
+    if (dirty === 'all' || !this.fullCache || this.fullCache.width !== Math.max(1, Math.round(d.width * sc))) {
+      // a full rebuild costs one whole composite: wait until edits pause
+      if (!this.fullTimer) this.fullTimer = setTimeout(() => {
+        this.fullTimer = 0;
+        if (!this.doc || this.engine.active) return;
+        this.ensureCaches();
+        const c = this.cacheCanvas('fullCache', this.cacheSc);
+        paint(c.getContext('2d'), null);
+        this.fullDirty = null; this.fullKey = this.cacheKey;
+        this.requestRender('view');
+      }, 220);
+      return null;
+    }
+    // patch the stroke's area (64 px grid, like partial frames)
+    const G = 64, p = 3;
+    const x0 = Math.max(0, Math.floor((dirty.x0 - p) / G) * G), y0 = Math.max(0, Math.floor((dirty.y0 - p) / G) * G);
+    const x1 = Math.min(d.width, Math.ceil((dirty.x1 + p) / G) * G), y1 = Math.min(d.height, Math.ceil((dirty.y1 + p) / G) * G);
+    this.fullDirty = null;
+    if (x1 > x0 && y1 > y0) {
+      const x = this.fullCache.getContext('2d'), reg = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+      x.save(); x.setTransform(sc, 0, 0, sc, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
+      x.beginPath(); x.rect(x0, y0, x1 - x0, y1 - y0); x.clip(); x.clearRect(x0, y0, x1 - x0, y1 - y0);
+      paint(x, reg);
+      x.restore();
+    }
+    return this.fullCache;
+  }
+  // a tool changed pixels of the active layer in rect (doc px): patch just that area
+  markDirty(r) {
+    if (this.fullDirty !== 'all') { const d = this.fullDirty || (this.fullDirty = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }); d.x0 = Math.min(d.x0, r.x); d.y0 = Math.min(d.y0, r.y); d.x1 = Math.max(d.x1, r.x + r.w); d.y1 = Math.max(d.y1, r.y + r.h); }
+    this.requestRender('view');
+  }
+  dropCaches() { clearTimeout(this.fullTimer); this.fullTimer = 0; this.fullDirty = 'all'; for (const k of ['belowCache', 'aboveCache', 'fullCache']) if (this[k]) { this[k].width = this[k].height = 0; this[k] = null; } this.cacheKey = null; }
 
   previewFor(canvas) {
     const e = this.engine.previewFor(canvas);
@@ -1053,11 +1110,15 @@ class App {
     } else {
       this.ensureCaches();
       const [gs, ge] = this.group;
-      ctx.drawImage(this.belowCache, 0, 0, d.width, d.height);
-      d.composite(ctx, { from: gs, to: ge, bg: false, preview, overlay, region: this.partialDoc });
-      if (ge < d.items.length) {
-        if (this.aboveFlat) ctx.drawImage(this.aboveCache, 0, 0, d.width, d.height);
-        else d.composite(ctx, { from: ge, bg: false });
+      const full = !this.engine.active && !this.transform ? this.fullScene() : null;
+      if (full) ctx.drawImage(full, 0, 0, d.width, d.height);
+      else {
+        ctx.drawImage(this.belowCache, 0, 0, d.width, d.height);
+        d.composite(ctx, { from: gs, to: ge, bg: false, preview, overlay, region: this.partialDoc });
+        if (ge < d.items.length) {
+          if (this.aboveFlat) ctx.drawImage(this.aboveCache, 0, 0, d.width, d.height);
+          else d.composite(ctx, { from: ge, bg: false, region: this.partialDoc });
+        }
       }
     }
     ctx.restore();
@@ -1341,6 +1402,7 @@ class App {
       },
       select: UI.selectTool(app),
       transform: UI.transformTool(app),
+      liquify: liquifyTool(app),
       move: UI.moveTool(app),
       panel: Toon.panelTool(app),
       '3d': Three3D.tool3d(app),
@@ -1348,6 +1410,22 @@ class App {
     };
     for (const k of ['3d', 'transform', 'panel', 'balloon', 'move']) if (tools[k]) tools[k].fingers = true;
     return tools;
+  }
+
+  // the main colours of an inserted picture become a palette of this project (not the global
+  // palettes: the ☆ on it in the Colours panel copies it there)
+  pictureP(img, name) {
+    if (this.settings.picturePalette === false) return;
+    try {
+      const colors = Pal.paletteFromSource(img, 12);
+      if (!colors.length) return;
+      const d = this.doc;
+      d.projPalettes.unshift({ id: 'pp' + Date.now().toString(36), name: name || 'Picture', colors, starred: false });
+      if (d.projPalettes.length > 24) d.projPalettes.length = 24;
+      this.dirtySave = true;
+      UI.refreshPalettes && UI.refreshPalettes();
+      toast(`Colours of “${name}” saved in this project’s palettes · tap ☆ to keep them for all projects`, 3200);
+    } catch { /* unreadable picture: no palette */ }
   }
 
   // Add an image (File/Blob) as a new layer, scaled to fit.
@@ -1360,6 +1438,7 @@ class App {
       const s = Math.min(1, d.width / img.width, d.height / img.height);
       c.drawImage(img, (d.width - img.width * s) / 2, (d.height - img.height * s) / 2, img.width * s, img.height * s);
     };
+    this.pictureP(img, name);
     if (d.mode === 'animate') {
       const t = d.activeItem; if (!t) return;
       const target = d.getTarget(true);

@@ -7,6 +7,11 @@ import { withUndo, touch } from './history.js';
 import { openPopover, closePopover, openColor } from './ui.js';
 import { blendDraw, isCustomBlend } from './blendgl.js';
 
+// the layers panel's current multi-selection (swiped rows), for other tools
+let pickedRef = null;
+export function pickedLayers(app) { const d = app.doc; return pickedRef ? [...pickedRef].filter((x) => d.items.includes(x)) : []; }
+export function clearPicked() { if (pickedRef) pickedRef.clear(); }
+
 // ───────── structural undo ─────────
 const PROPS = ['type', 'name', 'visible', 'opacity', 'blend', 'alphaLock', 'clip', 'reference', 'panelMask', 'locked', 'groupId', 'collapsed', 'private', 'tint', 'draft', 'express', 'border', 'borderWidth', 'borderColor'];
 function captureStruct(doc) {
@@ -173,6 +178,7 @@ export function openLayers(app, anchor) {
 
   // swipe a row sideways to add it to / take it out of a multi-selection (like Procreate)
   const picked = new Set();
+  pickedRef = picked;
   const render = () => {
     list.innerHTML = '';
     const items = d.items;
@@ -228,11 +234,13 @@ export function openLayers(app, anchor) {
         thumbOf(app, it), h('div', { class: 'layer-name' }, h('b', {}, it.name), sub ? h('small', {}, sub) : null), tintBtn, blendBtn, vis);
     }
     row.dataset.idx = i;
+    if (quickFor === it) { row.classList.add('quick'); row.append(quickBar(it)); }
     bindRow(row, it, i);
     return row;
   };
 
   const select = (it, i) => {
+    if (quickFor) { quickFor = null; render(); return; }
     if (picked.size) { picked.clear(); d.active = i; render(); app.requestRender('view'); return; }
     if (d.active === i) { openSheet(it); return; }
     d.active = i;
@@ -246,7 +254,7 @@ export function openLayers(app, anchor) {
   // tap = select / options; hold then drag = move (over a group's row = put inside it)
   const bindRow = (row, it, i) => {
     row.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.layer-vis, .grp-chev, .layer-blend, .layer-tint, input')) return;
+      if (e.target.closest('.layer-vis, .grp-chev, .layer-blend, .layer-tint, .quick-bar, input')) return;
       const st = { x: e.clientX, y: e.clientY, lifted: false, cancelled: false };
       const hold = e.pointerType === 'mouse' ? 120 : 220;
       st.timer = setTimeout(() => { if (!st.cancelled) lift(); }, hold);
@@ -306,8 +314,39 @@ export function openLayers(app, anchor) {
     });
   };
 
+  // swipe the layer you're on: quick actions on its row (like Procreate); other layers: multi-select
+  let quickFor = null;
+  const hideQuick = () => { if (quickFor) { quickFor = null; render(); } };
+  const onDocDown = (e) => { if (quickFor && !e.target.closest('.layer-row.quick')) hideQuick(); };
+  document.addEventListener('pointerdown', onDocDown, true);
+  const duplicateItem = (it) => {
+    const i = d.items.indexOf(it); if (i < 0) return;
+    if (!app.canAddRaster(it.type === 'track' ? it.cels.length : 1)) return;
+    let copy;
+    if (it.type === 'raster') { copy = new Layer(d.width, d.height, { ...it, id: null, name: it.name + ' copy' }); copy.canvas.getContext('2d').drawImage(it.canvas, 0, 0); }
+    else if (it.type === 'track') { copy = new Track({ ...it, id: null, name: it.name + ' copy', keys: JSON.parse(JSON.stringify(it.keys)) }); for (const c of it.cels) { const n = d.addCel(copy, c.start, c.dur); n.canvas.getContext('2d').drawImage(c.canvas, 0, 0); } }
+    else { toast('Only paint layers can be duplicated here'); return; }
+    insertLayer(app, copy, i + 1);
+  };
+  const quickBar = (it) => {
+    const act = (label, cls, fn) => h('button', { class: 'quick-act ' + cls, onclick: (e) => { e.stopPropagation(); fn(); } }, label);
+    const paint = it.type === 'raster' || it.type === 'track';
+    return h('div', { class: 'quick-bar' },
+      act(it.locked ? 'Unlock' : 'Lock', 'lock', () => { structCmd(app, it.locked ? 'Unlock layer' : 'Lock layer', () => { it.locked = !it.locked; }); render(); }),
+      paint ? act('Duplicate', 'dup', () => { quickFor = null; duplicateItem(it); render(); }) : null,
+      paint ? act(it.clip ? 'Unclip' : 'Clipping', 'clip', () => { structCmd(app, it.clip ? 'Release clipping' : 'Clipping mask', () => { it.clip = !it.clip; }); render(); app.requestRender(); }) : null,
+      act('Delete', 'del', () => {
+        quickFor = null;
+        const i = d.items.indexOf(it); if (i < 0) return;
+        if (it.type === 'group') deletePicked(app, [it]);
+        else structCmd(app, 'Delete layer', () => { d.items.splice(i, 1); d.active = clamp(d.active >= i ? d.active - 1 : d.active, 0, Math.max(0, d.items.length - 1)); });
+        render();
+      }));
+  };
   const togglePick = (it) => {
     closeSheet(); closeBlend();
+    if (it === d.activeItem && !picked.size) { quickFor = quickFor === it ? null : it; navigator.vibrate && navigator.vibrate(6); render(); return; }
+    quickFor = null;
     if (!picked.size && d.activeItem && d.activeItem !== it) picked.add(d.activeItem);
     if (picked.has(it)) picked.delete(it); else picked.add(it);
     if (picked.size === 1 && picked.has(d.activeItem)) picked.clear();
@@ -396,6 +435,17 @@ export function openLayers(app, anchor) {
   let sheetFor = null, sheetEl = null;
   const closeSheet = () => { if (sheetEl) sheetEl.remove(); sheetEl = null; sheetFor = null; };
   const openSheet = (it) => {
+    // same layer, sheet already open: refresh its contents in place (no slide-in animation, the
+    // scroll position is kept) — rebuilding it on every toggle made it jump and wobble
+    if (sheetEl && sheetFor && sheetFor.it === it && sheetEl.isConnected) {
+      const i = d.items.indexOf(it); if (i < 0) { closeSheet(); return; }
+      const sb = sheetEl.querySelector('.sheet-body'), keep = sb.scrollTop;
+      const rerender = () => { render(); if (d.items.includes(it)) openSheet(it); else closeSheet(); };
+      sb.replaceChildren(sheetBody(app, it, i, rerender, closeSheet, () => openBlend(it)));
+      sb.scrollTop = keep;
+      sheetEl.querySelector('.sheet-head b').textContent = it.name;
+      return;
+    }
     closeSheet(); closeBlend();
     const i = d.items.indexOf(it);
     if (i < 0) return;
@@ -431,7 +481,7 @@ export function openLayers(app, anchor) {
   const head = [addBtn];
   if (d.mode !== 'animate') head.unshift(h('button', { class: 'icon-btn', title: 'Group the selected layer', html: ICONS.folder, onclick: () => { if (d.activeItem) { newGroupFrom(app, d.active); render(); } } }));
   if (d.mode !== 'animate') head.unshift(h('button', { class: 'icon-btn', title: '3D layer', html: ICONS.cube, onclick: () => app.add3DLayer && app.add3DLayer() }));
-  const p = openPopover(anchor, { title: d.mode === 'animate' ? 'Tracks' : 'Layers', body: list, head, width: 340, key: 'layers', float: true, onClose: () => { closeSheet(); closeBlend(); layersOpen = null; } });
+  const p = openPopover(anchor, { title: d.mode === 'animate' ? 'Tracks' : 'Layers', body: list, head, width: 340, key: 'layers', float: true, onClose: () => { closeSheet(); closeBlend(); layersOpen = null; document.removeEventListener('pointerdown', onDocDown, true); } });
   if (!p) return;
   layersOpen = { render, dragging: false, closeSheet };
   render();
@@ -572,7 +622,7 @@ function sheetBody(app, it, i, rerender, close, openBlend) {
 }
 
 // ───────── multi-selection actions ─────────
-const membersOf = (d, list) => {
+export const membersOf = (d, list) => {
   // a picked group stands for its members
   const out = new Set();
   for (const it of list) {
@@ -581,7 +631,7 @@ const membersOf = (d, list) => {
   }
   return d.items.filter((x) => out.has(x)); // bottom → top
 };
-function groupPicked(app, list) {
+export function groupPicked(app, list) {
   const d = app.doc, mem = membersOf(d, list);
   if (!mem.length) return;
   structCmd(app, 'Group layers', () => {

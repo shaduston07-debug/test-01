@@ -285,6 +285,12 @@ export function alphaBounds(canvas) {
 }
 
 // ───────── transform (free transform of a layer or the selected pixels) ─────────
+// The floating pixels' box (bbox) maps to a shape in layer space:
+//  • a quad (4 corners): a parallelogram is an exact affine draw, any other quad is a
+//    perspective (distort) drawn as a fine triangle mesh;
+//  • a warp: a 4×4 bicubic Bézier patch (16 control points), also drawn as a mesh.
+// Every move / scale / rotate / flip is a point function applied to the corners (and the
+// warp points), so the modes combine freely and nothing is lost when switching between them.
 export class FloatingTransform {
   constructor(target, selection) {
     const c = target.canvas;
@@ -300,43 +306,135 @@ export class FloatingTransform {
     this.original.getContext('2d').drawImage(c, 0, 0);
     if (selection && selection.active) { t.save(); t.globalCompositeOperation = 'destination-out'; t.drawImage(selection.mask, 0, 0); t.restore(); }
     else t.clearRect(0, 0, c.width, c.height);
-    this.tx = 0; this.ty = 0; this.sx = 1; this.sy = 1; this.rot = 0; this.flipX = 1; this.flipY = 1;
     this.preview = makeCanvas(c.width, c.height);
     this.smooth = true;
+    this.reset();
+  }
+  reset() {
+    const b = this.bbox;
+    this.q = [{ x: b.x, y: b.y }, { x: b.x + b.w, y: b.y }, { x: b.x + b.w, y: b.y + b.h }, { x: b.x, y: b.y + b.h }];
+    this.warp = null;
     this.update();
   }
-  get center() { return { x: this.bbox.x + this.bbox.w / 2, y: this.bbox.y + this.bbox.h / 2 }; }
+  state() { return { q: this.q.map((p) => ({ ...p })), warp: this.warp && this.warp.map((p) => ({ ...p })) }; }
+  setState(s) { this.q = s.q.map((p) => ({ ...p })); this.warp = s.warp && s.warp.map((p) => ({ ...p })); }
+  get center() { const q = this.corners(); return { x: (q[0].x + q[1].x + q[2].x + q[3].x) / 4, y: (q[0].y + q[1].y + q[2].y + q[3].y) / 4 }; }
+  corners() { const w = this.warp; return w ? [w[0], w[3], w[15], w[12]] : this.q; }
+  // apply a point function to the whole shape
+  apply(fn) {
+    this.q = this.q.map((p) => fn(p));
+    if (this.warp) this.warp = this.warp.map((p) => fn(p));
+  }
+  affine(m) { this.apply((p) => ({ x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f })); }
+  isAffine() {
+    if (this.warp) return false;
+    const q = this.q, tol = 0.02;
+    return Math.abs(q[0].x + q[2].x - q[1].x - q[3].x) < tol && Math.abs(q[0].y + q[2].y - q[1].y - q[3].y) < tol;
+  }
+  // box space → layer space affine (only meaningful when isAffine())
   matrix() {
-    const c = this.center;
-    return new DOMMatrix().translate(c.x + this.tx, c.y + this.ty).rotate(this.rot).scale(this.sx * this.flipX, this.sy * this.flipY).translate(-c.x, -c.y);
+    const b = this.bbox, q = this.q;
+    const a = (q[1].x - q[0].x) / b.w, bb = (q[1].y - q[0].y) / b.w, c = (q[3].x - q[0].x) / b.h, d = (q[3].y - q[0].y) / b.h;
+    return new DOMMatrix([a, bb, c, d, q[0].x - a * b.x - c * b.y, q[0].y - bb * b.x - d * b.y]);
   }
-  corners() {
-    const m = this.matrix(), b = this.bbox;
-    return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]].map(([x, y]) => m.transformPoint({ x, y }));
+  // unit square → quad (projective)
+  homography() {
+    const [p0, p1, p2, p3] = this.q;
+    const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dy1 = p1.y - p2.y, dy2 = p3.y - p2.y;
+    const sx = p0.x - p1.x + p2.x - p3.x, sy = p0.y - p1.y + p2.y - p3.y;
+    let g = 0, h = 0;
+    const den = dx1 * dy2 - dx2 * dy1;
+    if (Math.abs(sx) > 1e-9 || Math.abs(sy) > 1e-9) { if (Math.abs(den) > 1e-12) { g = (sx * dy2 - dx2 * sy) / den; h = (dx1 * sy - sx * dy1) / den; } }
+    const a = p1.x - p0.x + g * p1.x, b = p3.x - p0.x + h * p3.x, c = p0.x;
+    const d = p1.y - p0.y + g * p1.y, e = p3.y - p0.y + h * p3.y, f = p0.y;
+    return (u, v) => { const w = g * u + h * v + 1; return { x: (a * u + b * v + c) / w, y: (d * u + e * v + f) / w }; };
   }
-  update() {
+  // control points of a warp patch made from the current quad
+  toWarp() {
+    if (this.warp) return;
+    const H = this.homography(), w = [];
+    for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) w.push(H(i / 3, j / 3));
+    this.warp = w;
+  }
+  // the shape as a function of box coordinates (u, v ∈ [0, 1])
+  mapper() {
+    if (!this.warp) return this.homography();
+    const P = this.warp;
+    const B = (t) => { const s = 1 - t; return [s * s * s, 3 * s * s * t, 3 * s * t * t, t * t * t]; };
+    return (u, v) => {
+      const bu = B(u), bv = B(v); let x = 0, y = 0;
+      for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) { const w = bu[i] * bv[j], p = P[j * 4 + i]; x += w * p.x; y += w * p.y; }
+      return { x, y };
+    };
+  }
+  // outline in layer space (closed polyline)
+  outline(n = 24) {
+    if (!this.warp) return this.q.slice(); // quad edges stay straight (also in perspective)
+    const f = this.mapper(), pts = [];
+    for (let i = 0; i < n; i++) pts.push(f(i / n, 0));
+    for (let i = 0; i < n; i++) pts.push(f(1, i / n));
+    for (let i = n; i > 0; i--) pts.push(f(i / n, 1));
+    for (let i = n; i > 0; i--) pts.push(f(0, i / n));
+    return pts;
+  }
+  // draws the floating pixels through the current shape into ctx (identity transform)
+  drawTo(ctx, quality) {
+    ctx.imageSmoothingEnabled = this.smooth; ctx.imageSmoothingQuality = 'high';
+    if (this.isAffine()) {
+      const m = this.matrix();
+      ctx.save(); ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+      ctx.drawImage(this.float, 0, 0); ctx.restore();
+      return;
+    }
+    const b = this.bbox, f = this.mapper();
+    const N = Math.max(4, Math.min(48, Math.round(quality || 20)));
+    const P = [];
+    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) P.push(f(i / N, j / N));
+    const sx = (i) => b.x + (b.w * i) / N, sy = (j) => b.y + (b.h * j) / N;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const p00 = P[j * (N + 1) + i], p10 = P[j * (N + 1) + i + 1], p01 = P[(j + 1) * (N + 1) + i], p11 = P[(j + 1) * (N + 1) + i + 1];
+      const s00 = { x: sx(i), y: sy(j) }, s10 = { x: sx(i + 1), y: sy(j) }, s01 = { x: sx(i), y: sy(j + 1) }, s11 = { x: sx(i + 1), y: sy(j + 1) };
+      drawTri(ctx, this.float, s00, s10, s01, p00, p10, p01);
+      drawTri(ctx, this.float, s10, s11, s01, p10, p11, p01);
+    }
+  }
+  update(quality) {
     const p = this.preview.getContext('2d');
     p.setTransform(1, 0, 0, 1, 0, 0);
     p.clearRect(0, 0, this.preview.width, this.preview.height);
     p.drawImage(this.target.canvas, 0, 0);
-    const m = this.matrix();
-    p.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
-    p.imageSmoothingEnabled = this.smooth; p.imageSmoothingQuality = 'high';
-    p.drawImage(this.float, 0, 0);
-    p.setTransform(1, 0, 0, 1, 0, 0);
+    this.drawTo(p, quality || 14);
   }
   commit() {
     const t = this.target.canvas.getContext('2d');
-    const m = this.matrix();
-    t.save(); t.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
-    t.imageSmoothingEnabled = this.smooth; t.imageSmoothingQuality = 'high';
-    t.drawImage(this.float, 0, 0); t.restore();
+    t.save(); t.setTransform(1, 0, 0, 1, 0, 0);
+    this.drawTo(t, 40); t.restore();
   }
   cancel() {
     const t = this.target.canvas.getContext('2d');
     t.clearRect(0, 0, this.target.canvas.width, this.target.canvas.height);
     t.drawImage(this.original, 0, 0);
   }
+}
+// one textured triangle: source triangle s0 s1 s2 of img → destination d0 d1 d2. The clip
+// triangle is grown by ~0.6 px so neighbouring triangles leave no hairline seams.
+function drawTri(ctx, img, s0, s1, s2, d0, d1, d2) {
+  const den = (s1.x - s0.x) * (s2.y - s0.y) - (s2.x - s0.x) * (s1.y - s0.y);
+  if (!den) return;
+  const a = ((d1.x - d0.x) * (s2.y - s0.y) - (d2.x - d0.x) * (s1.y - s0.y)) / den;
+  const c = ((d2.x - d0.x) * (s1.x - s0.x) - (d1.x - d0.x) * (s2.x - s0.x)) / den;
+  const b = ((d1.y - d0.y) * (s2.y - s0.y) - (d2.y - d0.y) * (s1.y - s0.y)) / den;
+  const d = ((d2.y - d0.y) * (s1.x - s0.x) - (d1.y - d0.y) * (s2.x - s0.x)) / den;
+  const e = d0.x - a * s0.x - c * s0.y, f = d0.y - b * s0.x - d * s0.y;
+  const cx = (d0.x + d1.x + d2.x) / 3, cy = (d0.y + d1.y + d2.y) / 3;
+  const grow = (p) => { const dx = p.x - cx, dy = p.y - cy, L = Math.hypot(dx, dy) || 1; return [p.x + (dx / L) * 0.6, p.y + (dy / L) * 0.6]; };
+  ctx.save();
+  ctx.beginPath(); ctx.moveTo(...grow(d0)); ctx.lineTo(...grow(d1)); ctx.lineTo(...grow(d2)); ctx.closePath(); ctx.clip();
+  ctx.setTransform(a, b, c, d, e, f);
+  const x0 = Math.max(0, Math.floor(Math.min(s0.x, s1.x, s2.x)) - 2), y0 = Math.max(0, Math.floor(Math.min(s0.y, s1.y, s2.y)) - 2);
+  const x1 = Math.min(img.width, Math.ceil(Math.max(s0.x, s1.x, s2.x)) + 2), y1 = Math.min(img.height, Math.ceil(Math.max(s0.y, s1.y, s2.y)) + 2);
+  if (x1 > x0 && y1 > y0) ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  ctx.restore();
 }
 
 // ───────── adjustments (operate on ImageData in place) ─────────

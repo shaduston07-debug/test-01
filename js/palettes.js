@@ -33,8 +33,11 @@ const norm = (cs) => [...new Set(cs.filter(Boolean).map((c) => c.toLowerCase()))
 // ───────── palette from a photo (median cut) ─────────
 export async function paletteFromImage(file, count = 20) {
   const u = URL.createObjectURL(file);
-  try {
-    const img = await loadImage(u);
+  try { return paletteFromSource(await loadImage(u), count); } finally { URL.revokeObjectURL(u); }
+}
+// img: anything drawable (image, bitmap, canvas)
+export function paletteFromSource(img, count = 20) {
+  {
     const k = Math.min(1, 200 / Math.max(img.width, img.height));
     const c = makeCanvas(Math.max(1, Math.round(img.width * k)), Math.max(1, Math.round(img.height * k)));
     const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, c.width, c.height);
@@ -63,7 +66,7 @@ export async function paletteFromImage(file, count = 20) {
     // order by hue, darks first
     cols.sort((a, b) => { const A = rgbToHsv(...a), B = rgbToHsv(...b); return (A[2] < 0.15) - (B[2] < 0.15) || A[0] - B[0] || A[2] - B[2]; });
     return norm(cols.map((c) => rgbToHex(...c)));
-  } finally { URL.revokeObjectURL(u); }
+  }
 }
 
 // ───────── file import ─────────
