@@ -1178,6 +1178,7 @@ export function openSettings(app) {
     field('Memory budget for layers', { min: 300, max: 4000, step: 50, value: s.memoryMB, fmt: (v) => v + ' MB', onInput: (v) => { s.memoryMB = v; save(); } }),
     h('p', { class: 'hint' }, 'Sets how many layers you can add. M-series iPads start at 2000 MB (≈115 layers at 2048×2048). Drawing speed does not depend on layer count. If the app ever reloads by itself, lower this.'),
     switchRow('Autosave', s.autosave, (v) => { s.autosave = v; save(); }),
+    switchRow('Clipping layers: delete paint that goes outside the base layer', s.clipTrim !== false, (v) => { s.clipTrim = v; save(); }),
     switchRow('Make a project palette from inserted pictures', s.picturePalette !== false, (v) => { s.picturePalette = v; save(); }),
   );
   const dlg = dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });

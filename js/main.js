@@ -1241,6 +1241,23 @@ class App {
     return true;
   }
 
+  // Painting on a clipping layer: paint that lands outside the base is trimmed away when the
+  // stroke ends (setting), so un-clipping the layer later shows no hidden stray strokes.
+  // Returns the mask the stroke is limited to (base alpha, combined with any selection).
+  clipTrimMask(layer) {
+    const d = this.doc, sel = this.selection.active ? this.selection.mask : null;
+    if (this.settings.clipTrim === false || !layer || !layer.clip || d.mode === 'animate') return sel;
+    const i = d.items.indexOf(layer), bi = i >= 0 ? d.clipBase(i) : -1;
+    if (bi < 0) return sel;
+    const base = d.items[bi];
+    let m;
+    if (base.type === 'group') m = d.flatten({ bg: false, filter: (it) => it.groupId === base.id });
+    else if (base.canvas) { m = makeCanvas(d.width, d.height); m.getContext('2d').drawImage(base.canvas, 0, 0); }
+    else return sel;
+    if (sel) { const x = m.getContext('2d'); x.globalCompositeOperation = 'destination-in'; x.drawImage(sel, 0, 0); }
+    return m;
+  }
+
   // ───────── tools ─────────
   makeTools() {
     const app = this;
@@ -1259,7 +1276,7 @@ class App {
         if (kind === 'paint') app.noteColorUsed();
         app.engine.begin(target, app.brushFor(toolName), {
           kind, color: app.color, size: app.getSize(), opacity: app.getOpacity(), symmetry: app.symmetry,
-          selection: app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen', viewZoom: app.view.zoom,
+          selection: kind === 'paint' ? app.clipTrimMask(target.layer) : app.selection.active ? app.selection.mask : null, simTaper: p.type !== 'pen', viewZoom: app.view.zoom,
           steadyInk: kind === 'paint' && app.settings.steadyInk !== false, solidColor: app.settings.solidColor !== false, liftAmount: app.settings.liftAmount ?? (app.settings.liftEffects ? 1 : 0), blobAmount: app.settings.blobAmount ?? 0,
           onChange: () => app.changed(),
         });
