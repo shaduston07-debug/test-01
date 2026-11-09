@@ -361,6 +361,7 @@ export function openLayers(app, anchor) {
       h('div', { class: 'multi-acts' },
         d.mode !== 'animate' ? act('Group', () => { groupPicked(app, [...picked]); picked.clear(); render(); }) : null,
         act('Merge', () => { if (mergePicked(app, [...picked])) { picked.clear(); render(); } }),
+        act('Merge copy', () => { if (mergeCopyPicked(app, [...picked])) { picked.clear(); render(); } }),
         act('Duplicate', () => { duplicatePicked(app, [...picked]); render(); }),
         act([...picked].some((x) => x.visible) ? 'Hide' : 'Show', () => { const v = ![...picked].some((x) => x.visible); structCmd(app, v ? 'Show layers' : 'Hide layers', () => { for (const x of picked) x.visible = v; }); render(); }),
         act('Reference', () => { const v = ![...picked].every((x) => x.reference); structCmd(app, 'Reference', () => { for (const x of picked) if (x.type !== 'group') x.reference = v; }); render(); }),
@@ -652,6 +653,30 @@ export function groupPicked(app, list) {
     if (d.mode === 'animate') d.tracks = items; else d.layers = items;
     d.active = items.indexOf(g);
   });
+}
+// "pseudo merge": a new layer holding exactly what the picked layers show together, placed
+// above the topmost one; the originals stay as they are (separate and editable)
+function mergeCopyPicked(app, list) {
+  const d = app.doc;
+  const mem = membersOf(d, list).filter((x) => x.type === 'raster');
+  if (mem.length < 2) { toast('Pick at least two paint layers'); return false; }
+  if (!app.canAddRaster()) return false;
+  const set = new Set(mem);
+  const vis = mem.map((x) => x.visible); mem.forEach((x) => { x.visible = true; });
+  const flat = d.flatten({ bg: false, filter: (it) => set.has(it) });
+  mem.forEach((x, k) => { x.visible = vis[k]; });
+  const top = mem[mem.length - 1];
+  const copy = new Layer(d.width, d.height, { name: 'Merged copy (' + mem.length + ' layers)', groupId: top.groupId });
+  copy.canvas.getContext('2d').drawImage(flat, 0, 0);
+  structCmd(app, 'Merge copy', () => {
+    const items = d.items;
+    let at = items.indexOf(top) + 1;
+    while (at < items.length && items[at].clip) at++; // keep the top layer's clipping layers attached
+    items.splice(at, 0, copy);
+    d.active = at;
+  });
+  toast(`Merged copy added · the ${mem.length} layers stay separate`);
+  return true;
 }
 function mergePicked(app, list) {
   const d = app.doc;
