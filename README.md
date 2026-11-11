@@ -27,6 +27,10 @@ Every lesson has:
 
 Progress (lessons, quizzes, challenges, where you left off) is saved on the device.
 
+**Real artwork to study.** 31 lessons include a "Study real artwork" gallery of human-made art with notes on what to look at (tap a picture to see it full screen): Caillebotte's *Paris Street; Rainy Day* for the horizon and 2-point perspective, the Urbino *Ideal City* for 1-point, Piranesi's *Imaginary Prisons*, Friedrich, Hokusai and Bierstadt for composition and atmosphere, Charles Le Brun's expression heads for the universal expressions, Monet's Rouen Cathedral series for light and colour grading, Muybridge's *Horse in Motion* for timing, and David Revoy's Pepper&Carrot (model sheets, expression studies, value and colour studies, and comic pages before and after lettering). The pictures are public domain / CC0 (Wikimedia Commons, The Met open access) or CC BY 4.0 (Pepper&Carrot, credit: David Revoy, www.peppercarrot.com). They live in `art/learn/`; every credit is shown under the picture and in Learning › Artwork credits (`art/credits*.json`, built into `js/learn/art.js` by `scripts/build-art-credits.py`).
+
+The interactive face is an illustrated, layered portrait (shaded skin, layered hair, detailed eyes) driven by the expression sliders; the colouring-pipeline demo builds the same portrait up layer by layer, from sketch to colour grade.
+
 **Sources.** The lessons follow established, human-made teaching material: Andrew Loomis, Scott Robertson's *How to Draw*, Drawabox, Ctrl+Paint, James Gurney's *Color and Light*, Marco Bucci, Paul Ekman's research and Gary Faigin's guide to facial expression, Thomas & Johnston's *The Illusion of Life*, Richard Williams' *The Animator's Survival Kit*, Alan Becker's 12-principles series, Scott McCloud, Blambot's lettering conventions, WEBTOON's own Creator's Resource Handbook and Before You Publish checklist, and Clip Studio's tutorial site. Free assets the courses recommend are CC0 or CC-BY: Kenney, Quaternius, Poly Haven, Blender, Blender Studio's open movies, the Morevna Project and Pepper&Carrot.
 
 ## Perspective tool

@@ -8,6 +8,7 @@ import * as UI from '../ui.js';
 import { presetGuide, fitGuide } from '../perspective.js';
 import { TRACKS, COURSES, findLesson } from './courses.js';
 import { DEMOS } from './demos.js';
+import { ART } from './art.js';
 
 let app = null;
 let cleanups = [];
@@ -81,7 +82,8 @@ function renderHome(body) {
     body.append(grid);
   }
   body.append(h('div', { class: 'ln-foot' },
-    h('p', {}, 'How the courses are made: the lessons follow long-established, human-made teaching (Loomis, Drawabox, Ctrl+Paint, Gurney, Ekman, The Illusion of Life, The Animator\'s Survival Kit, McCloud, Blambot, WEBTOON\'s own creator guides). Every demo is drawn live in code, with no AI-generated pictures. Free assets recommended are CC0/CC-BY (Kenney, Quaternius, Poly Haven, Blender Studio, Pepper&Carrot).'),
+    h('p', {}, 'How the courses are made: the lessons follow long-established, human-made teaching (Loomis, Drawabox, Ctrl+Paint, Gurney, Ekman, The Illusion of Life, The Animator\'s Survival Kit, McCloud, Blambot, WEBTOON\'s own creator guides). Example artwork is real, human-made art: public-domain masters and Pepper&Carrot by David Revoy (CC BY 4.0). No AI-generated pictures are used anywhere. Free assets recommended are CC0/CC-BY (Kenney, Quaternius, Poly Haven, Blender Studio, Pepper&Carrot).'),
+    h('button', { class: 'pill', onclick: creditsDialog }, 'Artwork credits'),
     h('button', { class: 'pill', onclick: async () => { if (await confirmDialog('Reset all Learning progress?', 'Reset', true)) { saveP({ done: {}, quiz: {}, challenges: {}, last: null }); route({ view: 'home' }); } } }, 'Reset progress')));
 }
 
@@ -127,6 +129,7 @@ function renderLesson(body, cid, lid) {
   art.append(h('small', { class: 'ln-kicker' }, `${track.title} · ${c.title} · Lesson ${idx + 1} of ${c.lessons.length} · ${l.min} min`), h('h1', {}, l.title));
   for (const b of l.body) {
     if (typeof b === 'string') { art.append(h('div', { class: 'ln-text', html: b })); continue; }
+    if (b.art) { art.append(gallery(b)); continue; }
     const fig = h('figure', { class: 'ln-demo' });
     const host = h('div', { class: 'ln-demo-host' });
     fig.append(h('div', { class: 'ln-demo-tag' }, '● INTERACTIVE'), host);
@@ -157,6 +160,48 @@ function renderLesson(body, cid, lid) {
     h('button', { class: 'pill' + (done ? ' on' : ' primary'), onclick: () => { const q = P(); if (done) delete q.done[key(c.id, l.id)]; else q.done[key(c.id, l.id)] = Date.now(); saveP(q); if (!done && next) route({ view: 'lesson', course: c.id, lesson: next.id }); else route(currentRoute); } }, done ? '✓ Completed' : next ? 'Complete & next ›' : 'Complete course ✓'),
     next ? h('button', { class: 'pill', onclick: () => route({ view: 'lesson', course: c.id, lesson: next.id }) }, next.title + ' ›') : h('button', { class: 'pill', onclick: () => route({ view: 'course', course: c.id }) }, 'Final project ›')));
   body.append(art);
+}
+
+// real artwork (public domain / CC0 / CC BY), with credits; tap to see it large
+const credit = (a) => `${a.artist}${a.year ? ', ' + a.year : ''} · ${a.license}`;
+function gallery(b) {
+  const items = b.art.map((id) => [id, ART[id]]).filter(([, a]) => a);
+  const fig = h('figure', { class: 'ln-art' + (items.length === 1 ? ' one' : '') });
+  const grid = h('div', { class: 'ln-art-grid' });
+  items.forEach(([id, a], i) => {
+    const note = b.notes && b.notes[id];
+    grid.append(h('button', { class: 'ln-art-item', onclick: () => lightbox(items, i, b.notes) },
+      h('img', { src: a.src, alt: a.title, loading: 'lazy' }),
+      h('span', { class: 'ln-art-cap' }, h('b', {}, a.title), h('small', {}, credit(a))),
+      note ? h('span', { class: 'ln-art-note' }, note) : null));
+  });
+  fig.append(h('div', { class: 'ln-art-tag' }, '◆ STUDY REAL ARTWORK'), grid);
+  if (b.caption) fig.append(h('figcaption', {}, b.caption));
+  return fig;
+}
+function lightbox(items, i, notes) {
+  const box = h('div', { class: 'ln-lightbox', onclick: (e) => { if (e.target === box) close(); } });
+  const img = h('img'), cap = h('div', { class: 'ln-lb-cap' });
+  const show = () => {
+    const [id, a] = items[i];
+    img.src = a.src; img.alt = a.title;
+    cap.innerHTML = '';
+    cap.append(h('b', {}, a.title), h('span', {}, credit(a) + ' · '), h('a', { href: a.page, target: '_blank', rel: 'noopener' }, 'source'),
+      notes && notes[id] ? h('p', {}, notes[id]) : null);
+  };
+  const close = () => { box.remove(); removeEventListener('keydown', key); };
+  const go = (d) => { i = (i + d + items.length) % items.length; show(); };
+  const key = (e) => { if (e.key === 'Escape') close(); if (e.key === 'ArrowRight') go(1); if (e.key === 'ArrowLeft') go(-1); };
+  addEventListener('keydown', key);
+  box.append(h('button', { class: 'ln-lb-x', onclick: close }, '×'), img, cap);
+  if (items.length > 1) box.append(h('button', { class: 'ln-lb-prev', onclick: () => go(-1) }, '‹'), h('button', { class: 'ln-lb-next', onclick: () => go(1) }, '›'));
+  document.body.append(box);
+  show();
+}
+function creditsDialog() {
+  const list = h('div', { class: 'ln-credits' }, h('p', {}, 'Lesson artwork is real, human-made art used under its licence: public domain or CC0 (Wikimedia Commons and The Metropolitan Museum of Art open access) and Pepper&Carrot by David Revoy, licensed CC BY 4.0. Every demo is drawn by the app itself.'),
+    ...Object.values(ART).map((a) => h('div', {}, h('b', {}, a.title), ' — ', credit(a), ' · ', h('a', { href: a.page, target: '_blank', rel: 'noopener' }, 'source'))));
+  import('../util.js').then(({ dialog }) => dialog({ title: 'Artwork credits', body: list, wide: true, actions: [{ label: 'Close', primary: true }] }));
 }
 
 function quiz(c, l) {

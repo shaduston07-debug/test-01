@@ -755,3 +755,27 @@ body.mode-animate #btn-3d-models { display: none; }
   .ln-hero h1 { font-size: 28px; } .ln-lesson h1 { font-size: 26px; } .ln-text { font-size: 15.5px; }
   .ln-nav .pill { flex: 1 1 100%; }
 }
+.lx-step-title { width: 100%; font-size: 15px; }
+.lx-face-view svg { border-radius: 12px; }
+.ln-art { margin: 8px 0 22px; padding: 12px; border-radius: var(--radius); background: #17161a; border: 1px solid var(--glass-edge); }
+.ln-art-tag { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #e8c58a; margin: 0 0 8px 4px; }
+.ln-art-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.ln-art.one .ln-art-grid { grid-template-columns: 1fr; }
+.ln-art-item { text-align: left; display: flex; flex-direction: column; gap: 6px; border-radius: 12px; overflow: hidden; background: #0f0f12; padding-bottom: 8px; }
+.ln-art-item img { width: 100%; height: 300px; object-fit: contain; background: #0c0c0e; display: block; }
+.ln-art.one .ln-art-item img { height: auto; max-height: 520px; }
+.ln-art-cap { display: grid; gap: 2px; padding: 0 10px; font-size: 13px; line-height: 1.3; }
+.ln-art-cap small { color: var(--faint); font-size: 11.5px; }
+.ln-art-note { padding: 0 10px; font-size: 13px; color: #e9dcc4; line-height: 1.4; }
+.ln-art figcaption { color: var(--muted); font-size: 13.5px; margin: 10px 4px 0; }
+.ln-lightbox { position: fixed; inset: 0; z-index: 9999; background: rgba(5, 5, 8, 0.94); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 50px 16px 16px; gap: 10px; }
+.ln-lightbox img { max-width: 100%; max-height: calc(100% - 120px); object-fit: contain; border-radius: 6px; }
+.ln-lb-cap { max-width: 760px; text-align: center; color: var(--muted); font-size: 13.5px; line-height: 1.45; -webkit-user-select: text; user-select: text; }
+.ln-lb-cap b { display: block; color: #fff; font-size: 15px; }
+.ln-lb-cap a { color: var(--accent-2); }
+.ln-lb-cap p { color: #e9dcc4; margin: 6px 0 0; }
+.ln-lb-x, .ln-lb-prev, .ln-lb-next { position: absolute; width: 46px; height: 46px; border-radius: 50%; background: rgba(255, 255, 255, 0.12); color: #fff; font-size: 26px; }
+.ln-lb-x { top: calc(10px + var(--safe-t)); right: 14px; }
+.ln-lb-prev { left: 12px; top: 45%; } .ln-lb-next { right: 12px; top: 45%; }
+.ln-credits { display: grid; gap: 8px; font-size: 13px; max-height: 60vh; overflow: auto; -webkit-user-select: text; user-select: text; }
+.ln-credits a { color: var(--accent-2); }

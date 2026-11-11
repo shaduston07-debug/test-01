@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [claude/inkwell-studio, main]
-    paths: ['js/**', 'css/**', 'index.html', 'ios/**', 'vendor/**', 'icons/**', 'package*.json', 'capacitor.config.json', '.github/workflows/ios.yml']
+    paths: ['js/**', 'css/**', 'index.html', 'ios/**', 'vendor/**', 'art/**', 'icons/**', 'package*.json', 'capacitor.config.json', '.github/workflows/ios.yml']
 
 permissions:
   contents: write

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [claude/inkwell-studio, main]
-    paths: ['js/**', 'css/**', 'index.html', 'sw.js', 'manifest.webmanifest', 'vendor/**', 'icons/**', '.github/workflows/pages.yml']
+    paths: ['js/**', 'css/**', 'index.html', 'sw.js', 'manifest.webmanifest', 'vendor/**', 'art/**', 'icons/**', '.github/workflows/pages.yml']
 
 permissions:
   contents: write

@@ -7,7 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'www');
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out);
-for (const f of ['index.html', 'manifest.webmanifest', 'sw.js', 'css', 'js', 'icons', 'vendor']) {
+for (const f of ['index.html', 'manifest.webmanifest', 'sw.js', 'css', 'js', 'icons', 'vendor', 'art']) {
   cpSync(join(root, f), join(out, f), { recursive: true });
 }
 console.log('Built www/');
