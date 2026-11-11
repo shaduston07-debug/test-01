@@ -10,6 +10,33 @@ Three modes, picked when you create a canvas:
 | **Animate** | Multi-track timeline: flipbook drawings per track, keyframed motion, live *performance* capture, onion skin, GIF / video / PNG export |
 | **Webtoon** | Long vertical canvas with comic panels, speech balloons, panel-masked layers, smart slicing export and a phone scroll preview |
 
+## Inkwell Learning
+
+A **Studio | Learning** switch sits at the top of the start screen. **Learning** turns the app into a course library: 10 interactive courses and 47 lessons, from your first horizon line to a finished, coloured webtoon episode or animation.
+
+| Track | Courses |
+|---|---|
+| **Illustration** | Perspective (7 lessons) · Backgrounds & Environments · Expressive Faces · Colouring & Light · Colour Grading |
+| **Animation** | Animation 1: Timing & Motion · Animation 2: Character Animation (anticipation, overlap, walk cycle, colouring and export) |
+| **Webtoon** | Webtoon 1: Format & Panel Flow · Webtoon 2: Dialogue & Lettering · Webtoon 3: Colouring & Production |
+
+Every lesson has:
+- **A live, interactive demo**, drawn in code (no AI-generated pictures, nothing to download): a real 3D perspective lab with movable camera, lens and boxes; a drawing pad that snaps to a 2-point guide; a face rig with the 7 universal expressions (plus a "read the face" quiz); a turnable Loomis head; a lit sphere with light and shadow colours and cel shading; a colour-harmony wheel; a before/after colour-grading lab and a "match the grade" eye-training game; a bouncing ball with timing, squash & stretch and a spacing chart; an editable timing chart; arcs, anticipation, overlapping action, ones-vs-twos and a step-through walk cycle; a phone that scrolls a webtoon with adjustable gutters; a balloon-order exercise that checks reading order and crossed tails; panel-safe slicing; and the colouring pipeline step by step.
+- **A short quiz** (answering everything marks the lesson complete), a **Remember** box, and the **sources** the lesson follows.
+- **A challenge**: *Practise in the Studio* opens a new canvas already set up for it (right mode and size, a perspective guide where needed) with the brief in a floating window. Closing the canvas brings you back to the lesson. Each course ends with a **final project** that you apply to your own ideas.
+
+Progress (lessons, quizzes, challenges, where you left off) is saved on the device.
+
+**Sources.** The lessons follow established, human-made teaching material: Andrew Loomis, Scott Robertson's *How to Draw*, Drawabox, Ctrl+Paint, James Gurney's *Color and Light*, Marco Bucci, Paul Ekman's research and Gary Faigin's guide to facial expression, Thomas & Johnston's *The Illusion of Life*, Richard Williams' *The Animator's Survival Kit*, Alan Becker's 12-principles series, Scott McCloud, Blambot's lettering conventions, WEBTOON's own Creator's Resource Handbook and Before You Publish checklist, and Clip Studio's tutorial site. Free assets the courses recommend are CC0 or CC-BY: Kenney, Quaternius, Poly Haven, Blender, Blender Studio's open movies, the Morevna Project and Pepper&Carrot.
+
+## Perspective tool
+
+The fan icon in the Studio's top bar (or **R**, or Actions › Canvas › Drawing guide · Perspective) adds a perspective ruler to the canvas:
+- **1-, 2- or 3-point**: drag the coloured vanishing-point handles and the orange **Horizon** handle. Moving VP1 or VP2 keeps the horizon level; hold a finger on the screen while dragging to tilt it.
+- **Snap strokes**: every brush or eraser stroke follows the guide direction closest to the way it starts (towards a vanishing point, or vertical in 1/2-point and horizontal in 1-point). Lift the pen to change direction. Hold a finger on the screen while drawing to draw freely.
+- **Show**, **Lines − / +**, **Fainter / Stronger**, **See all points** (zooms out to show vanishing points that are off the canvas), **Remove**, and **Draw ✓** (back to the brush).
+- The guide is saved with the canvas.
+
 ## Installing on iPad
 
 There are two ways to get it onto an iPad. The native app is the better one.
@@ -160,7 +187,7 @@ PoseManiacs' direct link is a private Clip Studio feature. Poses come in through
 
 - CSP `.sut` and Procreate archives are undocumented formats, so import is best-effort. Shapes, textures and the main dynamics come across; exact pressure curves, dual brushes and color dynamics don't.
 - Photoshop `.abr` isn't supported (import the tip as a PNG instead). No PSD export (layers export as a PNG ZIP).
-- No perspective rulers or vector line editing.
+- No vector line editing. Perspective rulers are straight-line (1/2/3-point); there are no curvilinear (fisheye) rulers.
 - Safari limits each canvas to about 16.7 megapixels and caps total canvas memory. Very long webtoons should be split into several episode files.
 
 ## Code layout
@@ -175,6 +202,10 @@ js/tools.js                 Flood fill, selection, transform, adjustments
 js/ui.js                    Panels: brushes, Brush Studio, layers, color, actions, gallery
 js/anim.js                  Timeline, playback, performance capture, export
 js/webtoon.js               Panels, balloons, slicing, preview
+js/perspective.js           Perspective ruler: guide, handles, stroke snapping
+js/learn/learn.js           Inkwell Learning: tabs, course / lesson screens, quizzes, progress, challenges
+js/learn/courses.js         Course and lesson content with sources
+js/learn/demos.js           Interactive lesson demos (canvas / SVG)
 js/importers.js             .sut / .brush / .brushset / image brush import
 js/gif.js                   GIF encoder
 js/storage.js, sw.js        IndexedDB persistence, offline cache

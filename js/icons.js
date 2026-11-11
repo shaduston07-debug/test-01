@@ -8,6 +8,8 @@ export const ICONS = {
   transform: s('<path d="M5 3 18 11l-6 1.5-3 6z"/>'),
   fill: s('<path d="M4 12 11 5l7 7-6 6a2 2 0 0 1-2.8 0L4 12.8zM4 12h14M8 3l3 2"/><path d="M20 15s-2 2.4-2 3.6a2 2 0 0 0 4 0C22 17.4 20 15 20 15z"/>'),
   eyedropper: s('<path d="m14 4 6 6M17 2.5a2.1 2.1 0 0 1 3 3L17 8.5l-2-2zM15 7.5 5.5 17v2.5H8l9.5-9.5"/>'),
+  persp: s('<path d="M2 9h20" stroke-dasharray="2 2"/><path d="M12 9 3 21M12 9l9 12M12 9l-4.5 12M12 9l4.5 12"/><circle cx="12" cy="9" r="1.6" fill="currentColor"/>'),
+  learn: s('<path d="M2 9.5 12 5l10 4.5-10 4.5z"/><path d="M6 11.4V16c0 1.3 2.7 2.8 6 2.8s6-1.5 6-2.8v-4.6M22 9.5V15"/>'),
   panel: s('<rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 11h18M12 11v10"/>'),
   balloon: s('<path d="M12 4c5 0 9 2.9 9 6.5S17 17 12 17c-.9 0-1.8-.1-2.6-.3L5 19.5l1.2-3.6C4.2 14.7 3 12.7 3 10.5 3 6.9 7 4 12 4z"/><path d="M9 9h6M9 12h4"/>'),
   move: s('<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>'),

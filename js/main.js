@@ -17,6 +17,8 @@ import * as Toon from './webtoon.js';
 import * as Three3D from './three3d.js';
 import { Timelapse } from './timelapse.js';
 import { Reference } from './reference.js';
+import * as Learn from './learn/learn.js';
+import { drawGuide as drawPerspGuide, snapper as perspSnapper, perspTool } from './perspective.js';
 
 // Apple M-series iPads (M1–M4) report 8+ cores and have 8–16 GB of RAM: give layers a
 // bigger budget there. Older devices keep a conservative one.
@@ -127,6 +129,7 @@ class App {
     window.addEventListener('pagehide', () => this.saveNow());
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
     UI.renderGallery(this);
+    Learn.initLearning(this);
   }
 
   applySettings() {
@@ -224,7 +227,7 @@ class App {
     this.selection = new Selection(doc.width, doc.height);
     this.history.clear();
     this.transform = null;
-    $('#gallery').hidden = true; $('#studio').hidden = false;
+    $('#gallery').hidden = true; $('#learning').hidden = true; $('#studio').hidden = false;
     document.body.classList.remove('mode-paint', 'mode-animate', 'mode-webtoon');
     document.body.classList.add('mode-' + doc.mode);
     $('#doc-title').textContent = doc.name;
@@ -278,7 +281,11 @@ class App {
       if (globalThis.__closeLog) console.log('LOG close timelapse', Math.round(performance.now() - tt), 'ms');
     } finally {
       step(() => { this.doc = null; this.dropCaches(); });
-      $('#studio').hidden = true; $('#gallery').hidden = false;
+      $('#studio').hidden = true;
+      // back to the tab you came from: the Gallery, or Inkwell Learning (challenge canvases)
+      let toLearn = false;
+      step(() => { toLearn = Learn.afterClose(); });
+      $('#gallery').hidden = toLearn;
       step(() => UI.renderGallery(this));
       btn && btn.classList.remove('busy');
       this.closing = false;
@@ -823,7 +830,7 @@ class App {
     if (mod && k === 'd') { e.preventDefault(); this.selection.clear(); this.requestRender('view'); return; }
     if (mod) return;
     if (e.code === 'Space') { this.spaceDown = true; e.preventDefault(); return; }
-    const map = { b: 'brush', e: 'eraser', s: 'smudge', v: 'transform', g: 'fill', i: 'eyedropper', m: 'move', p: 'panel', t: 'balloon', d: '3d', l: null };
+    const map = { b: 'brush', e: 'eraser', s: 'smudge', v: 'transform', g: 'fill', i: 'eyedropper', m: 'move', p: 'panel', t: 'balloon', d: '3d', r: 'persp', l: null };
     if (k in map) {
       if (k === 'l') UI.openLayers(this, $('#btn-layers'));
       else if (this.tools[map[k]] && this.toolAvailable(map[k])) this.setTool(map[k]);
@@ -1126,6 +1133,7 @@ class App {
     const px = 1 / v.zoom;
     if (d.mode === 'webtoon') Toon.drawGuides(this, ctx, px);
     if (this.symmetry.mode !== 'off') this.drawSymmetryGuide(ctx, px);
+    if (d.persp) drawPerspGuide(this, ctx, px);
     if (this.selection && this.selection.active) this.drawSelection(ctx, px);
     const t = this.tools[this.tool];
     t && t.overlay && t.overlay(ctx, px);
@@ -1281,8 +1289,12 @@ class App {
           onChange: () => app.changed(),
         });
         this.target = target; this.raw = [p]; this.shape = null; this.anchor = p;
+        // perspective guide with Snap on: the stroke follows the nearest guide direction
+        // (a finger on the screen while drawing = free stroke)
+        const g = d.persp;
+        this.snap = kind !== 'smudge' && g && g.snap && g.visible && app.touchesDown() === 0 ? perspSnapper(app, g, p) : null;
         app.engine.add(p);
-        this.armQuickShape(p);
+        if (!this.snap) this.armQuickShape(p);
       },
       armQuickShape(p) {
         clearTimeout(this.qs);
@@ -1292,6 +1304,7 @@ class App {
       move(p) {
         if (!app.engine.active) return;
         if (this.shape) { this.adjustShape(p); return; }
+        if (this.snap) { for (const q of this.snap.feed(p)) { this.raw.push(q); app.engine.add(q); } return; }
         this.raw.push(p);
         app.engine.add(p);
         if (dist(p.sx, p.sy, this.anchor.sx, this.anchor.sy) > 5) { this.anchor = p; this.armQuickShape(p); }
@@ -1361,6 +1374,7 @@ class App {
         clearTimeout(this.joinT); this.joinT = null;
         if (app.pendingStroke === this) app.pendingStroke = null;
         if (!app.engine.active) return;
+        if (this.snap) { for (const q of this.snap.flush()) { this.raw.push(q); app.engine.add(q); } this.snap = null; }
         const cmd = app.engine.end(kind === 'paint' ? 'Stroke' : kind === 'erase' ? 'Erase' : 'Smudge');
         if (cmd) app.history.push(cmd);
         this.shape = null;
@@ -1424,8 +1438,9 @@ class App {
       panel: Toon.panelTool(app),
       '3d': Three3D.tool3d(app),
       balloon: Toon.balloonTool(app),
+      persp: perspTool(app),
     };
-    for (const k of ['3d', 'transform', 'panel', 'balloon', 'move']) if (tools[k]) tools[k].fingers = true;
+    for (const k of ['3d', 'transform', 'panel', 'balloon', 'move', 'persp']) if (tools[k]) tools[k].fingers = true;
     return tools;
   }
 

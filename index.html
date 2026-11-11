@@ -18,6 +18,10 @@
 <div id="app">
   <!-- ───────── Gallery ───────── -->
   <section id="gallery" class="screen">
+    <div class="app-tabs-row"><nav class="app-tabs" role="tablist">
+        <button class="app-tab" data-tab="studio" role="tab"><span class="at-ico logo-mini"></span>Studio</button>
+        <button class="app-tab" data-tab="learn" role="tab"><span class="at-ico"></span>Learning</button>
+      </nav></div>
     <header class="gal-head">
       <div class="brand"><span class="logo"></span>Inkwell <em>Studio</em></div>
       <div class="gal-actions">
@@ -44,6 +48,15 @@
     <input type="file" id="file-any" hidden>
   </section>
 
+  <!-- ───────── Inkwell Learning ───────── -->
+  <section id="learning" class="screen" hidden>
+    <div class="app-tabs-row"><nav class="app-tabs" role="tablist">
+        <button class="app-tab" data-tab="studio" role="tab"><span class="at-ico logo-mini"></span>Studio</button>
+        <button class="app-tab" data-tab="learn" role="tab"><span class="at-ico"></span>Learning</button>
+      </nav></div>
+    <div id="learn-body"></div>
+  </section>
+
   <!-- ───────── Studio ───────── -->
   <section id="studio" class="screen" hidden>
     <canvas id="view"></canvas>
@@ -58,6 +71,7 @@
           <span class="tb-sep"></span>
           <button class="ico tool" data-tool="fill" title="Fill (G)"></button>
           <button class="ico tool" data-tool="eyedropper" title="Eyedropper (I)"></button>
+          <button class="ico tool" data-tool="persp" title="Perspective guide: vanishing points, horizon, snapping (R)"></button>
           <span class="mode-only still">
             <button class="ico tool" data-tool="balloon" title="Text &amp; speech bubbles (T)"></button>
             <button class="ico tool" data-tool="3d" title="3D layer: orbit, move, pose (D)"></button>

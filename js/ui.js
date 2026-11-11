@@ -889,6 +889,7 @@ export function openActions(app, anchor) {
       menuItem('canvas', 'Canvas size', () => resizeDialog(app), `${d.width}×${d.height}`),
       menuItem('sym', 'Flip view horizontally', () => { app.view.flip *= -1; app.fitView(); }, app.view.flip < 0 ? 'On' : ''),
       menuItem('sym', 'Drawing guide · Symmetry', () => symmetryDialog(app), app.symmetry.mode === 'off' ? '' : app.symmetry.mode),
+      menuItem('persp', 'Drawing guide · Perspective', () => { closePopover(); app.setTool('persp'); }, d.persp ? d.persp.type.replace('pt', '-point') : ''),
       h('div', {}, switchRow('Reference', app.reference.open, (v) => app.reference.toggle(v))),
       menuItem('pencil', 'Rename', async () => { const n = await promptDialog('Name', d.name); if (n) { d.name = n; $('#doc-title').textContent = n; app.changed(); } }),
     ],
