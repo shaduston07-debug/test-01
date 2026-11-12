@@ -12,7 +12,7 @@ Three modes, picked when you create a canvas:
 
 ## Inkwell Learning
 
-A **Studio | Learning** switch sits at the top of the start screen. **Learning** turns the app into a course library: 10 interactive courses and 47 lessons, from your first horizon line to a finished, coloured webtoon episode or animation.
+A **Studio | Learning** switch sits at the top of the start screen. **Learning** looks like the Studio's start screen: the same **Illustrate / Animate / Webtoon** cards choose a track, and its lessons are shown as picture cards grouped by course: 10 interactive courses and 47 lessons, from your first horizon line to a finished, coloured webtoon episode or animation.
 
 | Track | Courses |
 |---|---|
@@ -23,7 +23,7 @@ A **Studio | Learning** switch sits at the top of the start screen. **Learning**
 Every lesson has:
 - **A live, interactive demo**, drawn in code (no AI-generated pictures, nothing to download): a real 3D perspective lab with movable camera, lens and boxes; a drawing pad that snaps to a 2-point guide; a face rig with the 7 universal expressions (plus a "read the face" quiz); a turnable Loomis head; a lit sphere with light and shadow colours and cel shading; a colour-harmony wheel; a before/after colour-grading lab and a "match the grade" eye-training game; a bouncing ball with timing, squash & stretch and a spacing chart; an editable timing chart; arcs, anticipation, overlapping action, ones-vs-twos and a step-through walk cycle; a phone that scrolls a webtoon with adjustable gutters; a balloon-order exercise that checks reading order and crossed tails; panel-safe slicing; and the colouring pipeline step by step.
 - **A short quiz** (answering everything marks the lesson complete), a **Remember** box, and the **sources** the lesson follows.
-- **A challenge**: *Practise in the Studio* opens a new canvas already set up for it (right mode and size, a perspective guide where needed) with the brief in a floating window. Closing the canvas brings you back to the lesson. Each course ends with a **final project** that you apply to your own ideas.
+- **Guided exercises**: each challenge is 4 exercises in a real canvas: **1 Trace it** (every line is drawn for you in blue on a locked *Guide (help)* layer that never shows in exports), **2 Half help**, **3 Start only** and **4 On your own**. A floating window explains each one and moves you to the next; each exercise gets its own layer, so you can compare them. Closing the canvas brings you back to the lesson. Each course ends with a **final project** that you apply to your own ideas.
 
 Progress (lessons, quizzes, challenges, where you left off) is saved on the device.
 
@@ -36,9 +36,9 @@ The interactive face is an illustrated, layered portrait (shaded skin, layered h
 ## Perspective tool
 
 The fan icon in the Studio's top bar (or **R**, or Actions › Canvas › Drawing guide · Perspective) adds a perspective ruler to the canvas:
-- **1-, 2- or 3-point**: drag the coloured vanishing-point handles and the orange **Horizon** handle. Moving VP1 or VP2 keeps the horizon level; hold a finger on the screen while dragging to tilt it.
-- **Snap strokes**: every brush or eraser stroke follows the guide direction closest to the way it starts (towards a vanishing point, or vertical in 1/2-point and horizontal in 1-point). Lift the pen to change direction. Hold a finger on the screen while drawing to draw freely.
-- **Show**, **Lines − / +**, **Fainter / Stronger**, **See all points** (zooms out to show vanishing points that are off the canvas), **Remove**, and **Draw ✓** (back to the brush).
+- A short bar: **1-point / 2-point / 3-point**, **Snap: on/off**, **Hide/Show**, **More…** (number of lines, line strength, square grid, See all points, Remove), **?** (the 3-step intro, also shown the first time) and **Done ✓**.
+- Drag the round handles: the orange **Eye level** handle moves the horizon, the coloured **Point** handles are the vanishing points. Moving Point 1 or 2 keeps the horizon level; hold a finger on the screen while dragging to tilt it.
+- With Snap on, every brush or eraser stroke follows the guide direction closest to the way it starts. Lift the pen to change direction; hold a finger on the screen while drawing to draw freely.
 - The guide is saved with the canvas.
 
 ## Installing on iPad

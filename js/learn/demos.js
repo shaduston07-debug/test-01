@@ -421,7 +421,7 @@ function composition(host) {
 }
 
 // ───────── faces ─────────
-const EXPR = {
+export const EXPR = {
   neutral: {},
   joy: { corners: 1, open: 0.25, squint: 0.55, cheeks: 1, browIn: 0.1, browOut: 0.15 },
   sadness: { browIn: 1, browOut: -0.6, knit: 0.4, lid: 0.7, corners: -0.8, chin: 0.6 },
@@ -442,19 +442,19 @@ const EXPR_TELLS = {
   contempt: 'One mouth corner tightened and raised: the only one-sided universal expression.',
 };
 let faceUid = 0;
-function faceSVG(p, { size = 300, stage = 6 } = {}) {
+export function faceSVG(p, { size = 300, stage = 6, blank = false, transparent = false } = {}) {
   const P = { browIn: 0, browOut: 0, knit: 0, lid: 1, squint: 0, corners: 0, open: 0, width: 0, cheeks: 0, nose: 0, upper: 0, press: 0, side: 0, chin: 0, tilt: 0, gaze: 0, ...p };
   const u = 'f' + (++faceUid);
   const C = { skin: '#f7d9c4', skinSh: '#e6a98f', skinSh2: '#d98f78', hair: '#3b2b47', hairSh: '#241a30', hairHi: '#7a6493', iris: '#6a3f2a', irisLo: '#c98b4f', shirt: '#2f4a7a', shirtSh: '#22365c', line: '#2a1a1c', lip: '#c86a6a', mouth: '#5b1f2a', bg1: '#ffcf9e', bg2: '#8a6ab0' };
   const sketch = stage === 0, lines = stage >= 1, flats = stage >= 2, shade = stage >= 3, light = stage >= 4, bg = stage >= 5, grade = stage >= 6;
-  const F = (c) => (flats ? c : stage === 1 ? '#ffffff' : 'none');
+  const F = (c) => (flats ? c : stage === 1 && !transparent ? '#ffffff' : 'none');
   const L = (w) => (sketch ? `stroke="#6f97d6" stroke-width="${w * 0.8}" opacity="0.85"` : lines ? `stroke="${C.line}" stroke-width="${w}"` : '');
   const g = [];
   // ── background ──
   if (bg) g.push(`<defs><radialGradient id="${u}bg" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="${C.bg1}"/><stop offset="1" stop-color="${C.bg2}"/></radialGradient></defs><rect width="300" height="360" fill="url(#${u}bg)"/>` +
     [[40, 60, 22], [255, 90, 14], [230, 300, 26], [30, 280, 12], [270, 200, 8]].map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#fff" opacity="0.18"/>`).join(''));
-  else g.push(`<rect width="300" height="360" fill="#ffffff"/>`);
-  if (sketch) g.push(`<g fill="none" stroke="#9db8e6" stroke-width="1.2"><circle cx="150" cy="150" r="92"/><path d="M150,40 V305 M58,168 H242 M80,228 H220 M100,268 L150,303 L200,268"/></g>`);
+  else if (!transparent) g.push(`<rect width="300" height="360" fill="#ffffff"/>`);
+  if (sketch && !blank) g.push(`<g fill="none" stroke="#9db8e6" stroke-width="1.2"><circle cx="150" cy="150" r="92"/><path d="M150,40 V305 M58,168 H242 M80,228 H220 M100,268 L150,303 L200,268"/></g>`);
   const T = `rotate(${P.tilt * 10} 150 200)`;
   g.push(`<g transform="${T}" stroke-linejoin="round" stroke-linecap="round">`);
   // ── back hair (behind everything) ──
@@ -510,7 +510,7 @@ function faceSVG(p, { size = 300, stage = 6 } = {}) {
     if (P.squint > 0.3 && lines && !sketch) s1 += `<path d="M${ox + (ix - ox) * 0.2},${low + 7} Q${cx},${low + 11} ${ix - (ix - ox) * 0.2},${low + 6}" fill="none" stroke="#c48a7a" stroke-width="1.3" opacity="${P.squint}"/>`;
     return s1;
   };
-  g.push(eye(108, -1), eye(192, 1));
+  if (!blank) g.push(eye(108, -1), eye(192, 1));
   // ── brows: tapered, filled ──
   const brow = (s) => {
     const inX = 150 + s * (20 - P.knit * 7), outX = 150 + s * 74, by = 140;
@@ -549,7 +549,7 @@ function faceSVG(p, { size = 300, stage = 6 } = {}) {
   if (lines && !sketch) mouth += `<path d="M${150 - hw * 0.35},${lowY + 9} Q150,${lowY + 12} ${150 + hw * 0.35},${lowY + 9}" fill="none" stroke="#d9a090" stroke-width="1.6"/>`;
   if ((P.corners < -0.4 || P.chin > 0.3) && lines && !sketch) mouth += `<path d="M138,${my + 32} Q150,${my + 28 + P.chin * 4} 162,${my + 32}" fill="none" stroke="#c49a82" stroke-width="1.3"/>`;
   if (P.upper > 0.3 && lines && !sketch) mouth += `<path d="M118,214 Q108,236 ${lx - 3},${ly + 3} M182,214 Q192,236 ${rx + 3},${ry + 3}" fill="none" stroke="#c99482" stroke-width="1.4"/>`;
-  g.push(brow(-1), brow(1), nose, mouth);
+  if (!blank) g.push(brow(-1), brow(1), nose, mouth);
   // ── fringe / bangs and side locks (in front of the face) ──
   // side locks
   for (const s of [-1, 1]) g.push(`<path d="M${150 + s * 90},150 C${150 + s * 98},196 ${150 + s * 94},240 ${150 + s * 76},280 C${150 + s * 82},240 ${150 + s * 78},200 ${150 + s * 72},168Z" fill="${F(C.hair)}" ${L(2)}/>`);
@@ -1118,7 +1118,7 @@ const WALK_KEYS = [
   [-2, 6, 12, 70, 0, 'PASSING'],
   [-16, 2, 26, 36, 5, 'UP'],
 ];
-function walkPose(ph) {
+export function walkPose(ph) {
   // ph 0..1 over a full cycle (two steps)
   const half = ph < 0.5 ? 0 : 1, u = (ph % 0.5) / 0.5 * 4;
   const i = Math.floor(u) % 4, f = u - Math.floor(u);

@@ -2,13 +2,15 @@
 // challenges that open a ready-made canvas in the Studio, sources, and saved progress.
 import { $, $$, h, toast, confirmDialog } from '../util.js';
 import { ICONS } from '../icons.js';
-import { Doc } from '../doc.js';
+import { Doc, Layer, Track } from '../doc.js';
+import { touch } from '../history.js';
 import * as store from '../storage.js';
 import * as UI from '../ui.js';
 import { presetGuide, fitGuide } from '../perspective.js';
 import { TRACKS, COURSES, findLesson } from './courses.js';
 import { DEMOS } from './demos.js';
 import { ART } from './art.js';
+import { LEVELS, GUIDE_FOR, kindInfo, drawGuideInto } from './exercises.js';
 
 let app = null;
 let cleanups = [];
@@ -57,36 +59,78 @@ function courseProgress(c, p = P()) {
 }
 const bar = (pct, color) => h('div', { class: 'ln-bar' }, h('i', { style: { width: Math.round(pct * 100) + '%', background: color || 'var(--accent)' } }));
 
+// Same layout as the Studio start screen: the three mode cards on top choose Illustrate /
+// Animate / Webtoon, and the lessons below are picture cards like your canvases.
+const TRACK_UI = { illustration: ['paint', 'Illustrate', 'Perspective, backgrounds, faces, colour'], animation: ['anim', 'Animate', 'Timing, motion, walk cycles, colouring'], webtoon: ['toon', 'Webtoon', 'Panels, dialogue, colour, publishing'] };
+const lessonThumb = (c, l) => {
+  const b = l && l.body.find((x) => x && x.art);
+  if (b) return ART[b.art[0]] && ART[b.art[0]].src;
+  for (const x of c.lessons) { const a = x.body.find((y) => y && y.art); if (a && ART[a.art[0]]) return ART[a.art[0]].src; }
+  return '';
+};
 function renderHome(body) {
   const p = P();
-  const total = COURSES.reduce((a, c) => a + c.lessons.length, 0), done = Object.keys(p.done).length;
-  const hero = h('div', { class: 'ln-hero' },
-    h('div', {}, h('h1', {}, 'Inkwell ', h('em', {}, 'Learning')),
-      h('p', {}, 'Interactive courses in perspective, backgrounds, faces, colour, grading, animation and webtoons. Every lesson has a live demo, a quiz, a challenge that opens straight in the Studio, and the human-made sources it is built on.')),
-    h('div', { class: 'ln-hero-stat' }, h('b', {}, `${done} / ${total}`), h('small', {}, 'lessons done'), bar(total ? done / total : 0)));
-  body.append(hero);
-  if (p.last) {
-    const { course, lesson } = findLesson(p.last.course, p.last.lesson);
-    if (course && lesson) body.append(h('button', { class: 'ln-continue', onclick: () => route({ view: 'lesson', course: course.id, lesson: lesson.id }) },
-      h('span', { class: 'ln-dot', style: { background: course.color } }), h('div', {}, h('small', {}, 'Continue where you left off'), h('b', {}, `${course.title} · ${lesson.title}`)), h('span', { class: 'ln-go' }, '›')));
-  }
+  const track = store.prefs.get('learn.track', 'illustration');
+  const last = p.last && findLesson(p.last.course, p.last.lesson);
+  body.append(h('header', { class: 'gal-head' },
+    h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Inkwell ', h('em', {}, 'Learning')),
+    h('div', { class: 'gal-actions glass' },
+      last && last.lesson ? h('button', { class: 'pill primary', onclick: () => route({ view: 'lesson', course: last.course.id, lesson: last.lesson.id }) }, '▶ Continue: ' + last.lesson.title) : null,
+      h('button', { class: 'pill', onclick: creditsDialog }, 'Credits'))));
+  const modes = h('div', { class: 'gal-modes' });
   for (const t of TRACKS) {
-    body.append(h('div', { class: 'ln-track-head' }, h('h2', {}, t.title), h('span', {}, t.blurb)));
-    const grid = h('div', { class: 'ln-grid' });
-    for (const c of COURSES.filter((x) => x.track === t.id)) {
-      const pr = courseProgress(c, p);
-      grid.append(h('button', { class: 'ln-card', onclick: () => route({ view: 'course', course: c.id }) },
-        h('div', { class: 'ln-card-top', style: { background: `linear-gradient(135deg, ${c.color}, ${c.color}55)` } }, h('span', {}, `${c.lessons.length} lessons`), c.id === 'perspective' ? h('span', { class: 'ln-new' }, 'NEW TOOL') : null),
-        h('b', {}, c.title), h('p', {}, c.blurb), bar(pr.pct, c.color), h('small', {}, pr.d ? `${pr.d} of ${pr.n} done` : 'Start course')));
-    }
-    body.append(grid);
+    const [ico, name, sub] = TRACK_UI[t.id];
+    const cs = COURSES.filter((c) => c.track === t.id), n = cs.reduce((a, c) => a + c.lessons.length, 0), d = cs.reduce((a, c) => a + courseProgress(c, p).d, 0);
+    modes.append(h('button', { class: 'mode-card' + (t.id === track ? ' on' : ''), onclick: () => { store.prefs.set('learn.track', t.id); route({ view: 'home' }); } },
+      h('span', { class: 'mc-ico ' + ico }), h('b', {}, name), h('small', {}, `${sub} · ${d}/${n} done`)));
+  }
+  body.append(modes);
+  const used = new Set();
+  for (const c of COURSES.filter((x) => x.track === track)) {
+    const pr = courseProgress(c, p);
+    const head = withC(c.color, h('div', { class: 'ln-course-row' },
+      h('div', {}, h('h2', {}, c.title), h('p', {}, c.blurb)),
+      h('div', { class: 'ln-course-prog' }, h('small', {}, `${pr.d} of ${pr.n} done`), bar(pr.pct, c.color))));
+    const grid = h('div', { class: 'gal-grid ln-lesson-grid' });
+    c.lessons.forEach((l, i) => {
+      const done = !!p.done[key(c.id, l.id)];
+      const own = l.body.find((x) => x && x.art), url = own && ART[own.art[0]] ? ART[own.art[0]].src : '';
+      const fresh = url && !used.has(url); if (fresh) used.add(url);
+      const kind = GUIDE_FOR[key(c.id, l.id)];
+      const thumb = h('button', { class: 'gal-thumb ln-thumb', onclick: () => route({ view: 'lesson', course: c.id, lesson: l.id }) },
+        fresh ? h('img', { src: url, alt: '', loading: 'lazy' }) : kind ? exercisePreview(c, l, kind) : null,
+        h('span', { class: 'ln-thumb-num' }, done ? '✓' : String(i + 1)));
+      withC(c.color, thumb);
+      grid.append(h('div', { class: 'gal-card' + (done ? ' ln-done' : '') }, thumb,
+        h('div', { class: 'gal-meta' }, h('b', {}, l.title), h('span', { class: 'badge' }, done ? '✓ Done' : `${l.min} min`)),
+        h('small', { class: 'hint' }, `Lesson ${i + 1} · try it · quiz · 4 exercises`)));
+    });
+    const capDone = !!p.challenges[key(c.id, 'capstone')];
+    const capThumb = withC(c.color, h('button', { class: 'gal-thumb ln-thumb ln-cap-thumb', onclick: () => route({ view: 'course', course: c.id }) }, h('span', {}, '★'), h('b', {}, 'Final project')));
+    grid.append(h('div', { class: 'gal-card' }, capThumb, h('div', { class: 'gal-meta' }, h('b', {}, c.capstone.title.replace('Capstone: ', '')), h('span', { class: 'badge' }, capDone ? '✓ Done' : 'Project')), h('small', { class: 'hint' }, 'Use it on your own idea')));
+    body.append(h('section', { class: 'ln-course-sec' }, head, grid));
   }
   body.append(h('div', { class: 'ln-foot' },
-    h('p', {}, 'How the courses are made: the lessons follow long-established, human-made teaching (Loomis, Drawabox, Ctrl+Paint, Gurney, Ekman, The Illusion of Life, The Animator\'s Survival Kit, McCloud, Blambot, WEBTOON\'s own creator guides). Example artwork is real, human-made art: public-domain masters and Pepper&Carrot by David Revoy (CC BY 4.0). No AI-generated pictures are used anywhere. Free assets recommended are CC0/CC-BY (Kenney, Quaternius, Poly Haven, Blender Studio, Pepper&Carrot).'),
-    h('button', { class: 'pill', onclick: creditsDialog }, 'Artwork credits'),
+    h('p', {}, 'The lessons follow long-established, human-made teaching (Loomis, Drawabox, Ctrl+Paint, Gurney, Ekman, The Illusion of Life, The Animator\'s Survival Kit, McCloud, Blambot, WEBTOON\'s creator guides). Example artwork is real: public-domain masters and Pepper&Carrot by David Revoy (CC BY 4.0). No AI-generated pictures.'),
     h('button', { class: 'pill', onclick: async () => { if (await confirmDialog('Reset all Learning progress?', 'Reset', true)) { saveP({ done: {}, quiz: {}, challenges: {}, last: null }); route({ view: 'home' }); } } }, 'Reset progress')));
 }
 
+// a small picture of the lesson's first guided exercise (used when the lesson has no artwork of its own)
+function exercisePreview(c, l, kind) {
+  const W = 960, H = 720, cv = h('canvas', { class: 'ln-thumb-prev' }); cv.width = 480; cv.height = 360;
+  const s = l.challenge.studio || {};
+  const fake = { width: W, height: H, mode: s.mode || 'paint', anim: { length: s.len || 48 }, persp: null };
+  if (s.persp) presetGuide(fake, s.persp.type, { horizon: s.persp.horizon });
+  const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H;
+  drawGuideInto(tmp, fake, kind, 0).then(() => { const x = cv.getContext('2d'); x.fillStyle = '#fbfaf7'; x.fillRect(0, 0, 480, 360); x.drawImage(tmp, 0, 0, 480, 360); }).catch(() => {});
+  return cv;
+}
+function backBar(c, extra) {
+  const [, name] = TRACK_UI[c.track];
+  return h('div', { class: 'ln-backbar' },
+    h('button', { class: 'pill', onclick: () => { store.prefs.set('learn.track', c.track); route({ view: 'home' }); } }, '‹ ' + name),
+    h('span', { class: 'ln-backbar-title' }, c.title), extra || null);
+}
 function crumbs(...parts) {
   return h('div', { class: 'ln-crumbs' }, ...parts.flatMap((p, i) => [i ? h('span', {}, '›') : null, p.go ? h('button', { onclick: p.go }, p.label) : h('b', {}, p.label)]));
 }
@@ -95,7 +139,7 @@ function renderCourse(body, cid) {
   const c = COURSES.find((x) => x.id === cid); if (!c) return route({ view: 'home' });
   const p = P(), pr = courseProgress(c, p);
   const track = TRACKS.find((t) => t.id === c.track);
-  body.append(crumbs({ label: 'Learning', go: () => route({ view: 'home' }) }, { label: track.title }, { label: c.title }));
+  body.append(backBar(c));
   body.append(withC(c.color, h('div', { class: 'ln-course-head' },
     h('h1', {}, c.title), h('p', {}, c.blurb),
     h('div', { class: 'ln-outcome' }, h('b', {}, 'By the end of this course: '), c.outcome),
@@ -115,7 +159,7 @@ function renderCourse(body, cid) {
     h('small', {}, 'FINAL PROJECT'), h('h2', {}, cap.title), h('p', {}, cap.text),
     h('div', { class: 'ln-ideas' }, h('b', {}, 'Ideas to apply it to: '), cap.ideas.join(' · ')),
     h('div', { class: 'ln-row' },
-      h('button', { class: 'pill primary', onclick: () => openChallenge(c, { id: 'capstone', title: cap.title }, { title: cap.title, text: cap.text, steps: ['Plan with thumbnails first.', 'Use the lessons\' challenges as your checklist.', 'Make it about YOUR idea.'], studio: cap.studio }) }, 'Start in the Studio'),
+      h('button', { class: 'pill primary', onclick: () => openChallenge(c, { id: 'capstone', title: cap.title }, { title: cap.title, text: cap.text, steps: ['Plan with thumbnails first.', 'Use the lessons\' exercises as your checklist.', 'Make it about YOUR idea.'], studio: cap.studio }) }, 'Start in the Studio'),
       h('button', { class: 'pill' + (capDone ? ' on' : ''), onclick: () => { const q = P(); q.challenges[key(c.id, 'capstone')] = !capDone; saveP(q); route(currentRoute); } }, capDone ? '✓ Finished' : 'Mark as finished')))));
 }
 
@@ -124,9 +168,11 @@ function renderLesson(body, cid, lid) {
   if (!c || !l) return route({ view: 'home' });
   const p = P(); p.last = { course: cid, lesson: lid }; saveP(p);
   const idx = c.lessons.indexOf(l), track = TRACKS.find((t) => t.id === c.track);
-  body.append(crumbs({ label: 'Learning', go: () => route({ view: 'home' }) }, { label: c.title, go: () => route({ view: 'course', course: c.id }) }, { label: `Lesson ${idx + 1}` }));
+  const jump = (id) => () => { const el = document.getElementById(id); el && el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  body.append(backBar(c, h('div', { class: 'ln-steps' },
+    h('button', { onclick: jump('ln-s-learn') }, '1 Learn'), h('button', { onclick: jump('ln-s-quiz') }, '2 Quiz'), h('button', { class: 'go', onclick: jump('ln-s-practise') }, '3 Practise'))));
   const art = h('article', { class: 'ln-lesson' }); art.style.setProperty('--c', c.color);
-  art.append(h('small', { class: 'ln-kicker' }, `${track.title} · ${c.title} · Lesson ${idx + 1} of ${c.lessons.length} · ${l.min} min`), h('h1', {}, l.title));
+  art.append(h('small', { class: 'ln-kicker', id: 'ln-s-learn' }, `Lesson ${idx + 1} of ${c.lessons.length} · ${l.min} min`), h('h1', {}, l.title));
   for (const b of l.body) {
     if (typeof b === 'string') { art.append(h('div', { class: 'ln-text', html: b })); continue; }
     if (b.art) { art.append(gallery(b)); continue; }
@@ -140,14 +186,17 @@ function renderLesson(body, cid, lid) {
   // key takeaways
   art.append(h('div', { class: 'ln-keys' }, h('b', {}, 'Remember'), h('ul', {}, ...l.keys.map((k) => h('li', {}, k)))));
   // quiz
-  art.append(quiz(c, l));
+  const qz = quiz(c, l); qz.id = 'ln-s-quiz'; art.append(qz);
   // challenge
   const ch = l.challenge, chDone = !!p.challenges[key(c.id, l.id)];
-  art.append(h('div', { class: 'ln-challenge' },
-    h('small', {}, 'CHALLENGE'), h('h2', {}, ch.title), h('p', {}, ch.text),
-    h('ol', {}, ...ch.steps.map((s) => h('li', {}, s))),
+  const kind = GUIDE_FOR[key(c.id, l.id)], reached = (p.levels && p.levels[key(c.id, l.id)]) || 0;
+  art.append(h('div', { class: 'ln-challenge', id: 'ln-s-practise' },
+    h('small', {}, 'PRACTISE IN THE STUDIO'), h('h2', {}, ch.title), h('p', {}, ch.text),
+    kind ? h('div', { class: 'ln-ladder' }, ...LEVELS.map((name, i) => h('button', { class: 'ln-rung' + (i < reached ? ' done' : '') + (i === Math.min(reached, 3) ? ' next' : ''), onclick: () => openChallenge(c, l, ch, i) },
+      h('span', {}, i < reached ? '✓' : String(i + 1)), h('b', {}, name), h('small', {}, kindInfo(kind).tips[i].split('. ')[0].replace(/\.$/, '') + '.')))) : h('ol', {}, ...ch.steps.map((s) => h('li', {}, s))),
+    kind ? h('p', { class: 'hint' }, 'Each exercise opens with its help drawn right in the canvas, on a locked Guide layer. Every next exercise takes some help away, until you draw it on your own.') : null,
     h('div', { class: 'ln-row' },
-      h('button', { class: 'pill primary', onclick: () => openChallenge(c, l, ch) }, 'Practise in the Studio'),
+      h('button', { class: 'pill primary', onclick: () => openChallenge(c, l, ch, kind ? Math.min(reached, 3) : 0) }, kind ? (reached ? `Continue: exercise ${Math.min(reached, 3) + 1}` : 'Start exercise 1') : 'Practise in the Studio'),
       h('button', { class: 'pill' + (chDone ? ' on' : ''), onclick: () => { const q = P(); q.challenges[key(c.id, l.id)] = !chDone; saveP(q); route(currentRoute); } }, chDone ? '✓ Challenge done' : 'Mark challenge done'))));
   // sources
   art.append(h('div', { class: 'ln-sources' }, h('b', {}, 'Sources & further study'),
@@ -235,23 +284,105 @@ function quiz(c, l) {
   return box;
 }
 
-// open a fresh canvas set up for the challenge, with the brief in a floating window
-async function openChallenge(c, l, ch) {
+// Open a fresh canvas for the challenge. With a guide kind, the canvas gets a locked "Guide"
+// layer (left out of exports) drawn for exercise `level`; the floating window steps through the
+// four exercises, each on its own layer, with less help each time.
+async function openChallenge(c, l, ch, level = 0) {
   const s = ch.studio || { mode: 'paint', w: 2048, h: 2048, name: ch.title };
+  const kind = GUIDE_FOR[key(c.id, l.id)], K = kind && kindInfo(kind);
   const doc = Doc.create({ name: s.name || ch.title, mode: s.mode, width: s.w, height: s.h });
   if (s.mode === 'animate') { doc.anim.fps = s.fps || 24; doc.anim.length = s.len || 48; }
   if (s.persp) presetGuide(doc, s.persp.type, { horizon: s.persp.horizon });
+  const ex = { c, l, ch, kind, K, level, doc, items: [] };
+  if (K) await setupGuides(ex);
   stopDemos();
   app.returnTo = 'learn';
   $('#learning').hidden = true;
   await app.openDoc(doc);
   app.dirtySave = true; app.saveNow();
-  if (s.persp) { app.setTool('persp'); fitGuide(app); }
-  const body = h('div', { class: 'ln-brief' },
-    h('small', {}, c.title.toUpperCase()), h('b', {}, ch.title), h('p', {}, ch.text),
-    h('ol', {}, ...(ch.steps || []).map((x) => h('li', {}, x))),
-    h('button', { class: 'pill', onclick: () => { const q = P(); q.challenges[key(c.id, l.id)] = true; saveP(q); toast('Challenge marked as done ✓'); } }, 'Mark challenge done'));
-  setTimeout(() => UI.openFloating('learn-brief', 'Challenge', { width: 300, body }), 300);
+  if (s.persp && !K) { app.setTool('persp'); fitGuide(app); }
+  else if (s.persp) { fitGuide(app); app.setTool('brush'); }
+  setTimeout(() => briefWindow(ex), 300);
+}
+
+async function setupGuides(ex) {
+  const d = ex.doc, W = d.width, H = d.height;
+  if (d.mode === 'animate') {
+    const g = new Track({ name: 'Guide (help)', opacity: 0.9 }); g.locked = true;
+    d.addCel(g, 0, d.anim.length);
+    d.tracks.unshift(g);
+    ex.under = g.cels[0].canvas; ex.guideItem = g;
+    const first = d.tracks[1]; first.name = 'Exercise ' + (ex.level + 1);
+    ex.items[ex.level] = first; d.active = 1;
+  } else {
+    const g = new Layer(W, H, { name: 'Guide (help)', draft: true, locked: true });
+    d.layers.unshift(g);
+    ex.under = g.canvas; ex.guideItem = g;
+    let first;
+    if (d.mode === 'webtoon') { first = new Layer(W, H, { name: 'Exercise ' + (ex.level + 1), panelMask: false }); d.layers.splice(1, 0, first); }
+    else { first = d.layers[1]; first.name = 'Exercise ' + (ex.level + 1); }
+    if (ex.K.over) { const o = new Layer(W, H, { name: 'Line art (given)', locked: true, reference: true }); d.layers.splice(d.layers.indexOf(first) + 1, 0, o); ex.over = o.canvas; ex.overItem = o; }
+    ex.items[ex.level] = first; d.active = d.layers.indexOf(first);
+  }
+  await drawLevel(ex);
+}
+
+async function drawLevel(ex) {
+  const d = ex.doc, cur = ex.items[ex.level];
+  if (ex.K.paint) {
+    // grading: the "help" is the painting itself, on the exercise layer
+    if (ex.level < 3 && cur.canvas) await drawGuideInto(cur.canvas, d, ex.kind, ex.level);
+    const x = ex.under.getContext('2d'); x.clearRect(0, 0, ex.under.width, ex.under.height);
+  } else if (ex.over) {
+    const useOver = ex.level < 2;
+    await drawGuideInto(useOver ? ex.over : ex.under, d, ex.kind, ex.level);
+    const other = useOver ? ex.under : ex.over; other.getContext('2d').clearRect(0, 0, other.width, other.height);
+  } else await drawGuideInto(ex.under, d, ex.kind, ex.level);
+  for (const cv of [ex.under, ex.over, cur && cur.canvas].filter(Boolean)) touch(cv);
+}
+
+async function goLevel(ex, n) {
+  if (!app.doc || app.doc !== ex.doc || n < 0 || n > 3 || n === ex.level) return;
+  app.finishTransient && app.finishTransient();
+  const d = ex.doc, prev = ex.items[ex.level];
+  if (prev) prev.visible = false;
+  ex.level = n;
+  let cur = ex.items[n];
+  if (!cur) {
+    if (d.mode === 'animate') { cur = new Track({ name: 'Exercise ' + (n + 1) }); d.addCel(cur, 0, 1); d.tracks.push(cur); }
+    else { cur = new Layer(d.width, d.height, { name: 'Exercise ' + (n + 1) }); const i = d.layers.indexOf(prev) + 1 || d.layers.length; d.layers.splice(i, 0, cur); }
+    ex.items[n] = cur;
+  }
+  cur.visible = true;
+  d.active = d.items.indexOf(cur);
+  if (ex.guideItem) ex.guideItem.visible = true;
+  await drawLevel(ex);
+  const q = P(); q.levels ||= {}; const k = key(ex.c.id, ex.l.id); q.levels[k] = Math.max(q.levels[k] || 0, n); saveP(q);
+  app.changed(); app.updateSliders && app.updateSliders();
+  briefWindow(ex);
+  toast(`Exercise ${n + 1}: ${LEVELS[n]}`);
+}
+
+function briefWindow(ex) {
+  try { UI.closeFloat('learn-brief'); } catch { /* not open */ }
+  const { c, l, ch, K } = ex;
+  const body = h('div', { class: 'ln-brief' }, h('small', {}, c.title.toUpperCase()), h('b', {}, ch.title));
+  if (K) {
+    body.append(...[
+      h('div', { class: 'ln-brief-dots' }, ...LEVELS.map((n, i) => h('button', { class: i === ex.level ? 'on' : i < ex.level ? 'done' : '', title: n, onclick: () => goLevel(ex, i) }, String(i + 1)))),
+      h('div', { class: 'ln-brief-level' }, `Exercise ${ex.level + 1} of 4 · ${LEVELS[ex.level]}`),
+      h('p', {}, K.tips[ex.level]),
+      ex.level < 3 ? h('small', { class: 'hint' }, 'The blue help is on the locked "Guide (help)" layer. It never shows up in exports.') : null,
+      h('div', { class: 'ln-row' },
+        ex.level > 0 ? h('button', { class: 'pill', onclick: () => goLevel(ex, ex.level - 1) }, '‹ More help') : null,
+        ex.level < 3 ? h('button', { class: 'pill primary', onclick: () => goLevel(ex, ex.level + 1) }, 'Next: less help ›')
+          : h('button', { class: 'pill primary', onclick: () => { const q = P(); q.challenges[key(c.id, l.id)] = true; q.levels ||= {}; q.levels[key(c.id, l.id)] = 4; saveP(q); toast('Challenge complete ✓ You did it on your own!'); } }, 'I did it ✓')),
+      ex.guideItem && ex.level < 3 ? h('button', { class: 'pill ln-brief-hide', onclick: (e) => { ex.guideItem.visible = !ex.guideItem.visible; e.target.textContent = ex.guideItem.visible ? 'Hide the help for a moment' : 'Show the help'; app.changed(); } }, 'Hide the help for a moment') : null].filter(Boolean));
+  } else {
+    body.append(h('p', {}, ch.text), h('ol', {}, ...(ch.steps || []).map((x) => h('li', {}, x))),
+      h('button', { class: 'pill', onclick: () => { const q = P(); q.challenges[key(c.id, l.id)] = true; saveP(q); toast('Challenge marked as done ✓'); } }, 'Mark challenge done'));
+  }
+  UI.openFloating('learn-brief', 'Exercise', { width: 310, body });
 }
 
 // called by the Studio when a canvas closes
