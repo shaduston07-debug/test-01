@@ -206,5 +206,53 @@
   "date": "",
   "license": "CC BY 4.0",
   "page": "https://www.peppercarrot.com"
+ },
+ "pc-saffron-lineart": {
+  "file": "pc-saffron-lineart.jpg",
+  "title": "Saffron line art from episode 16 (2016)",
+  "artist": "David Revoy (Pepper&Carrot)",
+  "date": "",
+  "license": "CC BY 4.0",
+  "page": "https://www.peppercarrot.com"
+ },
+ "pc-design-sketches": {
+  "file": "pc-design-sketches.jpg",
+  "title": "Pepper design sketches (2017)",
+  "artist": "David Revoy (Pepper&Carrot)",
+  "date": "",
+  "license": "CC BY 4.0",
+  "page": "https://www.peppercarrot.com"
+ },
+ "pc-gesture": {
+  "file": "pc-gesture.jpg",
+  "title": "Pepper gesture sketch (2018)",
+  "artist": "David Revoy (Pepper&Carrot)",
+  "date": "",
+  "license": "CC BY 4.0",
+  "page": "https://www.peppercarrot.com"
+ },
+ "pc-saffron-sketch": {
+  "file": "pc-saffron-sketch.jpg",
+  "title": "Saffron, step 1: construction sketch (episode 22)",
+  "artist": "David Revoy (Pepper&Carrot)",
+  "date": "",
+  "license": "CC BY 4.0",
+  "page": "https://www.peppercarrot.com"
+ },
+ "pc-saffron-ink": {
+  "file": "pc-saffron-ink.jpg",
+  "title": "Saffron, step 2: line art (episode 22)",
+  "artist": "David Revoy (Pepper&Carrot)",
+  "date": "",
+  "license": "CC BY 4.0",
+  "page": "https://www.peppercarrot.com"
+ },
+ "pc-head-construction": {
+  "file": "pc-head-construction.jpg",
+  "title": "Pepper's head turnaround: construction drawings (2017 model sheet)",
+  "artist": "David Revoy (Pepper&Carrot)",
+  "date": "",
+  "license": "CC BY 4.0",
+  "page": "https://www.peppercarrot.com"
  }
 }

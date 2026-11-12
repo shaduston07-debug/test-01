@@ -10,7 +10,7 @@ import { presetGuide, fitGuide } from '../perspective.js';
 import { TRACKS, COURSES, findLesson } from './courses.js';
 import { DEMOS } from './demos.js';
 import { ART } from './art.js';
-import { LEVELS, GUIDE_FOR, kindInfo, drawGuideInto } from './exercises.js';
+import { GUIDE_FOR, kindInfo, levelsOf, drawGuideInto } from './exercises.js';
 
 let app = null;
 let cleanups = [];
@@ -192,7 +192,7 @@ function renderLesson(body, cid, lid) {
   const kind = GUIDE_FOR[key(c.id, l.id)], reached = (p.levels && p.levels[key(c.id, l.id)]) || 0;
   art.append(h('div', { class: 'ln-challenge', id: 'ln-s-practise' },
     h('small', {}, 'PRACTISE IN THE STUDIO'), h('h2', {}, ch.title), h('p', {}, ch.text),
-    kind ? h('div', { class: 'ln-ladder' }, ...LEVELS.map((name, i) => h('button', { class: 'ln-rung' + (i < reached ? ' done' : '') + (i === Math.min(reached, 3) ? ' next' : ''), onclick: () => openChallenge(c, l, ch, i) },
+    kind ? h('div', { class: 'ln-ladder' }, ...levelsOf(kind).map((name, i) => h('button', { class: 'ln-rung' + (i < reached ? ' done' : '') + (i === Math.min(reached, 3) ? ' next' : ''), onclick: () => openChallenge(c, l, ch, i) },
       h('span', {}, i < reached ? '✓' : String(i + 1)), h('b', {}, name), h('small', {}, kindInfo(kind).tips[i].split('. ')[0].replace(/\.$/, '') + '.')))) : h('ol', {}, ...ch.steps.map((s) => h('li', {}, s))),
     kind ? h('p', { class: 'hint' }, 'Each exercise opens with its help drawn right in the canvas, on a locked Guide layer. Every next exercise takes some help away, until you draw it on your own.') : null,
     h('div', { class: 'ln-row' },
@@ -360,7 +360,7 @@ async function goLevel(ex, n) {
   const q = P(); q.levels ||= {}; const k = key(ex.c.id, ex.l.id); q.levels[k] = Math.max(q.levels[k] || 0, n); saveP(q);
   app.changed(); app.updateSliders && app.updateSliders();
   briefWindow(ex);
-  toast(`Exercise ${n + 1}: ${LEVELS[n]}`);
+  toast(`Exercise ${n + 1}: ${levelsOf(ex.kind)[n]}`);
 }
 
 function briefWindow(ex) {
@@ -369,10 +369,10 @@ function briefWindow(ex) {
   const body = h('div', { class: 'ln-brief' }, h('small', {}, c.title.toUpperCase()), h('b', {}, ch.title));
   if (K) {
     body.append(...[
-      h('div', { class: 'ln-brief-dots' }, ...LEVELS.map((n, i) => h('button', { class: i === ex.level ? 'on' : i < ex.level ? 'done' : '', title: n, onclick: () => goLevel(ex, i) }, String(i + 1)))),
-      h('div', { class: 'ln-brief-level' }, `Exercise ${ex.level + 1} of 4 · ${LEVELS[ex.level]}`),
+      h('div', { class: 'ln-brief-dots' }, ...levelsOf(ex.kind).map((n, i) => h('button', { class: i === ex.level ? 'on' : i < ex.level ? 'done' : '', title: n, onclick: () => goLevel(ex, i) }, String(i + 1)))),
+      h('div', { class: 'ln-brief-level' }, `Exercise ${ex.level + 1} of 4 · ${levelsOf(ex.kind)[ex.level]}`),
       h('p', {}, K.tips[ex.level]),
-      ex.level < 3 ? h('small', { class: 'hint' }, 'The blue help is on the locked "Guide (help)" layer. It never shows up in exports.') : null,
+      ex.level < 3 ? h('small', { class: 'hint' }, K.paint ? 'The painting is on your Exercise layer: grade it with Adjustments and blend-mode layers.' : 'The help is on the locked "Guide (help)" layer. It never shows up in exports.') : null,
       h('div', { class: 'ln-row' },
         ex.level > 0 ? h('button', { class: 'pill', onclick: () => goLevel(ex, ex.level - 1) }, '‹ More help') : null,
         ex.level < 3 ? h('button', { class: 'pill primary', onclick: () => goLevel(ex, ex.level + 1) }, 'Next: less help ›')

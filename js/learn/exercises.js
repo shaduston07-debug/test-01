@@ -4,7 +4,8 @@
 //   2 Half help  – only the key lines; finish the rest
 //   3 Start only – just the starting marks
 //   4 On your own – no guide (perspective guides keep snapping off for the real test)
-import { faceSVG, EXPR, walkPose } from './demos.js';
+import { walkPose } from './demos.js';
+import { ART } from './art.js';
 
 export const LEVELS = ['Trace it', 'Half help', 'Start only', 'On your own'];
 const BLUE = '#2f7dff', RED = '#ff5a5f', GREEN = '#2fbf71', ORANGE = '#ff9f1a';
@@ -67,6 +68,56 @@ function drawBox(x, W, q, level, i) {
   }
   if (level < 3) label(x, W, String(i + 1), q.B.x, q.B.y + 26 * W / 900, { align: 'center' });
 }
+
+// ───────── real drawings (public domain / CC BY), used like an academy copy course ─────────
+const imgCache = new Map();
+function loadArt(id) {
+  const a = ART[id]; if (!a) return Promise.resolve(null);
+  if (!imgCache.has(id)) imgCache.set(id, new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = a.src; }));
+  return imgCache.get(id);
+}
+// the drawing as ink on transparent paper (white / paper tone → transparent), so it sits under your layer like tracing paper
+function inked(im) {
+  const c = document.createElement('canvas'), k = Math.min(1, 1600 / Math.max(im.width, im.height));
+  c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+  const x = c.getContext('2d'); x.drawImage(im, 0, 0, c.width, c.height);
+  const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) { const l = 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2]; p[i + 3] = Math.max(0, Math.min(255, (238 - l) * 1.5)); }
+  x.putImageData(d, 0, 0); return c;
+}
+function fit(iw, ih, bx, by, bw, bh) { const k = Math.min(bw / iw, bh / ih); return [bx + (bw - iw * k) / 2, by + (bh - ih * k) / 2, iw * k, ih * k]; }
+// level 0 trace · 1 finish the other half · 2 look & copy beside it · 3 from memory
+async function realDrawings(x, d, level, ids) {
+  if (level === 3) return;
+  // "id@a-b" = only that horizontal slice of the picture (e.g. one view of a model sheet)
+  const W = d.width, H = d.height;
+  const list = (await Promise.all(ids.map(async (spec) => {
+    const [id, cut] = spec.split('@'), im = await loadArt(id); if (!im) return null;
+    if (!cut) return [spec, im];
+    const [a, b] = cut.split('-').map(Number), c = document.createElement('canvas');
+    c.width = Math.round(im.width * (b - a)); c.height = im.height; c.getContext('2d').drawImage(im, -im.width * a, 0);
+    return [spec, c];
+  }))).filter(Boolean);
+  if (!list.length) return;
+  const n = list.length, cols = n === 1 ? 1 : n <= 4 ? 2 : 3, rows = Math.ceil(n / cols), cw = W / cols, ch = H / rows, u = W / 900;
+  for (let i = 0; i < n; i++) {
+    const [, im] = list[i], ink = inked(im), bx = (i % cols) * cw + cw * 0.04, by = Math.floor(i / cols) * ch + ch * 0.06, bw = cw * 0.92, bh = ch * 0.86;
+    if (level < 2) {
+      const [dx, dy, dw, dh] = fit(ink.width, ink.height, bx, by, bw, bh);
+      x.save(); x.globalAlpha = 0.5;
+      if (level === 1) { x.beginPath(); x.rect(dx, dy, dw / 2, dh); x.clip(); }
+      x.drawImage(ink, dx, dy, dw, dh); x.restore();
+      if (level === 1) { pen(x, W, { color: RED, alpha: 0.6 }); line(x, P(dx + dw / 2, dy), P(dx + dw / 2, dy + dh)); label(x, W, 'finish this half →', dx + dw * 0.52, dy + 20 * u, { color: RED, size: 0.8 }); }
+    } else {
+      // reference on the left at full strength, an empty frame of the same shape on the right to copy into
+      const half = bw * 0.46, [dx, dy, dw, dh] = fit(ink.width, ink.height, bx, by, half, bh);
+      x.save(); x.globalAlpha = 1; x.drawImage(ink, dx, dy, dw, dh); x.restore();
+      pen(x, W, { alpha: 0.5 }); x.strokeRect(bx + bw * 0.52, dy, dw, dh);
+      label(x, W, 'copy it here', bx + bw * 0.52 + dw / 2, dy - 8 * u, { align: 'center', size: 0.8 });
+    }
+  }
+}
+const REAL_LEVELS = ['Trace it', 'Finish the half', 'Look & copy', 'From memory'];
 
 // ───────── the guide kinds ─────────
 const KINDS = {
@@ -223,56 +274,54 @@ const KINDS = {
       }
     },
   },
-  // Faces · Loomis heads
-  heads: {
-    tips: ['Trace each head: ball, side plane, centre line, brow line, jaw. Go over them in one confident stroke each.', 'Only the ball and the two main lines are given. Add the side planes, the thirds and the jaw.', 'Only the balls. Decide each head\'s angle and draw the construction yourself.', 'On your own: 12 heads at different angles.'],
-    draw(x, d, level) {
-      const W = d.width, H = d.height, cols = 4, rows = 3, R = Math.min(W / cols, H / rows) * 0.2;
-      const angles = [[0.5, 0], [-0.5, 0], [1.1, 0.1], [-1.1, 0.1], [0, 0.4], [0, -0.35], [0.6, 0.35], [-0.6, -0.3], [0.9, -0.3], [-0.9, 0.35], [0.3, 0.2], [-0.3, -0.15]];
-      angles.forEach(([yaw, pitch], i) => {
-        if (level === 3) return;
-        const cx = (i % cols + 0.5) * W / cols, cy = (Math.floor(i / cols) + 0.42) * H / rows;
-        const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
-        const T = ([X, Y, Z]) => { const x1 = X * cyw + Z * syw, z1 = -X * syw + Z * cyw; return [cx + x1 * R, cy - (Y * cp - z1 * sp) * R, Y * sp + z1 * cp]; };
-        const curve = (pts) => { for (let k = 1; k < pts.length; k++) { const a = T(pts[k - 1]), b = T(pts[k]); if (a[2] + b[2] < 0) continue; x.beginPath(); x.moveTo(a[0], a[1]); x.lineTo(b[0], b[1]); x.stroke(); } };
-        const circ = (f) => Array.from({ length: 49 }, (_, k) => f(k / 48 * Math.PI * 2));
-        pen(x, W, { dash: level === 2 ? false : true }); x.beginPath(); x.arc(cx, cy, R, 0, 7); x.stroke();
-        if (level === 2) return;
-        pen(x, W, { color: RED }); curve(circ((a) => [0, Math.sin(a), Math.cos(a)]));
-        pen(x, W, { color: ORANGE }); curve(circ((a) => [Math.sin(a), 0, Math.cos(a)]));
-        if (level === 1) return;
-        pen(x, W); for (const s of [-1, 1]) curve(circ((a) => [s * 0.72, Math.sin(a) * 0.69, Math.cos(a) * 0.69]));
-        curve([[0, 0.72, 0.69], [0, 0, 1], [0, -0.72, 0.98], [0, -1.44, 0.78]]);
-        for (const s of [-1, 1]) curve([[s * 0.72, -0.15, -0.05], [s * 0.62, -0.95, 0.15], [s * 0.3, -1.38, 0.62], [0, -1.44, 0.78]]);
-      });
-    },
+  // Faces · head construction from real drawings: Pepper's official model sheet (with its proportion lines) and Dürer
+  headsReal: {
+    levels: REAL_LEVELS,
+    tips: ['Trace the heads from the real model sheet: first the big shapes (skull, jaw, hair mass), then the eyes on the eye line, then details. Notice the horizontal lines: every feature sits on the same line in every view.', 'Only the left half of each head is shown. Finish the right half yourself, keeping the eyes, nose and mouth on the same lines.', 'Look & copy: the drawing is on the left; copy it into the empty frame beside it without tracing. Measure: how many eyes wide is the head?', 'From memory: draw the same character from front, ¾ and side, with the help hidden. Then compare with the model sheet.'],
+    draw: (x, d, level) => realDrawings(x, d, level, ['pc-head-construction@0-0.34', 'pc-head-construction@0.34-0.63', 'pc-head-construction@0.63-1', 'durer-head-front'].filter((id) => ART[id.split('@')[0]])),
   },
-  // Faces · expressions (traces the illustrated face in every emotion)
-  faces: {
-    tips: ['Trace the faces: the same head, a different emotion each time. Watch the brows, the eyelids and the mouth corners.', 'The heads and hair are there, without features. Draw each emotion\'s brows, eyes and mouth yourself (the label says which).', 'Only the head circles and centre lines. Draw the whole face for each emotion.', 'On your own: your own character in all seven emotions.'],
-    async draw(x, d, level) {
-      const W = d.width, H = d.height, names = ['joy', 'sadness', 'surprise', 'fear', 'anger', 'disgust', 'contempt', 'neutral'];
-      const cols = 4, rows = 2, cw = W / cols, ch = H / rows, fw = Math.min(cw * 0.8, ch * 0.75 * 300 / 360), fh = fw * 360 / 300;
-      for (let i = 0; i < names.length; i++) {
-        const ox = (i % cols) * cw + (cw - fw) / 2, oy = Math.floor(i / cols) * ch + ch * 0.08;
-        if (level < 3) label(x, W, names[i][0].toUpperCase() + names[i].slice(1), ox + fw / 2, oy + fh + 22 * W / 900, { align: 'center' });
-        if (level === 0) await drawSVG(x, faceSVG(EXPR[names[i]] || {}, { stage: 0, transparent: true }), ox, oy, fw, fh, BLUE, 0.7);
-        else if (level === 1) await drawSVG(x, faceSVG({}, { stage: 0, transparent: true, blank: true }), ox, oy, fw, fh, BLUE, 0.6);
-        else if (level === 2) { pen(x, W); x.beginPath(); x.ellipse(ox + fw / 2, oy + fh * 0.45, fw * 0.3, fh * 0.34, 0, 0, 7); x.stroke(); line(x, P(ox + fw / 2, oy + fh * 0.12), P(ox + fw / 2, oy + fh * 0.8)); line(x, P(ox + fw * 0.2, oy + fh * 0.49), P(ox + fw * 0.8, oy + fh * 0.49)); }
-      }
-    },
+  // Faces · Le Brun's expression heads (CC0, The Met)
+  lebrun: {
+    levels: REAL_LEVELS,
+    tips: ['Trace Charles Le Brun\'s six expression heads. Go slowly over the brows, the eyelids and the mouth corners: they carry the emotion.', 'Half of each face is there. Finish the other half so the expression matches.', 'Look & copy each head into the frame beside it, without tracing.', 'From memory: draw the six emotions on your own character.'],
+    draw: (x, d, level) => realDrawings(x, d, level, ['lebrun-sadness', 'lebrun-laughter', 'lebrun-fright', 'lebrun-hatred', 'lebrun-pain', 'lebrun-desire']),
   },
-  // Colour · colour the given line art
-  colorme: {
-    over: true, // the help (line art) sits ABOVE your paint layer, marked as a Reference for Fill
-    tips: ['The line art is given (locked, above your layer) with a palette on the left. Fill the flats (Fill reads the line art), then add one Multiply shadow layer.', 'Line art only, no palette. Pick your own harmony (60-30-10), then flats and shadows.', 'Only a rough blue sketch. Ink it on a new layer, then colour it.', 'On your own: draw and colour your own character.'],
+  // Faces · expressions in comic style (Saffron's line art from Pepper&Carrot)
+  pcExpr: {
+    levels: REAL_LEVELS,
+    tips: ['Trace David Revoy\'s expression drawings of Saffron (Pepper&Carrot). Watch how few lines it takes: brows, eye shape and mouth.', 'Half of each drawing is shown. Finish it.', 'Look & copy the drawings into the frames beside them.', 'From memory: draw the same expressions on your own character.'],
+    draw: (x, d, level) => realDrawings(x, d, level, ['pc-saffron-lineart']),
+  },
+  // Faces · a real model sheet
+  sheetReal: {
+    levels: REAL_LEVELS,
+    tips: ['Trace Pepper\'s official model sheet: front, side and back at the same height, on the same lines.', 'Finish the other half of each view.', 'Look & copy the model sheet beside it.', 'From memory: make a model sheet of your own character.'],
+    draw: (x, d, level) => realDrawings(x, d, level, ['pc-model-full']),
+  },
+  // Colour · colour real line art (Saffron, from Pepper&Carrot), given above your paint layer
+  colorReal: {
+    over: true,
+    levels: ['Colour it', 'Colour it, own palette', 'Ink the sketch, then colour', 'On your own'],
+    tips: ['David Revoy\'s line art is given, locked above your layer and marked as a Reference, with his coloured model sheet beside it as a colour example. Fill the flats (Fill reads the line art), then add one Multiply shadow layer.', 'Same line art, no example: pick your own harmony (60-30-10), then flats and shadows.', 'Only his blue construction sketch is given. Ink it on your layer first, then colour it.', 'On your own: draw and colour your own character.'],
     async draw(x, d, level) {
-      const W = d.width, H = d.height, fw = Math.min(W * 0.8, H * 0.8 * 300 / 360), fh = fw * 360 / 300, ox = (W - fw) / 2 + W * 0.06, oy = (H - fh) / 2;
       if (level === 3) return;
-      if (level === 2) { await drawSVG(x, faceSVG({ ...EXPR.joy }, { stage: 0, transparent: true }), ox, oy, fw, fh, '#6f97d6', 0.55); return; }
-      const im = await svgImage(faceSVG({ ...EXPR.joy, open: 0.15 }, { stage: 1, transparent: true }));
-      if (im) { x.save(); x.globalAlpha = 1; x.drawImage(im, ox, oy, fw, fh); x.restore(); }
-      if (level === 0) ['#f7d9c4', '#e6a98f', '#3b2b47', '#6a3f2a', '#2f4a7a', '#c86a6a'].forEach((c, i) => { x.save(); x.fillStyle = c; x.fillRect(W * 0.03, H * 0.08 + i * H * 0.1, W * 0.07, H * 0.08); x.restore(); });
+      const W = d.width, H = d.height;
+      if (level === 2) { const im = await loadArt('pc-saffron-sketch'); if (im) { const [dx, dy, dw, dh] = fit(im.width, im.height, W * 0.1, H * 0.04, W * 0.8, H * 0.92); x.save(); x.globalAlpha = 0.55; x.drawImage(inked(im), dx, dy, dw, dh); x.restore(); } return; }
+      const im = await loadArt('pc-saffron-ink');
+      if (im) { const [dx, dy, dw, dh] = fit(im.width, im.height, W * (level === 0 ? 0.3 : 0.1), H * 0.04, W * (level === 0 ? 0.68 : 0.8), H * 0.92); x.save(); x.globalAlpha = 1; x.drawImage(inked(im), dx, dy, dw, dh); x.restore(); }
+      if (level === 0) { const ref = await loadArt('pc-model-full'); if (ref) { const [dx, dy, dw, dh] = fit(ref.width, ref.height, W * 0.02, H * 0.04, W * 0.26, H * 0.6); x.drawImage(ref, dx, dy, dw, dh); label(x, W, 'colour example', dx + dw / 2, dy + dh + 22 * W / 900, { align: 'center', size: 0.8 }); } }
+    },
+  },
+  // Grading · a real painting to grade (Pepper&Carrot artwork), on your exercise layer
+  gradeReal: {
+    paint: true,
+    levels: ['Follow a recipe', 'Hit a mood', 'Your own mood', 'Your own picture'],
+    tips: ['Grade David Revoy\'s landscape with this recipe: Adjustments › Color Balance (shadows towards blue, highlights towards orange), then Levels / Contrast for punch, then a soft dark vignette on a Multiply layer.', 'Make this painting feel like a cold night: darker, cooler, less saturated, with one warm light that stays.', 'Pick your own mood for this portrait, write it in one word, and grade the painting to match.', 'On your own: grade one of your own finished pictures three ways.'],
+    async draw(x, d, level) {
+      if (level === 3) return;
+      const im = await loadArt(['pc-landscape', 'pc-environment', 'pc-portrait-light'][level]); if (!im) return;
+      const W = d.width, H = d.height, k = Math.max(W / im.width, H / im.height);
+      x.drawImage(im, (W - im.width * k) / 2, (H - im.height * k) / 2, im.width * k, im.height * k);
     },
   },
   // Colour · light study shapes
@@ -292,17 +341,6 @@ const KINDS = {
         x.beginPath(); x.ellipse(cx + R * 0.5, cy + R * 1.15, R * 0.95, R * 0.22, 0, 0, 7); x.stroke();
         if (level === 0) { pen(x, W, { color: RED }); x.beginPath(); x.ellipse(cx + R * 0.15, cy + R * 0.1, R * 0.35, R * 0.95, -0.5, -Math.PI / 2, Math.PI / 2); x.stroke(); }
       });
-    },
-  },
-  // Grading · a finished painting to grade (given on its own normal layer)
-  grade: {
-    paint: true,
-    tips: ['Grade the painting with this recipe: Adjustments › Color Balance (shadows towards blue, highlights towards orange), then Levels / Contrast for punch, then a soft dark vignette on a Multiply layer.', 'Make the same painting feel like a cold night: darker, cooler, less saturated, with a warm light that stays.', 'Pick your own mood and grade the painting to match it. Write the mood in one word first.', 'On your own: grade one of your own finished pictures three ways.'],
-    async draw(x, d, level) {
-      if (level === 3) return;
-      const W = d.width, H = d.height, fh = H, fw = fh * 300 / 360;
-      const im = await svgImage(faceSVG({ ...EXPR.joy, cheeks: 0.5 }, { stage: 5 }));
-      if (im) { x.fillStyle = '#a985c4'; x.fillRect(0, 0, W, H); x.drawImage(im, (W - fw) / 2, 0, fw, fh); }
     },
   },
   // Animation · bouncing ball path (all frames shown at once on the guide track)
@@ -449,16 +487,17 @@ const KINDS = {
 export const GUIDE_FOR = {
   'perspective/horizon': 'eyelevels', 'perspective/tool': 'boxes2', 'perspective/one-point': 'room1', 'perspective/two-point': 'boxes2', 'perspective/three-point': 'tower3', 'perspective/ellipses': 'ellipses', 'perspective/scale': 'crowd',
   'backgrounds/composition': 'thumbs', 'backgrounds/depth': 'planes', 'backgrounds/atmosphere': 'planes', 'backgrounds/references': 'boxes2', 'backgrounds/values': 'notan',
-  'faces/loomis': 'heads', 'faces/universal': 'faces', 'faces/reading': 'faces', 'faces/push': 'faces', 'faces/sheet': 'faces',
-  'color/value': 'colorme', 'color/harmony': 'colorme', 'color/light': 'spheres', 'color/workflow': 'colorme', 'color/mood': 'spheres',
-  'grading/what': 'grade', 'grading/tools': 'grade', 'grading/eye': 'grade', 'grading/webtoon-grade': 'panels',
+  'faces/loomis': 'headsReal', 'faces/universal': 'lebrun', 'faces/reading': 'pcExpr', 'faces/push': 'pcExpr', 'faces/sheet': 'sheetReal',
+  'color/value': 'colorReal', 'color/harmony': 'colorReal', 'color/light': 'spheres', 'color/workflow': 'colorReal', 'color/mood': 'spheres',
+  'grading/what': 'gradeReal', 'grading/tools': 'gradeReal', 'grading/eye': 'gradeReal', 'grading/webtoon-grade': 'panels',
   'anim1/frames': 'arc', 'anim1/timing': 'slide', 'anim1/ball': 'bounce', 'anim1/squash': 'jump', 'anim1/arcs': 'arc',
   'anim2/antic': 'jump', 'anim2/keys': 'jump', 'anim2/overlap': 'arc', 'anim2/walk': 'walk', 'anim2/color-anim': 'walk',
   'toon1/format': 'panels', 'toon1/size': 'panels', 'toon1/panels': 'panels', 'toon1/flow': 'panels',
   'toon2/order': 'balloons', 'toon2/types': 'balloons', 'toon2/sfx': 'panels',
-  'toon3/pipeline': 'panels', 'toon3/colorkey': 'colorme', 'toon3/bg-fx': 'panels', 'toon3/final': 'panels',
+  'toon3/pipeline': 'panels', 'toon3/colorkey': 'colorReal', 'toon3/bg-fx': 'panels', 'toon3/final': 'panels',
 };
 export const kindInfo = (k) => KINDS[k];
+export const levelsOf = (k) => (KINDS[k] && KINDS[k].levels) || LEVELS;
 
 // Draw exercise `level` (0–3) of guide `kind` onto a canvas the size of the document.
 export async function drawGuideInto(canvas, d, kind, level) {
