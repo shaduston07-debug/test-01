@@ -27,6 +27,15 @@ export function initLearning(a) {
   for (const b of $$('.app-tab')) b.addEventListener('click', () => showTab(b.dataset.tab));
   for (const b of $$('.app-tab[data-tab="learn"] .at-ico')) b.innerHTML = ICONS.learn;
   showTab(store.prefs.get('learn.tab', 'studio'), true);
+  // canvases from earlier Learning exercises go into the drafts folder too
+  const names = new Set(COURSES.flatMap((c) => [...c.lessons.map((l) => l.challenge.studio && l.challenge.studio.name), c.capstone.studio && c.capstone.studio.name]).filter(Boolean));
+  UI.moveLearningDrafts(names).then((n) => { if (n) { UI.renderGallery(app); toast(`Moved ${n} Learning canvas${n === 1 ? '' : 'es'} into “${UI.LEARNING_FOLDER}”`, 3500); } }).catch(() => {});
+}
+// open the Learning drafts folder in the Studio gallery
+async function openDrafts() {
+  app.currentFolder = await UI.learningFolderId();
+  showTab('studio');
+  UI.renderGallery(app);
 }
 
 // 'studio' (the gallery) or 'learn'
@@ -76,6 +85,7 @@ function renderHome(body) {
     h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Inkwell ', h('em', {}, 'Learning')),
     h('div', { class: 'gal-actions glass' },
       last && last.lesson ? h('button', { class: 'pill primary', onclick: () => route({ view: 'lesson', course: last.course.id, lesson: last.lesson.id }) }, '▶ Continue: ' + last.lesson.title) : null,
+      h('button', { class: 'pill', onclick: openDrafts }, '🗂 My drafts'),
       h('button', { class: 'pill', onclick: creditsDialog }, 'Credits'))));
   const modes = h('div', { class: 'gal-modes' });
   for (const t of TRACKS) {
@@ -291,6 +301,7 @@ async function openChallenge(c, l, ch, level = 0) {
   const s = ch.studio || { mode: 'paint', w: 2048, h: 2048, name: ch.title };
   const kind = GUIDE_FOR[key(c.id, l.id)], K = kind && kindInfo(kind);
   const doc = Doc.create({ name: s.name || ch.title, mode: s.mode, width: s.w, height: s.h });
+  doc.folder = await UI.learningFolderId(); // all Learning canvases live in their own folder
   if (s.mode === 'animate') { doc.anim.fps = s.fps || 24; doc.anim.length = s.len || 48; }
   if (s.persp) presetGuide(doc, s.persp.type, { horizon: s.persp.horizon });
   const ex = { c, l, ch, kind, K, level, doc, items: [] };

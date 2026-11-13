@@ -1969,6 +1969,25 @@ async function newFolder(name) {
   setFolders([...getFolders(), f]);
   return f;
 }
+// The folder every Inkwell Learning canvas goes into (created on first use, found again even if renamed)
+export const LEARNING_FOLDER = 'Inkwell Learning drafts';
+export async function learningFolderId() {
+  const fs = getFolders();
+  const f = fs.find((x) => x.learning) || fs.find((x) => x.name === LEARNING_FOLDER);
+  if (f) { if (!f.learning) setFolders(fs.map((x) => (x.id === f.id ? { ...x, learning: true } : x))); return f.id; }
+  const n = await newFolder(LEARNING_FOLDER);
+  setFolders(getFolders().map((x) => (x.id === n.id ? { ...x, learning: true } : x)));
+  return n.id;
+}
+// once: move canvases made by Learning before this folder existed (recognised by their names)
+export async function moveLearningDrafts(names) {
+  if (store.prefs.get('mig.learnDrafts', false)) return 0;
+  const metas = await store.listDocs().catch(() => []);
+  const mine = metas.filter((m) => !m.folder && names.has(m.name));
+  if (mine.length) { const id = await learningFolderId(); for (const m of mine) { m.folder = id; await store.saveMeta(m); } }
+  store.prefs.set('mig.learnDrafts', true);
+  return mine.length;
+}
 async function moveToFolder(app, m, folderId) {
   m.folder = folderId || null;
   await store.saveMeta(m);
