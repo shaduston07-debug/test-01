@@ -53,6 +53,7 @@ export class StrokeEngine {
     this.op = this.kind === 'erase' ? 'destination-out' : this.alphaLock ? 'source-atop' : 'source-over';
     this.tip = this.kind === 'paint' ? getTintedTip(brush, o.color) : getTintedTip(brush, '#000');
     this.mask = getTipMask(brush);
+    this.dropGrain();
     this.grain = getGrain(brush);
     if (this.grain) {
       this.pattern = this.bctx.createPattern(this.grain, 'repeat');
@@ -281,6 +282,7 @@ export class StrokeEngine {
   // committed). Only the area under the tail's stamps is cleared and repainted, so the rest
   // of the stroke is untouched.
   taperEnd() {
+    this.flushGrain();
     const T = this.tail, total = this.travel, L = this.endLen;
     if (!L || T.length - this.tailHead < 12) return;
     const grow = this.endSize != null ? Math.max(1, this.endSize) : 1;
@@ -318,6 +320,7 @@ export class StrokeEngine {
         else this.drawStamp(T[i], T[i + 1], size, alpha, T[i + 4]);
       }
     }
+    this.flushGrain(); // the tail's dabs must land inside the clip
     ctx.restore();
     this.markFrame();
   }
@@ -333,24 +336,59 @@ export class StrokeEngine {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       return;
     }
-    // grain: stamp into a scratch canvas, multiply by the canvas-anchored texture, then deposit
+    // grain: each dab is prepared in its own cell of an atlas canvas — the tip, then the
+    // canvas-anchored texture cut out of it ('destination-out' with the inverted grain only
+    // touches that cell) — and the cells are copied onto the stroke in batches. Same pixels as
+    // masking every dab on a scratch canvas, but the GPU hand-over happens once per batch
+    // instead of once per dab (that was the lag on iPad with small, textured pencils).
     const r = Math.ceil(Math.hypot(w, h) / 2) + 1, S = 2 * r;
-    if (this.stampC.width < S) this.stampC = makeCanvas(S * 1.5, S * 1.5);
-    const sc = this.stampC.getContext('2d');
+    let A = this.atlas;
+    if (!A || A.size < S + 2) A = this.atlas = { c: makeCanvas(Math.max(512, (S + 2) * 8), Math.max(512, (S + 2) * 8)), size: Math.max(512, (S + 2) * 8), x: 0, y: 0, row: 0, q: [] };
+    if (A.x + S + 2 > A.size) { A.x = 0; A.y += A.row; A.row = 0; }
+    if (A.y + S + 2 > A.size) { this.flushGrain(); A.x = A.y = A.row = 0; }
+    const cx = A.x + 1, cy = A.y + 1;
+    A.x += S + 2; A.row = Math.max(A.row, S + 2);
+    const sc = A.c.getContext('2d');
     sc.setTransform(1, 0, 0, 1, 0, 0);
     sc.globalCompositeOperation = 'source-over';
-    sc.clearRect(0, 0, S, S);
-    sc.setTransform(c, s, -s, c, r, r);
+    sc.clearRect(cx - 1, cy - 1, S + 2, S + 2);
+    sc.setTransform(c, s, -s, c, cx + r, cy + r);
     sc.drawImage(this.tip, -w / 2, -h / 2, w, h);
     sc.setTransform(1, 0, 0, 1, 0, 0);
-    sc.globalCompositeOperation = 'destination-in';
-    const gs = this.brush.grainScale || 1;
-    const pat = this.pattern;
-    if (pat.setTransform) pat.setTransform(new DOMMatrix().translate(-(x - r), -(y - r)).scale(gs));
-    sc.fillStyle = pat;
-    sc.fillRect(0, 0, S, S);
+    sc.globalCompositeOperation = 'destination-out';
+    const t = this.grainTileFor(S), tw = t.tw, th = t.th;
+    const gx = (((x - r) % tw) + tw) % tw, gy = (((y - r) % th) + th) % th;
+    sc.drawImage(t.inv, gx, gy, S, S, cx, cy, S, S);
     sc.globalCompositeOperation = 'source-over';
-    ctx.drawImage(this.stampC, 0, 0, S, S, x - r, y - r, S, S);
+    A.q.push(cx, cy, S, x - r, y - r, ctx.globalAlpha);
+  }
+  // copy the queued grain dabs onto the stroke (in order, each with its own alpha)
+  flushGrain() {
+    const A = this.atlas;
+    if (!A || !A.q.length) return;
+    const ctx = this.bctx, q = A.q, ga = ctx.globalAlpha;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    for (let i = 0; i < q.length; i += 6) { ctx.globalAlpha = q[i + 5]; ctx.drawImage(A.c, q[i], q[i + 1], q[i + 2], q[i + 2], q[i + 3], q[i + 4], q[i + 2], q[i + 2]); }
+    ctx.globalAlpha = ga;
+    A.q.length = 0; A.x = A.y = A.row = 0;
+  }
+  dropGrain() { if (this.atlas) { this.atlas.q.length = 0; this.atlas.x = this.atlas.y = this.atlas.row = 0; } }
+
+  // The grain at its brush scale, repeated so that any S×S window starting inside the first tile fits.
+  grainTileFor(S) {
+    const g = this.grain, gs = this.brush.grainScale || 1;
+    const tw = Math.max(1, g.width * gs), th = Math.max(1, g.height * gs);
+    const need = Math.ceil((S + Math.max(tw, th)) / Math.min(tw, th)) + 1;
+    const cur = this._grainTile;
+    if (cur && cur.g === g && cur.gs === gs && cur.n >= need) return cur;
+    const n = Math.max(2, need), c = makeCanvas(Math.ceil(tw * n), Math.ceil(th * n)), x = c.getContext('2d');
+    x.imageSmoothingEnabled = true;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) x.drawImage(g, i * tw, j * th, tw, th);
+    // inverted (1 − grain) for cutting the texture out with 'destination-out'
+    const inv = makeCanvas(c.width, c.height), ix = inv.getContext('2d');
+    ix.fillStyle = '#000'; ix.fillRect(0, 0, c.width, c.height);
+    ix.globalCompositeOperation = 'destination-out'; ix.drawImage(c, 0, 0);
+    return (this._grainTile = { c, inv, g, gs, n, tw, th });
   }
 
   // Smudge / blend, like Procreate's smudge and Clip Studio's blend tools.
@@ -495,11 +533,13 @@ export class StrokeEngine {
   reshape(points) {
     if (!this.active || this.kind === 'smudge') return;
     this.dirty = { ...this.bounds }; this.markFrame();
+    this.dropGrain();
     this.bctx.setTransform(1, 0, 0, 1, 0, 0);
     this.bctx.clearRect(0, 0, this.W, this.H);
     // redraw like a real stroke of this pen: start fade from 0, end taper on lift (tail)
     this.carry = 0; this.travel = 0; this.travelNow = 0; this.tail = []; this.tailHead = 0; this.vSm = null;
     for (let i = 1; i < points.length; i++) this.walk(points[i - 1], points[i]);
+    this.flushGrain();
     this.q = []; this.s = null;
   }
   avgPressure() { return this.lastRaw ? this.lastRaw.p : 1; }
@@ -533,6 +573,7 @@ export class StrokeEngine {
   }
 
   updatePreview() {
+    this.flushGrain();
     if (this.active && this.kind === 'smudge') { this.smFlush(); return; }
     if (!this.active || this.kind === 'smudge') return;
     if (this.fast) { this.dirty = emptyRect(); return; }
@@ -570,12 +611,14 @@ export class StrokeEngine {
     return this.active && !this.fast && this.kind !== 'smudge' && this.target && canvas === this.target.canvas ? this.preview : null;
   }
   overlayFor(canvas) {
+    this.flushGrain();
     if (!(this.active && this.fast && this.target && canvas === this.target.canvas)) return null;
     return { canvas: this.buffer, alpha: this.opacity, rect: clampRect(this.bounds, this.W, this.H) };
   }
 
   end(label) {
     if (!this.active) return null;
+    this.flushGrain();
     if (this.kind === 'smudge') { this.smFlush(); this.sm = null; }
     if (this.kind !== 'smudge' && this.lastRaw && this.s) this.pushPoint({ ...this.lastRaw });
     if (this.kind !== 'smudge' && this.q.length >= 2) {
@@ -615,6 +658,7 @@ export class StrokeEngine {
 
   cancel() {
     if (!this.active) return;
+    this.dropGrain();
     if (this.kind === 'smudge') {
       this.sm = null;
       const r = clampRect(this.bounds, this.W, this.H);
