@@ -36,7 +36,8 @@ The interactive face is an illustrated, layered portrait (shaded skin, layered h
 ## Perspective tool
 
 The fan icon in the Studio's top bar (or **R**, or Actions › Canvas › Drawing guide · Perspective) adds a perspective ruler to the canvas:
-- A short bar: **1-point / 2-point / 3-point**, **Snap: on/off**, **Hide/Show**, **More…** (number of lines, line strength, square grid, See all points, Remove), **?** (the 3-step intro, also shown the first time) and **Done ✓**.
+- Guide types: **1-pt / 2-pt / 3-pt**, **Curved** (4-point curvilinear on a round lens: horizontals bend to left/right points, verticals to top/bottom points), **Fisheye** (5-point: plus depth lines into the centre) and **Iso** (isometric parallels, 30° or 2:1). On Curved / Fisheye drag the Centre and Lens size handles; with Snap a stroke follows the circle through its start point and the two points of its family.
+- A short bar: the types, **Snap: on/off**, **Hide/Show**, **More…** (number of lines, line strength, square grid, See all points, Remove), **?** (the 3-step intro, also shown the first time) and **Done ✓**.
 - Drag the round handles: the orange **Eye level** handle moves the horizon, the coloured **Point** handles are the vanishing points. Moving Point 1 or 2 keeps the horizon level; hold a finger on the screen while dragging to tilt it.
 - With Snap on, every brush or eraser stroke follows the guide direction closest to the way it starts. Lift the pen to change direction; hold a finger on the screen while drawing to draw freely.
 - The guide is saved with the canvas.
@@ -150,6 +151,8 @@ PoseManiacs' direct link is a private Clip Studio feature. Poses come in through
 **Text & speech bubbles** (Illustrate and Webtoon): Actions › Add › *Add text* / *Add speech bubble*, or the bubble tool. Speech, thought, shout, box and plain text; 14 built-in fonts including Japanese manga gothic/mincho, plus **import your own fonts** (TTF / OTF / WOFF); alignment, line spacing, bold / italic, **vertical (manga) text**, letter outlines; Rasterize to paint over it.
 
 **Brush sets**: 🕘 Recent and ★ Favorites at the top of the Brush Library, plus your own sets (＋ New set; hold a brush for *Add to set…*; hold a set to rename / delete).
+
+**Fisheye lens** (Adjustments › Fisheye lens): bulges (fisheye) or pinches the layer around a centre you choose, with strength and lens size, on the whole canvas or the selection; live preview, undoable.
 
 **Gradient Map**: 20 presets (Noir, Sepia, Golden Hour, Sunset, Ocean, Neon City, …) and a stop editor (add / move / recolor stops, reverse); runs on the worker pool.
 

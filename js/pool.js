@@ -46,7 +46,8 @@ export function run(task, payload, transfer = []) {
   });
 }
 
-const NEIGHBOURHOOD = { blur: (p) => p.radius, sharpen: (p) => p.radius };
+// a lens samples from anywhere in the picture, so it always runs on the whole image at once
+const NEIGHBOURHOOD = { blur: (p) => p.radius, sharpen: (p) => p.radius, fisheye: () => 1e9 };
 
 // Runs an adjustment on RGBA data in parallel bands; returns the new data.
 export async function parallelAdjust(key, params, data, w, h) {

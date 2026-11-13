@@ -941,7 +941,7 @@ export function openActions(app, anchor) {
       menuItem('canvas', 'Canvas size', () => resizeDialog(app), `${d.width}×${d.height}`),
       menuItem('sym', 'Flip view horizontally', () => { app.view.flip *= -1; app.fitView(); }, app.view.flip < 0 ? 'On' : ''),
       menuItem('sym', 'Drawing guide · Symmetry', () => symmetryDialog(app), app.symmetry.mode === 'off' ? '' : app.symmetry.mode),
-      menuItem('persp', 'Drawing guide · Perspective', () => { closePopover(); app.setTool('persp'); }, d.persp ? d.persp.type.replace('pt', '-point') : ''),
+      menuItem('persp', 'Drawing guide · Perspective', () => { closePopover(); app.setTool('persp'); }, d.persp ? ({ '1pt': '1-point', '2pt': '2-point', '3pt': '3-point', curv4: 'Curved', fish5: 'Fisheye', iso: 'Isometric' }[d.persp.type] || '') : ''),
       h('div', {}, switchRow('Reference', app.reference.open, (v) => app.reference.toggle(v))),
       menuItem('pencil', 'Rename', async () => { const n = await promptDialog('Name', d.name); if (n) { d.name = n; $('#doc-title').textContent = n; app.changed(); } }),
     ],
@@ -1383,6 +1383,8 @@ function openAdjust(app, key, anchor) {
   for (const c of canvases) {
     let bb = alphaBounds(c);
     if (!bb) continue;
+    // a lens moves pixels across the picture: use the whole canvas (or the selection's box)
+    if (adj.full) { const sb = app.selection.active ? alphaBounds(app.selection.mask) : null; bb = sb || { x: 0, y: 0, w: c.width, h: c.height }; }
     const x0 = Math.max(0, bb.x - pad), y0 = Math.max(0, bb.y - pad);
     bb = { x: x0, y: y0, w: Math.min(c.width, bb.x + bb.w + pad) - x0, h: Math.min(c.height, bb.y + bb.h + pad) - y0 };
     const ctx = c.getContext('2d');

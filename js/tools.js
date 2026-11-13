@@ -488,6 +488,32 @@ export const ADJUSTMENTS = {
       for (let i = 0; i < d.length; i += 4) { d[i] = lut[d[i]]; d[i + 1] = lut[d[i + 1]]; d[i + 2] = lut[d[i + 2]]; }
     },
   },
+  // Fisheye lens: bulges (or pinches) the picture around a centre, like a fisheye / wide lens.
+  // Size 100 = the lens reaches the corners; the edge of the lens blends smoothly into the rest.
+  fisheye: {
+    name: 'Fisheye lens',
+    full: true,
+    params: [['strength', 'Strength (− pinch · + fisheye)', -100, 100, 60, 1], ['size', 'Lens size (% of the picture)', 10, 150, 100, 1], ['cx', 'Centre left ↔ right (%)', 0, 100, 50, 1], ['cy', 'Centre top ↕ bottom (%)', 0, 100, 50, 1]],
+    run(d, p, w, h) {
+      const k = p.strength / 100; if (!k) return;
+      const src = d.slice(), cx = (p.cx / 100) * (w - 1), cy = (p.cy / 100) * (h - 1);
+      const R = Math.max(1, (p.size / 100) * Math.hypot(w, h) / 2);
+      // rs = r·(1 ∓ a·(1−r²)²): the middle is magnified (fisheye) or squeezed (pinch) by a limited
+      // amount (up to 4× / 0.5×), and the lens edge joins the untouched picture smoothly
+      const a = k > 0 ? 0.75 * k : -0.9 * k, sgn = k > 0 ? -1 : 1;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy) / R;
+        if (r >= 1) continue;
+        const q = 1 - r * r, f = 1 + sgn * a * q * q;
+        const sx = cx + dx * f, sy = cy + dy * f;
+        // bilinear sample
+        const x0 = Math.floor(sx), y0 = Math.floor(sy), fx = sx - x0, fy = sy - y0;
+        const x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(h - 1, y0 + 1), xa = Math.max(0, x0), ya = Math.max(0, y0);
+        const i00 = (ya * w + xa) * 4, i10 = (ya * w + x1) * 4, i01 = (y1 * w + xa) * 4, i11 = (y1 * w + x1) * 4, o = (y * w + x) * 4;
+        for (let c = 0; c < 4; c++) d[o + c] = (src[i00 + c] * (1 - fx) + src[i10 + c] * fx) * (1 - fy) + (src[i01 + c] * (1 - fx) + src[i11 + c] * fx) * fy;
+      }
+    },
+  },
   blur: {
     name: 'Gaussian Blur',
     params: [['radius', 'Radius', 0, 60, 4, 1]],
