@@ -185,6 +185,11 @@ class App {
     $('#gal-backup').onclick = () => UI.backupDialog(this);
     $('#btn-points').innerHTML = ICONS.bookmark;
     $('#btn-points').onclick = () => UI.openPoints(this, $('#btn-points'));
+    // hold the bookmark: save the current size + opacity as a point straight away
+    { const bp = $('#btn-points'); let ht = null;
+      bp.addEventListener('pointerdown', () => { clearTimeout(ht); ht = setTimeout(() => { bp._held = true; UI.quickSavePoint(this); }, 500); });
+      for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) bp.addEventListener(ev, () => clearTimeout(ht));
+      bp.addEventListener('click', (e) => { if (bp._held) { bp._held = false; e.stopImmediatePropagation(); } }, true); }
     $('#gal-folder').onclick = () => UI.createFolderFlow(this);
     $('#gal-settings').onclick = () => UI.openSettings(this);
     for (const c of $$('.mode-card')) c.onclick = () => UI.newDocDialog(this, c.dataset.mode);

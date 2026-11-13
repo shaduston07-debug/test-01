@@ -470,7 +470,14 @@ kbd { background: var(--fill-1); border-radius: 4px; padding: 1px 6px; font-size
 
 /* save-point marks on the size slider */
 .vs-marks { position: absolute; inset: 0; pointer-events: none; }
-.vs-marks i { position: absolute; left: 0; right: 0; height: 3px; transform: translateY(50%); background: linear-gradient(90deg, #fff 0 7px, transparent 7px calc(100% - 7px), #fff calc(100% - 7px)); opacity: 0.85; }
+.vs-marks i { position: absolute; left: 2px; right: 2px; height: 4px; transform: translateY(50%); border-radius: 2px; background: var(--accent-2); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 0 6px rgba(116, 168, 255, 0.7); }
+.vslider .knob.on-mark { background: var(--accent-2); box-shadow: 0 0 0 2px #fff, 0 0 10px rgba(116, 168, 255, 0.9); }
+.vs-stepper { position: fixed; z-index: 60; padding: 10px; border-radius: 18px; display: grid; gap: 8px; }
+.vs-stepper small { color: var(--muted); font-weight: 600; }
+.vs-step-row { display: flex; align-items: center; gap: 4px; }
+.vs-step-row .rstep-b { min-width: 40px; height: 40px; border-radius: 12px; font-size: 14px; }
+.vs-step-row b { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
+.vs-step-save { min-height: 36px; border-radius: 12px; background: var(--fill-1); font-weight: 600; }
 #slider-bubble .vs-snap { display: block; font-size: 11px; opacity: 0.75; margin-top: 2px; }
 
 /* layer colour (tint) */
@@ -826,3 +833,13 @@ body.mode-animate #btn-3d-models { display: none; }
 .ln-drafts-head { margin: 6px 0 22px; }
 .ln-drafts-head h1 { font-size: 30px; }
 .ln-drafts-head p { color: var(--muted); max-width: 720px; line-height: 1.5; margin: 6px 0 0; }
+/* −10 −1 [slider] +1 +10 on every range slider */
+.rstep { display: flex; align-items: center; gap: 3px; width: 100%; min-width: 0; grid-column: 1 / -1; }
+.rstep input[type=range] { flex: 1; min-width: 60px; }
+.rstep-b { flex: none; min-width: 30px; height: 28px; padding: 0 5px; border-radius: 8px; background: var(--fill-1); color: var(--text); font: 600 12px/1 -apple-system, sans-serif; font-variant-numeric: tabular-nums; touch-action: manipulation; }
+.rstep-b.big { color: var(--muted); }
+.rstep-b:active { background: var(--fill-2); }
+#ctxbar .rstep, #timeline .rstep { width: auto; grid-column: auto; flex: none; gap: 2px; }
+#ctxbar .rstep input[type=range], #timeline .rstep input[type=range] { flex: none; width: 110px; min-width: 0; }
+#ctxbar .rstep-b, #timeline .rstep-b { min-width: 26px; height: 26px; font-size: 11px; padding: 0 3px; }
+#ctxbar { max-width: calc(100vw - 24px); overflow-x: auto; scrollbar-width: none; }

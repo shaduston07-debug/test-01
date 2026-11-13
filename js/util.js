@@ -217,3 +217,53 @@ export function seg(options, value, onChange) {
   return el;
 }
 export const pct = (v) => Math.round(v * 100) + '%';
+
+// ───────── step buttons for every range slider ─────────
+// Every <input type=range> in the app gets −10 −1 +1 +10 buttons next to it (dragging still
+// works as before). One step is 1 % for 0–1 sliders, otherwise the slider's own step; the big
+// buttons move ten steps. Holding a button keeps stepping.
+function stepUnit(inp) {
+  const min = parseFloat(inp.min || '0'), max = parseFloat(inp.max || '100'), step = parseFloat(inp.step) || 1;
+  return max - min <= 1.0001 ? Math.max(step, 0.01) : step;
+}
+function nudge(inp, mult) {
+  const min = parseFloat(inp.min || '0'), max = parseFloat(inp.max || '100'), step = parseFloat(inp.step) || 1;
+  const u = stepUnit(inp);
+  let v = parseFloat(inp.value) + u * mult;
+  v = Math.min(max, Math.max(min, v));
+  v = Math.round((v - min) / step) * step + min; // stay on the slider's own grid
+  const dec = (String(step).split('.')[1] || '').length;
+  inp.value = String(+v.toFixed(Math.min(6, dec + 2)));
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+  inp.dispatchEvent(new Event('change', { bubbles: true }));
+}
+function stepButton(inp, label, mult) {
+  const b = h('button', { type: 'button', class: 'rstep-b' + (Math.abs(mult) > 1 ? ' big' : ''), 'aria-label': (mult > 0 ? 'plus ' : 'minus ') + Math.abs(mult) }, label);
+  let t = null, rep = null;
+  const stop = () => { clearTimeout(t); clearInterval(rep); t = rep = null; };
+  b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); nudge(inp, mult); t = setTimeout(() => { rep = setInterval(() => nudge(inp, mult), 70); }, 380); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, stop);
+  b.addEventListener('click', (e) => e.preventDefault());
+  return b;
+}
+export function enhanceRange(inp) {
+  if (!inp || inp.dataset.rstep || inp.dataset.nostep !== undefined || !inp.parentNode) return;
+  inp.dataset.rstep = '1';
+  const wrap = h('span', { class: 'rstep' });
+  inp.parentNode.insertBefore(wrap, inp);
+  wrap.append(stepButton(inp, '−10', -10), stepButton(inp, '−1', -1), inp, stepButton(inp, '+1', 1), stepButton(inp, '+10', 10));
+}
+export function enhanceAllRanges(root = document) {
+  for (const inp of root.querySelectorAll('input[type=range]')) enhanceRange(inp);
+}
+if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
+  const mo = new MutationObserver((list) => {
+    for (const m of list) for (const n of m.addedNodes) {
+      if (n.nodeType !== 1) continue;
+      if (n.matches && n.matches('input[type=range]')) enhanceRange(n);
+      else if (n.querySelectorAll) enhanceAllRanges(n);
+    }
+  });
+  const start = () => { mo.observe(document.body, { childList: true, subtree: true }); enhanceAllRanges(); };
+  if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+}

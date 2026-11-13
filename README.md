@@ -163,7 +163,9 @@ PoseManiacs' direct link is a private Clip Studio feature. Poses come in through
 
 **Pressure is a bonus**: every brush is tuned to look right at full strength. Auto only uses pressure once your pen shows it really senses it (Apple Pencil); pens without a sensor (Apple Pencil USB-C, Logitech Crayon, most other styluses) draw at full strength. Light pressure can thin / lighten a stroke but never make it vanish (≥ 35 % size, ≥ 50 % opacity). Optional extras in Settings › Pen pressure from: Tilt or Speed.
 
-**Brush save points**: the bookmark button under the sliders saves the current size + opacity for each brush; tap a point to jump back to it, hold to delete.
+**Brush save points** (Procreate-style): the bookmark under the sliders saves the current size + opacity for each brush; **hold the bookmark** to save instantly. Saved points show as bold blue marks on both the size and the opacity slider, the knob lights up when it sits on one, dragging snaps onto them and tapping a mark jumps to it.
+
+**Step by 1 or 10**: every slider has −10 −1 +1 +10 buttons (hold to repeat) and can still be dragged. On the size and opacity sliders in the sidebar, **hold the slider** for the same buttons and *Save as a point*.
 
 **Automatic backups** (Gallery › Backup): the iPad app backs everything up on its own after you work (at most every 10 minutes, after closing a canvas), keeping the last 5 full backups in **Files › On My iPad › Inkwell Studio › Backups**, with *Restore an automatic backup…* to bring one back. These live in the app's folder, so iOS deletes them together with the app. **Cloud backup** survives that: connect a private GitHub repository (fine-grained key with Contents: Read and write, stored only on the device and never put in backup files) and every canvas you change is uploaded as its own small backup file, and your brushes (including scanned ibis Paint brushes), fonts, palettes and settings go in a separate library file whenever they change; *Restore from cloud…* brings them all back on a fresh install. Safari / Home Screen versions, which can't write files on their own, get a weekly reminder instead.
 

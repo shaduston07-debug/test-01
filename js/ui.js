@@ -159,26 +159,33 @@ export function vslider(app, el, kind) {
     if (kind === 'size') app.setSize(Math.max(1, 1 + v * v * (b.maxSize - 1)));
     else app.setOpacity(Math.max(0.01, v));
   };
-  // save points of the current brush, drawn as marks on the size slider (same curve as the knob)
-  const marks = kind === 'size' ? h('div', { class: 'vs-marks' }) : null;
-  if (marks) el.insertBefore(marks, knob);
+  // Save points of the current brush, shown as bold marks on BOTH sliders (Procreate-style):
+  // size marks on the size slider, their opacities on the opacity slider. The knob lights up when
+  // it sits on one, dragging snaps onto them, tapping one jumps to it.
+  const marks = h('div', { class: 'vs-marks' });
+  el.insertBefore(marks, knob);
   let marksKey = '';
   const pointVals = () => {
     const b = app.brushFor(app.paintToolName());
-    return (store.prefs.get('brushPoints', {})[app.sizeKey()] || []).map((p) => ({ size: p.size, opacity: p.opacity, v: Math.sqrt(Math.max(0, p.size - 1) / Math.max(1, b.maxSize - 1)) }));
+    return (store.prefs.get('brushPoints', {})[app.sizeKey()] || []).map((p) => ({ size: p.size, opacity: p.opacity,
+      v: kind === 'size' ? Math.sqrt(Math.max(0, p.size - 1) / Math.max(1, b.maxSize - 1)) : (p.opacity ?? 1) }));
+  };
+  const onPoint = () => {
+    const cur = kind === 'size' ? app.getSize() : app.getOpacity();
+    return pointVals().some((p) => Math.abs((kind === 'size' ? p.size : p.opacity) - cur) < (kind === 'size' ? 0.05 : 0.005));
   };
   const drawMarks = () => {
-    if (!marks) return;
-    const pts = pointVals(), key = app.sizeKey() + ':' + pts.map((p) => p.size).join(',');
+    const pts = pointVals(), key = kind + app.sizeKey() + ':' + pts.map((p) => p.v.toFixed(3)).join(',');
     if (key === marksKey) return;
     marksKey = key; marks.innerHTML = '';
-    for (const p of pts) { const v = clamp(p.v, 0, 1); marks.append(h('i', { style: { bottom: `calc(${v * 100}% - ${v * 14}px)` } })); }
+    for (const p of pts) { const v = clamp(p.v, 0, 1); marks.append(h('i', { style: { bottom: `calc(${v * 100}% - ${v * 14}px + 7px)` } })); }
   };
   const sync = () => {
     const v = clamp(get(), 0, 1);
     knob.style.bottom = `calc(${v * 100}% - ${v * 14}px)`;
     fill.style.height = v * 100 + '%';
     drawMarks();
+    knob.classList.toggle('on-mark', onPoint());
   };
   const show = () => {
     const r = el.getBoundingClientRect();
@@ -188,40 +195,83 @@ export function vslider(app, el, kind) {
       const s = app.getSize(), c = makeCanvas(108, 108), x = c.getContext('2d');
       const rr = Math.min(50, (s * app.view.zoom) / 2);
       x.fillStyle = app.color; x.beginPath(); x.arc(54, 54, Math.max(1, rr), 0, Math.PI * 2); x.fill();
-      bubble.append(c, h('span', {}, Math.round(s) + ' px'));
+      bubble.append(c, h('span', {}, (s >= 10 ? Math.round(s) : Math.round(s * 10) / 10) + ' px'));
     } else bubble.append(h('span', {}, pct(app.getOpacity())));
     const right = document.body.classList.contains('right-handed');
     bubble.style.left = right ? '' : r.right + 10 + 'px';
     bubble.style.right = right ? innerWidth - r.left + 10 + 'px' : '';
     bubble.style.top = r.top + r.height * (1 - clamp(get(), 0, 1)) - 30 + 'px';
   };
-  let active = false;
-  let snapped = null;
+  let active = false, snapped = null, hold = null, start = null;
   // the save point whose mark is nearest the finger (within tol px), if any
   const nearMark = (e, tol) => {
-    if (!marks) return null;
     const r = el.getBoundingClientRect(), fromBottom = r.bottom - e.clientY;
     let best = null, bd = tol;
-    for (const p of pointVals()) { const d = Math.abs(clamp(p.v, 0, 1) * (r.height - 14) - fromBottom); if (d < bd) { bd = d; best = p; } }
+    for (const p of pointVals()) { const d = Math.abs(clamp(p.v, 0, 1) * (r.height - 14) + 7 - fromBottom); if (d < bd) { bd = d; best = p; } }
     return best;
+  };
+  const applyPoint = (p, both) => {
+    if (kind === 'size' || both) app.setSize(p.size);
+    if ((kind !== 'size' || both) && p.opacity != null) app.setOpacity(p.opacity);
+    if (both) app.updateSliders();
   };
   const onPos = (e, tap) => {
     const r = el.getBoundingClientRect();
     const v = clamp(1 - (e.clientY - r.top) / r.height, 0, 1);
     // tapping a mark jumps to that save point (size + opacity); dragging snaps onto marks
-    snapped = nearMark(e, tap ? 14 : 7);
-    if (snapped) {
-      app.setSize(snapped.size);
-      if (tap && snapped.opacity != null) { app.setOpacity(snapped.opacity); app.updateSliders(); }
-    } else set(v);
+    snapped = nearMark(e, tap ? 16 : 11);
+    if (snapped) applyPoint(snapped, tap); else set(v);
     sync(); show();
     app.onBrushValues && app.onBrushValues();
-    if (snapped) bubble.append(h('small', { class: 'vs-snap' }, tap && snapped.opacity != null ? `Save point · ${Math.round(snapped.opacity * 100)}%` : 'Save point'));
+    if (snapped) bubble.append(h('small', { class: 'vs-snap' }, '★ Save point' + (tap ? ` · ${Math.round(snapped.size)} px · ${Math.round((snapped.opacity ?? 1) * 100)}%` : '')));
   };
-  el.addEventListener('pointerdown', (e) => { e.preventDefault(); active = true; el.setPointerCapture(e.pointerId); onPos(e, true); });
-  el.addEventListener('pointermove', (e) => { if (active) onPos(e); });
-  const end = () => { active = false; bubble.hidden = true; };
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); active = true; el.setPointerCapture(e.pointerId); start = { x: e.clientX, y: e.clientY };
+    onPos(e, true);
+    // hold still: step by 1 or 10 with buttons
+    clearTimeout(hold); hold = setTimeout(() => { active = false; bubble.hidden = true; stepper(); }, 480);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!active) return;
+    if (hold && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) { clearTimeout(hold); hold = null; }
+    onPos(e);
+  });
+  const end = () => { clearTimeout(hold); hold = null; active = false; bubble.hidden = true; };
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  // −10 −1 value +1 +10 panel next to the slider (size in px, opacity in %)
+  const stepper = () => {
+    document.querySelectorAll('.vs-stepper').forEach((x) => x.remove());
+    const r = el.getBoundingClientRect(), right = document.body.classList.contains('right-handed');
+    const val = h('b', {});
+    const show2 = () => { val.textContent = kind === 'size' ? (app.getSize() >= 10 ? Math.round(app.getSize()) : Math.round(app.getSize() * 10) / 10) + ' px' : Math.round(app.getOpacity() * 100) + '%'; sync(); app.onBrushValues && app.onBrushValues(); };
+    const step = (n) => {
+      const b = app.brushFor(app.paintToolName());
+      if (kind === 'size') app.setSize(clamp(Math.round(app.getSize()) + n, 1, b.maxSize));
+      else app.setOpacity(clamp(Math.round(app.getOpacity() * 100 + n) / 100, 0.01, 1));
+      show2();
+    };
+    const btn = (label, n) => {
+      const x = h('button', { class: 'rstep-b' + (Math.abs(n) > 1 ? ' big' : '') }, label);
+      let t = null, rep = null; const stop = () => { clearTimeout(t); clearInterval(rep); };
+      x.addEventListener('pointerdown', (e) => { e.preventDefault(); step(n); t = setTimeout(() => { rep = setInterval(() => step(n), 70); }, 380); });
+      for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) x.addEventListener(ev, stop);
+      return x;
+    };
+    const panel = h('div', { class: 'vs-stepper glass' }, h('small', {}, kind === 'size' ? 'Size' : 'Opacity'),
+      h('div', { class: 'vs-step-row' }, btn('−10', -10), btn('−1', -1), val, btn('+1', 1), btn('+10', 10)),
+      h('button', { class: 'vs-step-save', onclick: () => {
+        const all = store.prefs.get('brushPoints', {}), k = app.sizeKey(), list = all[k] || [];
+        const cur = { size: Math.round(app.getSize() * 10) / 10, opacity: Math.round(app.getOpacity() * 100) / 100 };
+        if (!list.some((p) => p.size === cur.size && p.opacity === cur.opacity)) { list.push(cur); list.sort((a, c) => a.size - c.size || a.opacity - c.opacity); all[k] = list; store.prefs.set('brushPoints', all); }
+        app.updateSliders(); toast('★ Saved ' + cur.size + ' px · ' + Math.round(cur.opacity * 100) + '%', 1600);
+      } }, '★ Save as a point'));
+    panel.style.top = clamp(r.top + r.height * (1 - clamp(get(), 0, 1)) - 40, 8, innerHeight - 120) + 'px';
+    if (right) panel.style.right = innerWidth - r.left + 12 + 'px'; else panel.style.left = r.right + 12 + 'px';
+    document.body.append(panel);
+    show2();
+    const away = (e) => { if (!panel.contains(e.target) && !el.contains(e.target)) { panel.remove(); document.removeEventListener('pointerdown', away, true); } };
+    setTimeout(() => document.addEventListener('pointerdown', away, true), 0);
+  };
   sync();
   return { sync };
 }
@@ -1081,6 +1131,14 @@ function symmetryDialog(app) {
 }
 
 // ───────── brush save points: remembered size + opacity per brush ─────────
+export function quickSavePoint(app) {
+  const all = store.prefs.get('brushPoints', {}), k = app.sizeKey(), list = all[k] || [];
+  const cur = { size: Math.round(app.getSize() * 10) / 10, opacity: Math.round(app.getOpacity() * 100) / 100 };
+  if (list.some((p) => p.size === cur.size && p.opacity === cur.opacity)) { toast('This size is already saved'); return; }
+  if (list.length >= 16) { toast('16 save points is the maximum: hold one in the list to delete it'); return; }
+  list.push(cur); list.sort((a, c) => a.size - c.size || a.opacity - c.opacity); all[k] = list; store.prefs.set('brushPoints', all);
+  app.updateSliders(); toast('★ Saved ' + cur.size + ' px · ' + Math.round(cur.opacity * 100) + '%', 1600);
+}
 const pointKey = (app) => app.sizeKey();
 export function openPoints(app, anchor) {
   const all = store.prefs.get('brushPoints', {});
@@ -1090,7 +1148,7 @@ export function openPoints(app, anchor) {
     const k = pointKey(app), list = all[k] || [], b = app.brushFor(app.paintToolName());
     const cur = { size: Math.round(app.getSize() * 10) / 10, opacity: Math.round(app.getOpacity() * 100) / 100 };
     const label = (p) => `${p.size >= 10 ? Math.round(p.size) : p.size} px · ${Math.round(p.opacity * 100)}%`;
-    body.append(h('p', { class: 'hint' }, b.name + ' — tap a point to go back to it, hold to delete'));
+    body.append(h('p', { class: 'hint' }, b.name + ' — tap a point to go back to it, hold to delete. Points show as blue marks on both sliders. Tip: hold the bookmark to save the current size at once; hold a slider to step by 1 or 10.'));
     const grid = h('div', { class: 'point-grid' });
     list.forEach((p, i) => {
       const dot = Math.max(4, Math.min(30, 4 + Math.sqrt(p.size / b.maxSize) * 26));
