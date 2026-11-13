@@ -18,6 +18,7 @@ import * as Three3D from './three3d.js';
 import { Timelapse } from './timelapse.js';
 import { Reference } from './reference.js';
 import * as Learn from './learn/learn.js';
+import * as AutoBackup from './autobackup.js';
 import { drawGuide as drawPerspGuide, snapper as perspSnapper, perspTool } from './perspective.js';
 
 // Apple M-series iPads (M1–M4) report 8+ cores and have 8–16 GB of RAM: give layers a
@@ -130,6 +131,7 @@ class App {
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
     UI.renderGallery(this);
     Learn.initLearning(this);
+    AutoBackup.runSoon(this, 20000);
   }
 
   applySettings() {
@@ -287,6 +289,7 @@ class App {
       step(() => { toLearn = Learn.afterClose(); });
       $('#gallery').hidden = toLearn;
       step(() => UI.renderGallery(this));
+      step(() => AutoBackup.runSoon(this));
       btn && btn.classList.remove('busy');
       this.closing = false;
     }
@@ -326,6 +329,7 @@ class App {
       await store.saveDoc(data, { id: d.id, name: d.name, mode: d.mode, width: d.width, height: d.height, updated: Date.now(), created: d.created, folder: d.folder || null, thumb });
       L('stored');
       this.dirtySave = false;
+      AutoBackup.noteChange();
     } catch (e) {
       console.error(e);
       toast('Could not save: ' + (e.message || e));

@@ -163,6 +163,8 @@ PoseManiacs' direct link is a private Clip Studio feature. Poses come in through
 
 **Brush save points**: the bookmark button under the sliders saves the current size + opacity for each brush; tap a point to jump back to it, hold to delete.
 
+**Automatic backups** (Gallery › Backup): the iPad app backs everything up on its own after you work (at most every 10 minutes, after closing a canvas), keeping the last 5 full backups in **Files › On My iPad › Inkwell Studio › Backups**, with *Restore an automatic backup…* to bring one back. These live in the app's folder, so iOS deletes them together with the app. **Cloud backup** survives that: connect a private GitHub repository (fine-grained key with Contents: Read and write, stored only on the device and never put in backup files) and every canvas you change is uploaded as its own small backup file; *Restore from cloud…* brings them all back on a fresh install. Safari / Home Screen versions, which can't write files on their own, get a weekly reminder instead.
+
 **Backup & Restore** (Gallery › Backup): one `.inkwellbackup` file with every canvas, brush, font, palette and setting (time-lapses optional). Updating the iPad app: install the new .ipa over the old one without deleting it and everything stays; the backup is the safety net.
 
 **Rapid undo / redo**: hold two fingers on the canvas to keep undoing, three to keep redoing (or hold the undo / redo buttons) — it starts after a short delay (adjustable, like Procreate's Rapid Undo Delay) and speeds up from 15 to 120 steps a second, with a step counter. Up to 250 undo steps.

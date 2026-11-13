@@ -817,3 +817,9 @@ body.mode-animate #btn-3d-models { display: none; }
 @media (max-width: 640px) { .ln-steps { width: 100%; } .ln-steps button { flex: 1; } }
 .ln-thumb-prev { width: 100%; height: 100%; display: block; object-fit: cover; }
 .ln-challenge .ln-rung small { letter-spacing: 0; font-weight: 400; font-size: 12.5px; color: var(--muted); }
+/* Backup & Restore */
+.bk-sec { padding: 12px 0; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+.bk-sec .hint { margin: 0; line-height: 1.45; }
+.bk-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.bk-steps { margin: 0 0 10px; padding-left: 20px; line-height: 1.55; }
+.bk-list { display: grid; gap: 4px; max-height: 50vh; overflow: auto; }

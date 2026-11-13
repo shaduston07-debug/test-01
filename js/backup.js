@@ -26,14 +26,22 @@ async function unpack(value, zip) {
   return value;
 }
 
-export async function exportBackup({ timelapse = false, onProgress } = {}) {
+// Build a backup zip. onlyIds: just these canvases (docs + meta records, no brushes/prefs).
+export async function buildBackup({ timelapse = false, onlyIds = null, onProgress } = {}) {
   const JSZip = await zipLib(), zip = new JSZip(), files = [], data = { app: 'inkwell', v: 1, created: Date.now(), stores: {}, prefs: {} };
-  for (const name of store.STORES) {
-    if (name === 'timelapse' && !timelapse) continue;
-    onProgress && onProgress('Reading ' + name + '…');
-    data.stores[name] = pack(await store.dumpStore(name), files);
+  if (onlyIds) {
+    const metas = (await store.dumpStore('meta')).filter((m) => onlyIds.includes(m.id));
+    const docs = [];
+    for (const id of onlyIds) { const d = await store.loadDoc(id); if (d) docs.push(d); }
+    data.stores.meta = pack(metas, files); data.stores.docs = pack(docs, files);
+  } else {
+    for (const name of store.STORES) {
+      if (name === 'timelapse' && !timelapse) continue;
+      onProgress && onProgress('Reading ' + name + '…');
+      data.stores[name] = pack(await store.dumpStore(name), files);
+    }
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:')) data.prefs[k] = localStorage.getItem(k); }
   }
-  for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:')) data.prefs[k] = localStorage.getItem(k); }
   zip.file('backup.json', JSON.stringify(data));
   // read each image now: a Blob broken by the old iPad storage bug must not fail the whole backup
   let unreadable = 0;
@@ -43,10 +51,15 @@ export async function exportBackup({ timelapse = false, onProgress } = {}) {
   }
   onProgress && onProgress('Packing…');
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
-  const n = (data.stores.meta || []).length;
-  const d = new Date(), stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  await download(blob, `Inkwell backup ${stamp}.inkwellbackup`);
-  return { canvases: n, bytes: blob.size, unreadable };
+  return { blob, canvases: (data.stores.meta || []).length, bytes: blob.size, unreadable };
+}
+export const backupStamp = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+export async function exportBackup({ timelapse = false, onProgress } = {}) {
+  const r = await buildBackup({ timelapse, onProgress });
+  await download(r.blob, `Inkwell backup ${backupStamp()}.inkwellbackup`);
+  localStorage.setItem('inkwell:lastManualBackup', String(Date.now()));
+  return r;
 }
 
 export async function importBackup(file, { onProgress } = {}) {

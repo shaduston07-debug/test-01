@@ -14,6 +14,8 @@ import * as Ibis from './ibis.js';
 import * as Media from './media.js';
 import * as Pal from './palettes.js';
 import * as Backup from './backup.js';
+import * as AutoBackup from './autobackup.js';
+import * as Platform from './platform.js';
 import * as X from './exporters.js';
 import { encodeVideo, hevcSupported } from './video.js';
 import { QUALITIES as TL_QUALITIES } from './timelapse.js';
@@ -1115,21 +1117,62 @@ export function openPoints(app, anchor) {
 // ───────── backup / restore ─────────
 export function backupDialog(app) {
   let withTL = false;
+  const st = AutoBackup.getState();
   const status = h('p', { class: 'hint' }, '');
-  const body = h('div', {},
-    h('p', {}, 'Saves all your canvases, brushes, fonts, palettes and settings in one file. Keep it in Files (or iCloud Drive) before deleting the app, then restore it after installing.'),
-    switchRow('Include time-lapse recordings (much bigger file)', false, (v) => (withTL = v)), status);
-  const run = async (fn) => { try { await fn(); } catch (e) { console.error(e); status.textContent = 'Failed: ' + e.message; return false; } };
-  dialog({ title: 'Backup & Restore', body, actions: [
+  const run = async (fn) => { try { await fn(); } catch (e) { console.error(e); status.textContent = 'Failed: ' + (e.message || e); toast('Failed: ' + (e.message || e), 5000); return false; } };
+  const when = (t) => (t ? new Date(t).toLocaleString() : 'never');
+  const restoreBlob = async (blob, label) => {
+    if (!(await confirmDialog(`Restore ${label}? Canvases in it are added back (ones that already exist are replaced by the backed-up version), then the app reloads.`, 'Restore'))) return false;
+    toast('Restoring…', 60000);
+    const r = await Backup.importBackup(blob, { onProgress: (m) => toast(m, 60000) });
+    toast(`Restored ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'} — reloading…`, 3000);
+    setTimeout(() => location.reload(), 1200);
+  };
+  // ── automatic, on this device ──
+  const local = h('div', { class: 'bk-sec' }, h('b', {}, 'Automatic backup on this iPad'));
+  if (Platform.isNative) {
+    local.append(
+      switchRow('Back up automatically after I work', st.local !== false, (v) => AutoBackup.setState({ local: v })),
+      h('p', { class: 'hint' }, `Keeps the last 5 full backups in Files › On My iPad › Inkwell Studio › Backups. Last one: ${when(st.lastLocal)}. They are inside the app's folder, so iOS deletes them if you delete the app: copy one to iCloud Drive now and then, or turn on Cloud backup below.`),
+      h('div', { class: 'bk-row' },
+        h('button', { class: 'pill', onclick: () => run(async () => { await app.saveNow(true); toast('Backing up…', 60000); const r = await AutoBackup.localBackup(); toast(`Backed up ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'} ✓`, 3000); }) }, 'Back up now'),
+        h('button', { class: 'pill', onclick: () => run(async () => {
+          const list = await AutoBackup.listLocalBackups();
+          if (!list.length) { toast('No automatic backups yet', 3000); return; }
+          dialog({ title: 'Automatic backups', body: h('div', { class: 'bk-list' }, ...list.map((f) => h('button', { class: 'menu-item', onclick: () => run(async () => { closePopover(); await restoreBlob(await AutoBackup.readLocalBackup(f.name), '“' + f.name.replace('.inkwellbackup', '') + '”'); }) }, f.name.replace('Inkwell auto-backup ', '').replace('.inkwellbackup', ''), f.size ? h('small', {}, (f.size / 1e6).toFixed(1) + ' MB') : null))), actions: [{ label: 'Close' }] });
+        }) }, 'Restore an automatic backup…')));
+  } else {
+    local.append(
+      switchRow('Remind me every week to save a backup', st.remind !== false, (v) => AutoBackup.setState({ remind: v })),
+      h('p', { class: 'hint' }, 'Safari and the Home Screen version can\'t save files on their own. Use “Back up everything” below now and then, or turn on Cloud backup, which is automatic.'));
+  }
+  // ── cloud: survives deleting the app ──
+  const cloud = h('div', { class: 'bk-sec' }, h('b', {}, 'Cloud backup (survives deleting the app)'));
+  const c = st.cloud;
+  if (c && c.repo && AutoBackup.cloudToken()) {
+    cloud.append(
+      h('p', { class: 'hint' }, `On: every canvas you change is uploaded to your private GitHub repository “${c.full || c.repo}”. Last upload: ${when(st.lastCloud)}.`),
+      h('div', { class: 'bk-row' },
+        h('button', { class: 'pill', onclick: () => run(async () => { await app.saveNow(true); toast('Uploading…', 60000); const n = await AutoBackup.cloudBackup(await store.listDocs(), { onProgress: (m) => toast(m, 60000) }); toast(n ? `Uploaded ${n} canvas${n === 1 ? '' : 'es'} ✓` : 'Everything is already backed up ✓', 3000); }) }, 'Back up now'),
+        h('button', { class: 'pill', onclick: () => run(async () => {
+          const files = await AutoBackup.listCloud();
+          if (!files.length) { toast('The cloud backup is empty so far', 3000); return; }
+          if (!(await confirmDialog(`Restore all ${files.length} canvas${files.length === 1 ? '' : 'es'} from the cloud backup? Missing ones come back; existing ones are replaced by the backed-up version.`, 'Restore'))) return;
+          const n = await AutoBackup.restoreCloud({ onProgress: (m) => toast(m, 60000) });
+          toast(`Restored ${n} canvas${n === 1 ? '' : 'es'} — reloading…`, 3000); setTimeout(() => location.reload(), 1200);
+        }) }, 'Restore from cloud…'),
+        h('button', { class: 'pill', onclick: () => { AutoBackup.setState({ cloud: null }); AutoBackup.setCloudToken(''); closePopover(); toast('Cloud backup turned off (the files stay in your repository)'); } }, 'Turn off')));
+  } else {
+    cloud.append(h('p', { class: 'hint' }, 'Uploads each canvas you change to a private GitHub repository that only you can see, automatically. If the app or the iPad is ever lost, install the app again and use Restore from cloud.'),
+      h('button', { class: 'pill primary', onclick: () => cloudSetup(app) }, 'Set up cloud backup…'));
+  }
+  // ── manual ──
+  const manual = h('div', { class: 'bk-sec' }, h('b', {}, 'Backup file'),
+    h('p', { class: 'hint' }, 'One file with all your canvases, brushes, fonts, palettes and settings. Keep it in Files or iCloud Drive; restore it after installing on any device.'),
+    switchRow('Include time-lapse recordings (much bigger file)', false, (v) => (withTL = v)));
+  dialog({ title: 'Backup & Restore', wide: true, body: h('div', {}, local, cloud, manual, status), actions: [
     { label: 'Close' },
-    { label: 'Restore from backup…', onClick: () => run(async () => {
-      const [f] = await pickFile(Backup.BACKUP_ACCEPT); if (!f) return false;
-      if (!(await confirmDialog('Restore this backup? Canvases and brushes in it are added (ones with the same name are replaced), then the app reloads.', 'Restore'))) return false;
-      toast('Restoring…', 60000);
-      const r = await Backup.importBackup(f, { onProgress: (m) => toast(m, 60000) });
-      toast(`Restored ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'} — reloading…`, 3000);
-      setTimeout(() => location.reload(), 1200);
-    }) },
+    { label: 'Restore from backup file…', onClick: () => run(async () => { const [f] = await pickFile(Backup.BACKUP_ACCEPT); if (!f) return false; return restoreBlob(f, 'this backup'); }) },
     { label: 'Back up everything', primary: true, onClick: () => run(async () => {
       await app.saveNow(true);
       toast('Preparing backup…', 60000);
@@ -1137,6 +1180,28 @@ export function backupDialog(app) {
       toast(`Backup ready: ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'}, ${(r.bytes / 1e6).toFixed(1)} MB`, 4000);
     }) },
   ] });
+}
+function cloudSetup(app) {
+  const repo = h('input', { class: 'text-in', value: 'inkwell-studio-backup', placeholder: 'repository name' });
+  const key = h('input', { class: 'text-in', type: 'password', placeholder: 'github_pat_…', autocomplete: 'off' });
+  const msg = h('p', { class: 'hint' });
+  dialog({ title: 'Set up cloud backup', wide: true, body: h('div', {},
+    h('ol', { class: 'bk-steps' },
+      h('li', {}, 'On github.com, create a new repository named ', h('b', {}, 'inkwell-studio-backup'), ' and choose ', h('b', {}, 'Private'), '.'),
+      h('li', {}, 'Open Settings › Developer settings › Personal access tokens › ', h('b', {}, 'Fine-grained tokens'), ' › Generate new token. Under Repository access pick ', h('b', {}, 'Only select repositories'), ' › inkwell-studio-backup. Under Permissions › Repository permissions set ', h('b', {}, 'Contents: Read and write'), '.'),
+      h('li', {}, 'Copy the key and paste it below. It stays on this iPad only and is never put into backup files.')),
+    h('label', {}, 'Repository'), repo, h('label', {}, 'Access key'), key, msg),
+  actions: [{ label: 'Cancel' }, { label: 'Connect & back up', primary: true, onClick: async () => {
+    AutoBackup.setCloudToken(key.value.trim());
+    try {
+      msg.textContent = 'Checking…';
+      const t = await AutoBackup.testCloud(repo.value.trim());
+      AutoBackup.setState({ cloud: { repo: repo.value.trim(), full: t.full, branch: t.branch, done: {} } });
+      toast('Connected. Uploading your canvases…', 60000);
+      const n = await AutoBackup.cloudBackup(await store.listDocs(), { onProgress: (m) => toast(m, 60000) });
+      toast(`Cloud backup on ✓ (${n} canvas${n === 1 ? '' : 'es'} uploaded)`, 4000);
+    } catch (e) { AutoBackup.setCloudToken(''); AutoBackup.setState({ cloud: null }); msg.textContent = 'Couldn’t connect: ' + (e.message || e); return false; }
+  } }] });
 }
 
 export function sharePenLog(blob) {
