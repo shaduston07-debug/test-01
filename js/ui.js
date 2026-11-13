@@ -2025,7 +2025,7 @@ let thumbURLs = [];
 const getFolders = () => store.prefs.get('folders', []);
 const setFolders = (f) => store.prefs.set('folders', f);
 async function newFolder(name) {
-  const f = { id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: name || 'Folder', created: Date.now() };
+  const f = { id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: name || 'Folder', created: Date.now(), mode: galTab() };
   setFolders([...getFolders(), f]);
   return f;
 }
@@ -2054,17 +2054,37 @@ async function moveToFolder(app, m, folderId) {
   if (app.doc && app.doc.id === m.id) app.doc.folder = m.folder;
 }
 
+// gallery tabs: Illustrate / Animate / Webtoon each list only their own canvases and folders
+export const galTab = () => store.prefs.get('galTab', 'paint');
+export function setGalTab(app, mode) {
+  if (galTab() === mode) { newDocDialog(app, mode); return; } // tapping the open tab again: new canvas of that kind
+  store.prefs.set('galTab', mode); app.currentFolder = null; renderGallery(app);
+}
 export async function renderGallery(app) {
   const grid = $('#gal-grid'), crumb = $('#gal-crumb');
+  const tab = galTab();
   // free the previous render's thumbnails once the new ones have had time to load
   const old = thumbURLs; setTimeout(() => old.forEach((u) => URL.revokeObjectURL(u)), 3000);
   thumbURLs = [];
-  let metas = [];
-  try { metas = await store.listDocs(); } catch (e) { console.warn(e); }
-  metas.sort((a, b) => b.updated - a.updated);
-  let folders = getFolders();
+  let all = [];
+  try { all = await store.listDocs(); } catch (e) { console.warn(e); }
+  all.sort((a, b) => b.updated - a.updated);
+  // the tabs show how many canvases each mode has; the grid only this tab's
+  const counts = { paint: 0, animate: 0, webtoon: 0 };
+  const learnIds = new Set(getFolders().filter((f) => f.learning).map((f) => f.id));
+  for (const m of all) if (!learnIds.has(m.folder)) counts[m.mode || 'paint'] = (counts[m.mode || 'paint'] || 0) + 1;
+  for (const c of document.querySelectorAll('.mode-card')) {
+    const on = c.dataset.mode === tab;
+    c.classList.toggle('on', on); c.setAttribute('aria-selected', on);
+    const n = counts[c.dataset.mode] || 0, cnt = c.querySelector('.mc-count');
+    if (cnt) cnt.textContent = n === 1 ? '1 canvas' : `${n} canvases`;
+  }
+  const metas = all.filter((m) => (m.mode || 'paint') === tab);
+  const fmode = (f) => f.mode || (all.find((m) => m.folder === f.id) || {}).mode || 'paint';
+  let folders = getFolders().filter((f) => fmode(f) === tab);
   const known = new Set(folders.map((f) => f.id));
-  for (const m of metas) if (m.folder && !known.has(m.folder)) m.folder = null; // folder was deleted
+  const allKnown = new Set(getFolders().map((f) => f.id));
+  for (const m of metas) if (m.folder && !allKnown.has(m.folder)) m.folder = null; // folder was deleted
   if (app.currentFolder && !known.has(app.currentFolder)) app.currentFolder = null;
   const cur = folders.find((f) => f.id === app.currentFolder) || null;
   grid.innerHTML = '';
@@ -2099,7 +2119,8 @@ export async function renderGallery(app) {
     }
   }
   if (!docs.length && !(!cur && folders.length)) {
-    grid.append(h('div', { class: 'gal-empty' }, cur ? 'This folder is empty — drag artwork onto it, or tap ＋ New to create one here.' : 'No artwork yet — pick a mode above or tap ＋ New.'));
+    const what = { paint: 'illustrations', animate: 'animations', webtoon: 'webtoons' }[tab];
+    grid.append(h('div', { class: 'gal-empty' }, cur ? 'This folder is empty — drag artwork onto it, or tap ＋ New to create one here.' : `No ${what} yet — tap ＋ New to start one.`));
   }
   for (const m of docs) {
     const url = thumbURL(m);

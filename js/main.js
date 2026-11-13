@@ -180,7 +180,7 @@ class App {
     UI.bindColorButton(this, $('#btn-color'));
     this.sizeSlider = UI.vslider(this, $('#sl-size'), 'size');
     this.opSlider = UI.vslider(this, $('#sl-opacity'), 'opacity');
-    $('#gal-new').onclick = () => UI.newDocDialog(this);
+    $('#gal-new').onclick = () => UI.newDocDialog(this, UI.galTab());
     $('#gal-import').onclick = () => UI.importAny(this);
     $('#gal-backup').onclick = () => UI.backupDialog(this);
     $('#btn-points').innerHTML = ICONS.bookmark;
@@ -192,7 +192,7 @@ class App {
       bp.addEventListener('click', (e) => { if (bp._held) { bp._held = false; e.stopImmediatePropagation(); } }, true); }
     $('#gal-folder').onclick = () => UI.createFolderFlow(this);
     $('#gal-settings').onclick = () => UI.openSettings(this);
-    for (const c of $$('.mode-card')) c.onclick = () => UI.newDocDialog(this, c.dataset.mode);
+    for (const c of $$('.mode-card')) c.onclick = () => UI.setGalTab(this, c.dataset.mode);
     this.updateColorChip();
   }
 
@@ -231,6 +231,8 @@ class App {
   async openDoc(doc) {
     this.lastSelection = null; this._lastSelVer = null;
     this.doc = doc;
+    // back in the gallery, the tab of this canvas's kind is shown
+    store.prefs.set('galTab', doc.mode || 'paint');
     this.selection = new Selection(doc.width, doc.height);
     this.history.clear();
     this.transform = null;
