@@ -823,3 +823,6 @@ body.mode-animate #btn-3d-models { display: none; }
 .bk-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .bk-steps { margin: 0 0 10px; padding-left: 20px; line-height: 1.55; }
 .bk-list { display: grid; gap: 4px; max-height: 50vh; overflow: auto; }
+.ln-drafts-head { margin: 6px 0 22px; }
+.ln-drafts-head h1 { font-size: 30px; }
+.ln-drafts-head p { color: var(--muted); max-width: 720px; line-height: 1.5; margin: 6px 0 0; }

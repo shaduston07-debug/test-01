@@ -31,11 +31,38 @@ export function initLearning(a) {
   const names = new Set(COURSES.flatMap((c) => [...c.lessons.map((l) => l.challenge.studio && l.challenge.studio.name), c.capstone.studio && c.capstone.studio.name]).filter(Boolean));
   UI.moveLearningDrafts(names).then((n) => { if (n) { UI.renderGallery(app); toast(`Moved ${n} Learning canvas${n === 1 ? '' : 'es'} into “${UI.LEARNING_FOLDER}”`, 3500); } }).catch(() => {});
 }
-// open the Learning drafts folder in the Studio gallery
-async function openDrafts() {
-  app.currentFolder = await UI.learningFolderId();
-  showTab('studio');
-  UI.renderGallery(app);
+// Learning › My drafts: every canvas made by the exercises, grouped like the tracks
+let draftURLs = [];
+async function renderDrafts(body) {
+  body.append(h('div', { class: 'ln-backbar' },
+    h('button', { class: 'pill', onclick: () => route({ view: 'home' }) }, '‹ Learning'),
+    h('span', { class: 'ln-backbar-title' }, 'My drafts')));
+  body.append(h('header', { class: 'ln-drafts-head' }, h('h1', {}, 'My drafts'),
+    h('p', {}, 'Every canvas you made in a Learning exercise or final project lives here, apart from your own artwork in the Studio. Tap one to keep working on it; ⋯ to rename, duplicate, export, delete, or move it to the Studio gallery.')));
+  const old = draftURLs; setTimeout(() => old.forEach((u) => URL.revokeObjectURL(u)), 3000); draftURLs = [];
+  const fid = await UI.learningFolderId();
+  const metas = (await store.listDocs().catch(() => [])).filter((m) => m.folder === fid).sort((a, b) => b.updated - a.updated);
+  if (!metas.length) { body.append(h('div', { class: 'gal-empty' }, 'No drafts yet. Open a lesson, go to 3 Practise and start exercise 1.')); return; }
+  const groups = [['paint', 'Illustrate'], ['animate', 'Animate'], ['webtoon', 'Webtoon']];
+  for (const [mode, title] of groups) {
+    const list = metas.filter((m) => m.mode === mode);
+    if (!list.length) continue;
+    const grid = h('div', { class: 'gal-grid' });
+    for (const m of list) {
+      const u = m.thumb ? URL.createObjectURL(m.thumb) : ''; if (u) draftURLs.push(u);
+      const thumb = h('button', { class: 'gal-thumb', style: { backgroundImage: u ? `url(${u})` : '', width: '100%', display: 'block' }, onclick: () => openDraft(m) });
+      grid.append(h('div', { class: 'gal-card' }, thumb,
+        h('button', { class: 'gal-more', onclick: () => UI.canvasMenu(app, m, () => route({ view: 'drafts' })) }, '⋯'),
+        h('div', { class: 'gal-meta' }, h('b', {}, m.name), h('span', { class: 'badge ' + m.mode }, title)),
+        h('small', { class: 'hint' }, new Date(m.updated).toLocaleDateString())));
+    }
+    body.append(h('section', { class: 'ln-course-sec' }, h('div', { class: 'ln-course-row' }, h('div', {}, h('h2', {}, title), h('p', {}, `${list.length} draft${list.length === 1 ? '' : 's'}`))), grid));
+  }
+}
+function openDraft(m) {
+  stopDemos();
+  app.returnTo = 'learn';
+  UI.openSavedCanvas(app, m);
 }
 
 // 'studio' (the gallery) or 'learn'
@@ -57,7 +84,8 @@ function route(r) {
   const body = $('#learn-body');
   body.innerHTML = '';
   $('#learning').scrollTop = 0;
-  if (r.view === 'course') renderCourse(body, r.course);
+  if (r.view === 'drafts') renderDrafts(body);
+  else if (r.view === 'course') renderCourse(body, r.course);
   else if (r.view === 'lesson') renderLesson(body, r.course, r.lesson);
   else renderHome(body);
 }
@@ -85,7 +113,7 @@ function renderHome(body) {
     h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Inkwell ', h('em', {}, 'Learning')),
     h('div', { class: 'gal-actions glass' },
       last && last.lesson ? h('button', { class: 'pill primary', onclick: () => route({ view: 'lesson', course: last.course.id, lesson: last.lesson.id }) }, '▶ Continue: ' + last.lesson.title) : null,
-      h('button', { class: 'pill', onclick: openDrafts }, '🗂 My drafts'),
+      h('button', { class: 'pill', onclick: () => route({ view: 'drafts' }) }, '🗂 My drafts'),
       h('button', { class: 'pill', onclick: creditsDialog }, 'Credits'))));
   const modes = h('div', { class: 'gal-modes' });
   for (const t of TRACKS) {

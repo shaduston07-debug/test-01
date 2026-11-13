@@ -2022,7 +2022,7 @@ export async function renderGallery(app) {
 
   const docs = metas.filter((m) => (m.folder || null) === (cur ? cur.id : null));
   if (!cur) {
-    for (const f of folders) {
+    for (const f of folders.filter((x) => !x.learning)) {
       const inside = metas.filter((m) => m.folder === f.id);
       const stack = h('button', { class: 'gal-thumb gal-stack', onclick: () => { app.currentFolder = f.id; renderGallery(app); } });
       inside.slice(0, 3).reverse().forEach((m, i, arr) => {
@@ -2133,14 +2133,14 @@ function folderMenu(app, f) {
   });
 }
 
-function moveDialog(app, m) {
+function moveDialog(app, m, after = () => renderGallery(app)) {
   const folders = getFolders();
   dialog({
     title: `Move "${m.name}"`, body: '',
     actions: [
-      ...folders.filter((f) => f.id !== m.folder).map((f) => ({ label: '📁 ' + f.name, onClick: async () => { await moveToFolder(app, m, f.id); renderGallery(app); } })),
-      m.folder && { label: 'Gallery (no folder)', onClick: async () => { await moveToFolder(app, m, null); renderGallery(app); } },
-      { label: '＋ New folder…', onClick: async () => { const n = await promptDialog('New folder', 'Folder'); if (n == null) return; const f = await newFolder(n.trim() || 'Folder'); await moveToFolder(app, m, f.id); renderGallery(app); } },
+      ...folders.filter((f) => f.id !== m.folder).map((f) => ({ label: '📁 ' + f.name, onClick: async () => { await moveToFolder(app, m, f.id); after(); } })),
+      m.folder && { label: 'Gallery (no folder)', onClick: async () => { await moveToFolder(app, m, null); after(); } },
+      { label: '＋ New folder…', onClick: async () => { const n = await promptDialog('New folder', 'Folder'); if (n == null) return; const f = await newFolder(n.trim() || 'Folder'); await moveToFolder(app, m, f.id); after(); } },
       { label: 'Cancel', primary: true },
     ].filter(Boolean),
   });
@@ -2211,19 +2211,22 @@ async function openSaved(app, m) {
   } catch (e) { console.error(e); toast('Could not open: ' + e.message); }
 }
 
-function galleryMenu(app, m) {
+// `after` refreshes whichever screen shows the canvas (the Gallery, or Learning › My drafts)
+function galleryMenu(app, m, after = () => renderGallery(app)) {
   dialog({
     title: m.name, body: '',
     actions: [
-      { label: 'Move to folder…', onClick: () => { setTimeout(() => moveDialog(app, m), 0); } },
-      { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename', m.name); if (!n) return; try { const data = await store.loadDoc(m.id); data.name = n; await store.saveDoc(data, { ...m, name: n }); } catch (e) { console.error(e); toast('Couldn’t rename: ' + (e && e.message || e)); } renderGallery(app); } },
-      { label: 'Duplicate', onClick: () => duplicateDoc(app, m) },
+      { label: 'Move to folder…', onClick: () => { setTimeout(() => moveDialog(app, m, after), 0); } },
+      { label: 'Rename', onClick: async () => { const n = await promptDialog('Rename', m.name); if (!n) return; try { const data = await store.loadDoc(m.id); data.name = n; await store.saveDoc(data, { ...m, name: n }); } catch (e) { console.error(e); toast('Couldn’t rename: ' + (e && e.message || e)); } after(); } },
+      { label: 'Duplicate', onClick: () => duplicateDoc(app, m).then(after) },
       { label: 'Export project', onClick: async () => { const doc = await Doc.deserialize(await store.loadDoc(m.id)); download(await doc.toFile(), safeName(m.name) + '.inkwell'); } },
-      { label: 'Delete', danger: true, onClick: async () => { if (await confirmDialog(`Delete "${m.name}"? This can't be undone.`, 'Delete', true)) { await store.deleteDoc(m.id); store.deleteTimelapse(m.id).catch(() => {}); renderGallery(app); } } },
+      { label: 'Delete', danger: true, onClick: async () => { if (await confirmDialog(`Delete "${m.name}"? This can't be undone.`, 'Delete', true)) { await store.deleteDoc(m.id); store.deleteTimelapse(m.id).catch(() => {}); after(); } } },
       { label: 'Close', primary: true },
     ],
   });
 }
+
+export { openSaved as openSavedCanvas, galleryMenu as canvasMenu };
 
 const PRESETS = {
   paint: [['Square', 2048, 2048], ['Screen size', 0, 0], ['A4 · 300dpi', 2480, 3508], ['4K', 3840, 2160], ['Portrait post', 1080, 1350], ['Comic page (B4)', 2508, 3541]],
