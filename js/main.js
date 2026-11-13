@@ -1303,9 +1303,9 @@ class App {
         // perspective guide with Snap on: the stroke follows the nearest guide direction
         // (a finger on the screen while drawing = free stroke)
         const g = d.persp;
-        this.snap = kind !== 'smudge' && g && g.snap && g.visible && app.touchesDown() === 0 ? perspSnapper(app, g, p) : null;
+        this.pSnap = kind !== 'smudge' && g && g.snap && g.visible && app.touchesDown() === 0 ? perspSnapper(app, g, p) : null;
         app.engine.add(p);
-        if (!this.snap) this.armQuickShape(p);
+        if (!this.pSnap) this.armQuickShape(p);
       },
       armQuickShape(p) {
         clearTimeout(this.qs);
@@ -1315,7 +1315,7 @@ class App {
       move(p) {
         if (!app.engine.active) return;
         if (this.shape) { this.adjustShape(p); return; }
-        if (this.snap) { for (const q of this.snap.feed(p)) { this.raw.push(q); app.engine.add(q); } return; }
+        if (this.pSnap) { for (const q of this.pSnap.feed(p)) { this.raw.push(q); app.engine.add(q); } return; }
         this.raw.push(p);
         app.engine.add(p);
         if (dist(p.sx, p.sy, this.anchor.sx, this.anchor.sy) > 5) { this.anchor = p; this.armQuickShape(p); }
@@ -1385,7 +1385,7 @@ class App {
         clearTimeout(this.joinT); this.joinT = null;
         if (app.pendingStroke === this) app.pendingStroke = null;
         if (!app.engine.active) return;
-        if (this.snap) { for (const q of this.snap.flush()) { this.raw.push(q); app.engine.add(q); } this.snap = null; }
+        if (this.pSnap) { for (const q of this.pSnap.flush()) { this.raw.push(q); app.engine.add(q); } this.pSnap = null; }
         const cmd = app.engine.end(kind === 'paint' ? 'Stroke' : kind === 'erase' ? 'Erase' : 'Smudge');
         if (cmd) app.history.push(cmd);
         this.shape = null;
