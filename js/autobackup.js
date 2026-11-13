@@ -36,7 +36,8 @@ export function runSoon(app, delay = 4000) {
 async function run(app) {
   const s = state();
   const metas = await store.listDocs().catch(() => []);
-  if (!metas.length) return;
+  const brushes = await store.listBrushes().catch(() => []);
+  if (!metas.length && !brushes.length) return;
   // 1. local, on the iPad
   if (isNative && s.local && (s.lastChange > s.lastLocal || !s.lastLocal) && Date.now() - s.lastLocal > MIN_GAP) {
     try { await localBackup(); toast('Backed up ✓ (Files › Inkwell Studio › Backups)', 1800); } catch (e) { console.warn('auto backup', e); toast('Automatic backup failed: ' + (e.message || e), 4000); }
@@ -133,7 +134,10 @@ export async function cloudBackup(metas, { force = false, onProgress } = {}) {
   const { full, branch } = c.full ? c : await testCloud(c.repo);
   const done = c.done || {};
   const todo = metas.filter((m) => force || !(done[m.id] >= m.updated));
-  if (!todo.length) return 0;
+  // brushes, fonts, palettes and settings: uploaded when they changed
+  const libSig = await librarySignature();
+  const libTodo = force || libSig !== c.lib;
+  if (!todo.length && !libTodo) return 0;
   let parent = await headCommit(full, branch);
   if (!parent) { // an empty repository needs a first commit before the Git Data API works
     await gh(`/repos/${full}/contents/README.md`, { method: 'PUT', body: JSON.stringify({ message: 'Inkwell Studio backups', content: btoa(unescape(encodeURIComponent('Automatic backups from Inkwell Studio. Each file in canvases/ is one canvas; restore it with Gallery › Backup › Restore from cloud, or Import.\n'))), branch }) });
@@ -149,6 +153,12 @@ export async function cloudBackup(metas, { force = false, onProgress } = {}) {
     const sha = (await gh(`/repos/${full}/git/blobs`, { method: 'POST', body: JSON.stringify({ content: await b64(blob), encoding: 'base64' }) })).sha;
     tree.push({ path: `canvases/${m.id}.inkwellbackup`, mode: '100644', type: 'blob', sha });
   }
+  if (libTodo) {
+    onProgress && onProgress('Uploading brushes, fonts, palettes and settings');
+    const { blob } = await Backup.buildBackup({ library: true });
+    const sha = (await gh(`/repos/${full}/git/blobs`, { method: 'POST', body: JSON.stringify({ content: await b64(blob), encoding: 'base64' }) })).sha;
+    tree.push({ path: 'library.inkwellbackup', mode: '100644', type: 'blob', sha });
+  }
   // a readable list of what is in the backup
   const all = { ...(c.names || {}) }; for (const m of metas) all[m.id] = m.name;
   const listing = JSON.stringify(Object.entries(all).map(([id, name]) => ({ id, name, file: `canvases/${id}.inkwellbackup` })), null, 1);
@@ -156,8 +166,15 @@ export async function cloudBackup(metas, { force = false, onProgress } = {}) {
   const t = await gh(`/repos/${full}/git/trees`, { method: 'POST', body: JSON.stringify({ base_tree: baseTree, tree }) });
   const commit = await gh(`/repos/${full}/git/commits`, { method: 'POST', body: JSON.stringify({ message: `Backup ${todo.length} canvas${todo.length === 1 ? '' : 'es'}`, tree: t.sha, parents: [parent] }) });
   await gh(`/repos/${full}/git/refs/heads/${branch}`, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha }) });
-  const s2 = state(); s2.cloud = { ...s2.cloud, full, branch, names: all, done: { ...(s2.cloud.done || {}), ...Object.fromEntries(todo.map((m) => [m.id, m.updated])) } }; s2.lastCloud = Date.now(); save(s2);
-  return tree.length - 1;
+  const s2 = state(); s2.cloud = { ...s2.cloud, full, branch, names: all, lib: libSig, done: { ...(s2.cloud.done || {}), ...Object.fromEntries(todo.map((m) => [m.id, m.updated])) } }; s2.lastCloud = Date.now(); save(s2);
+  return todo.length;
+}
+// changes whenever a brush, font or palette is added, edited or removed
+async function librarySignature() {
+  const parts = [];
+  for (const name of ['brushes', 'fonts']) { const recs = await store.dumpStore(name).catch(() => []); parts.push(name, recs.length, JSON.stringify(recs, (k, v) => (v instanceof Blob ? v.size : v instanceof ArrayBuffer ? v.byteLength : v)).length); }
+  for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:') && !/^inkwell:(autobackup|learn\.|color|lastManualBackup|penSeen|penHasPressure|mig\.)/.test(k)) parts.push(k, (localStorage.getItem(k) || '').length); }
+  return parts.join('|');
 }
 // every canvas file in the cloud backup, newest first
 export async function listCloud() {
@@ -165,7 +182,7 @@ export async function listCloud() {
   const { full, branch } = c.full ? c : await testCloud(c.repo);
   const r = await gh(`/repos/${full}/git/trees/${branch}?recursive=1`, { allow: [404, 409] });
   if (r.status) return [];
-  return r.tree.filter((e) => /^canvases\/.*\.inkwellbackup$/.test(e.path)).map((e) => ({ ...e, full, name: (c.names || {})[e.path.slice(9, -14)] || e.path }));
+  return r.tree.filter((e) => /^(canvases\/.*|library)\.inkwellbackup$/.test(e.path)).map((e) => ({ ...e, full, name: (c.names || {})[e.path.slice(9, -14)] || e.path }));
 }
 export async function restoreCloud({ onProgress } = {}) {
   const files = await listCloud();

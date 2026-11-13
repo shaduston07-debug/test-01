@@ -1151,19 +1151,19 @@ export function backupDialog(app) {
   const c = st.cloud;
   if (c && c.repo && AutoBackup.cloudToken()) {
     cloud.append(
-      h('p', { class: 'hint' }, `On: every canvas you change is uploaded to your private GitHub repository “${c.full || c.repo}”. Last upload: ${when(st.lastCloud)}.`),
+      h('p', { class: 'hint' }, `On: every canvas you change, plus your brushes (including scanned ibis Paint brushes), fonts, palettes and settings, is uploaded to your private GitHub repository “${c.full || c.repo}”. Last upload: ${when(st.lastCloud)}.`),
       h('div', { class: 'bk-row' },
         h('button', { class: 'pill', onclick: () => run(async () => { await app.saveNow(true); toast('Uploading…', 60000); const n = await AutoBackup.cloudBackup(await store.listDocs(), { onProgress: (m) => toast(m, 60000) }); toast(n ? `Uploaded ${n} canvas${n === 1 ? '' : 'es'} ✓` : 'Everything is already backed up ✓', 3000); }) }, 'Back up now'),
         h('button', { class: 'pill', onclick: () => run(async () => {
           const files = await AutoBackup.listCloud();
           if (!files.length) { toast('The cloud backup is empty so far', 3000); return; }
-          if (!(await confirmDialog(`Restore all ${files.length} canvas${files.length === 1 ? '' : 'es'} from the cloud backup? Missing ones come back; existing ones are replaced by the backed-up version.`, 'Restore'))) return;
+          if (!(await confirmDialog(`Restore everything from the cloud backup (${files.length} file${files.length === 1 ? '' : 's'}: canvases, brushes, fonts, palettes and settings)? Missing things come back; existing ones are replaced by the backed-up version.`, 'Restore'))) return;
           const n = await AutoBackup.restoreCloud({ onProgress: (m) => toast(m, 60000) });
           toast(`Restored ${n} canvas${n === 1 ? '' : 'es'} — reloading…`, 3000); setTimeout(() => location.reload(), 1200);
         }) }, 'Restore from cloud…'),
         h('button', { class: 'pill', onclick: () => { AutoBackup.setState({ cloud: null }); AutoBackup.setCloudToken(''); closePopover(); toast('Cloud backup turned off (the files stay in your repository)'); } }, 'Turn off')));
   } else {
-    cloud.append(h('p', { class: 'hint' }, 'Uploads each canvas you change to a private GitHub repository that only you can see, automatically. If the app or the iPad is ever lost, install the app again and use Restore from cloud.'),
+    cloud.append(h('p', { class: 'hint' }, 'Uploads each canvas you change, and your brushes (including scanned ibis Paint brushes), fonts, palettes and settings, to a private GitHub repository that only you can see, automatically. If the app or the iPad is ever lost, install the app again and use Restore from cloud.'),
       h('button', { class: 'pill primary', onclick: () => cloudSetup(app) }, 'Set up cloud backup…'));
   }
   // ── manual ──

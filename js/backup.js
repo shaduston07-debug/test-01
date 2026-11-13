@@ -27,9 +27,13 @@ async function unpack(value, zip) {
 }
 
 // Build a backup zip. onlyIds: just these canvases (docs + meta records, no brushes/prefs).
-export async function buildBackup({ timelapse = false, onlyIds = null, onProgress } = {}) {
+export async function buildBackup({ timelapse = false, onlyIds = null, library = false, onProgress } = {}) {
   const JSZip = await zipLib(), zip = new JSZip(), files = [], data = { app: 'inkwell', v: 1, created: Date.now(), stores: {}, prefs: {} };
-  if (onlyIds) {
+  if (library) {
+    // everything except the canvases: brushes (incl. scanned ibis Paint / imported ones), fonts, palettes, settings
+    for (const name of store.STORES) if (!['docs', 'meta', 'timelapse'].includes(name)) data.stores[name] = pack(await store.dumpStore(name), files);
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:')) data.prefs[k] = localStorage.getItem(k); }
+  } else if (onlyIds) {
     const metas = (await store.dumpStore('meta')).filter((m) => onlyIds.includes(m.id));
     const docs = [];
     for (const id of onlyIds) { const d = await store.loadDoc(id); if (d) docs.push(d); }
