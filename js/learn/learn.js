@@ -98,7 +98,7 @@ const bar = (pct, color) => h('div', { class: 'ln-bar' }, h('i', { style: { widt
 
 // Same layout as the Studio start screen: the three mode cards on top choose Illustrate /
 // Animate / Webtoon, and the lessons below are picture cards like your canvases.
-const TRACK_UI = { illustration: ['paint', 'Illustrate', 'Perspective, backgrounds, faces, colour'], animation: ['anim', 'Animate', 'Timing, motion, walk cycles, colouring'], webtoon: ['toon', 'Webtoon', 'Panels, dialogue, colour, publishing'] };
+const TRACK_UI = { illustration: ['paint', 'Illustrate', 'Perspective, backgrounds, faces, colour'], animation: ['anim', 'Animate', 'Timing, motion, walk cycles, fluid motion and fights'], webtoon: ['toon', 'Webtoon', 'Panels, dialogue, colour, publishing'] };
 const lessonThumb = (c, l) => {
   const b = l && l.body.find((x) => x && x.art);
   if (b) return ART[b.art[0]] && ART[b.art[0]].src;

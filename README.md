@@ -12,6 +12,8 @@ Three modes, picked when you create a canvas:
 
 ## Inkwell Learning
 
+
+**Animation 3: Fluid Motion & Fight Animation** teaches action the way animators study it: frame by frame. Its demos are small fight cuts built as drawings with hold counts (anticipation, smear, impact, hit-stop, recoil; the wave through the body; even vs snap spacing; an attack → dodge → counter exchange with a silhouette test) that can be paused and stepped one frame at a time. It links to Sakugabooru for cuts from Jujutsu Kaisen, Hitori no Shita and Super Cube to break down; the clips themselves are not bundled (they belong to their studios).
 A **Studio | Learning** switch sits at the top of the start screen. **Learning** looks like the Studio's start screen: the same **Illustrate / Animate / Webtoon** cards choose a track, and its lessons are shown as picture cards grouped by course: 10 interactive courses and 47 lessons, from your first horizon line to a finished, coloured webtoon episode or animation.
 
 | Track | Courses |

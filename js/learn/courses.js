@@ -44,6 +44,10 @@ const S = {
   kenney: ['Kenney — CC0 3D asset packs (buildings, city kits, furniture)', 'https://kenney.nl/assets'],
   quaternius: ['Quaternius — CC0 low-poly models', 'https://quaternius.com'],
   blender: ['Blender (free, open source) — block out scenes and cameras', 'https://www.blender.org'],
+  sakuga: ['Sakugabooru — animation cuts tagged by show, animator and technique', 'https://www.sakugabooru.com'],
+  sakugaBlog: ['Sakuga Blog — articles on how anime is animated and produced', 'https://blog.sakugabooru.com'],
+  pantoja: ['Toniko Pantoja — hand-drawn animation tutorials (YouTube)', 'https://www.youtube.com/@TonikoPantoja'],
+  wimshurst: ['Howard Wimshurst — fight and action animation tutorials (YouTube)', 'https://www.youtube.com/@HowardWimshurst'],
 };
 
 const studioPaint = (name, persp, w = 2048, h = 1536) => ({ mode: 'paint', w, h, name, persp });
@@ -52,7 +56,7 @@ const studioToon = (name, h = 6400) => ({ mode: 'webtoon', w: 800, h, name });
 
 export const TRACKS = [
   { id: 'illustration', title: 'Illustration', blurb: 'Perspective, backgrounds, faces, light and colour.' },
-  { id: 'animation', title: 'Animation', blurb: 'From a bouncing ball to a coloured character walking.' },
+  { id: 'animation', title: 'Animation', blurb: 'From a bouncing ball to a coloured character walking, then fluid motion and fight animation.' },
   { id: 'webtoon', title: 'Webtoon', blurb: 'Panels, flow, dialogue and colour for vertical comics.' },
 ];
 
@@ -666,6 +670,120 @@ export const COURSES = [
       },
     ],
     capstone: { title: 'Capstone: a coloured character shot', text: 'Animate and colour a 3–5 second shot from one of your own ideas: your character must anticipate, act and follow through, with overlapping hair or clothing, a background and a final grade.', ideas: ['Your character reacts to a surprise and runs off', 'A magic attack: wind-up, blast, recoil', 'A tired walk home in the rain'], studio: studioAnim('Capstone — character shot', 120) },
+  },
+  // ───────────────────────── ANIMATION 3 ─────────────────────────
+  {
+    id: 'anim3', track: 'animation', title: 'Animation 3: Fluid Motion & Fight Animation', color: '#ff5a4f',
+    blurb: 'How action cuts are really built: flow through the whole body, the anatomy of a hit, snap timing and fight choreography, studied frame by frame.',
+    outcome: 'You can take a real action cut apart frame by frame, and animate a character moving fluidly and a two-person exchange with anticipation, smears, impact frames and clear choreography.',
+    lessons: [
+      {
+        id: 'study', title: 'Study real cuts, frame by frame', min: 10,
+        body: [
+          '<p>Animators learn action by <b>taking finished cuts apart</b>. The best free library for that is <a href="https://www.sakugabooru.com" target="_blank" rel="noopener">Sakugabooru</a>: short cuts from anime and donghua, tagged by show, animator and technique. This course is built around three shows worth studying for body motion and fighting:</p>',
+          '<ul><li><b>Jujutsu Kaisen</b> — hand-to-hand exchanges with a moving camera. Watch how every strike has a wind-up pose you can read, and how the camera move hides or sells the hit. <a href="https://www.sakugabooru.com/post?tags=jujutsu_kaisen" target="_blank" rel="noopener">Cuts on Sakugabooru</a></li><li><b>Hitori no Shita: The Outcast</b> — martial-arts choreography: stances, weight shifts and long chains of attack → block → counter. <a href="https://www.sakugabooru.com/tag?name=hitori" target="_blank" rel="noopener">Find its tag</a></li><li><b>Super Cube</b> — fast, flowing full-body movement: look at how the hips lead and how hair and clothes trail behind. <a href="https://www.sakugabooru.com/tag?name=cube" target="_blank" rel="noopener">Find its tag</a></li></ul>',
+          '<p class="hint">The clips themselves are not inside this app: they belong to their studios, so the lessons link to them and teach each technique with frame-by-frame demos drawn for this course. Useful tags to combine with a show: <i>fighting</i>, <i>smears</i>, <i>impact_frames</i>, <i>running</i>, <i>hair</i>, <i>fabric</i>, <i>effects</i>.</p>',
+          '<p><b>How to study one cut (20 minutes):</b></p><ol><li><b>Watch it five times</b> at full speed. What do you feel? Where is it fast, where does it rest?</li><li><b>Step through it frame by frame</b> and count. Write down how many frames each pose is held: you will see patterns like 6 – 2 – 1 – 4.</li><li><b>Find the keys</b>: the three to six poses that tell the story on their own. Sketch them small, as stick figures. Draw the <b>line of action</b> through each.</li><li><b>Mark the extremes</b>: the anticipation, the smear, the impact, the overshoot.</li><li><b>Trace the path</b> of one hand, the head and the hips across the cut. They move on arcs.</li><li><b>Re-animate it from your notes</b>, not by tracing, with a simple mannequin.</li></ol>',
+          { demo: 'fight-hit', caption: 'Practise here first: pause, step frame by frame, and count how long each drawing is held.' },
+          '<p>In the Studio you can also study a clip you are allowed to use (your own recording of yourself throwing a punch is ideal): open an Animate canvas, then <b>Actions › Add › Import video as animation</b>, lower that track\'s opacity and draw your stick-figure keys on a new track above it. Film reference of yourself for every exercise in this course: it is what professionals do.</p>',
+        ],
+        keys: ['Watch, then step frame by frame and count the holds.', 'Find the 3–6 key poses and their lines of action.', 'Re-animate from notes: do not trace.'],
+        quiz: [
+          { q: 'You are studying a punch. What do you write down first?', a: ['How many frames each pose is held', 'The colours of the costume', 'The name of the studio'], c: 0, why: 'Timing (frame counts) is what you cannot see at full speed and what makes the hit work.' },
+          { q: 'Why re-animate from notes instead of tracing the clip?', a: ['You learn the decisions (timing, spacing, poses), not the outlines', 'Tracing is slower', 'Stick figures look better'], c: 0, why: 'Tracing copies drawings; studying copies the thinking.' },
+        ],
+        challenge: { title: 'Break down one cut', text: 'Pick one 2–4 second fight cut from one of the three shows on Sakugabooru. Make a study sheet for it.', steps: ['Write the frame count of every pose in a row (for example 6-2-1-4-3).', 'Draw the key poses as stick figures with a line of action through each.', 'Draw the path of the attacking hand as one curve with a dot per frame.', 'Circle the anticipation, the smear and the impact.'], studio: studioPaint('Animation 3 — cut study sheet', null, 2800, 1800) },
+        sources: [S.sakuga, S.sakugaBlog, S.williams, S.blenderFilms],
+      },
+      {
+        id: 'flow', title: 'Fluid motion: the wave through the body', min: 12,
+        body: [
+          '<p>Fluid animation is not "more frames". It comes from three ideas working together:</p>',
+          '<ol><li><b>Line of action</b>: one curve through the whole pose, from the planted foot through the spine to the head or the striking hand. Strong poses are a clear <b>C</b> or <b>S</b>; weak poses are a straight, upright stick. From wind-up to release the curve <b>reverses</b> (a C becomes the opposite C).</li><li><b>Successive breaking of joints</b> (Richard Williams): the body does not move as one block. Power starts in the <b>feet and hips</b>, then the chest, shoulder, elbow, wrist, fingers, each a frame or two after the last, like a whip. The last part moves fastest.</li><li><b>Drag and overlap</b>: hair, sleeves, scarves and coats start late and arrive late. They trace the path the body took.</li></ol>',
+          { demo: 'fight-flow', caption: 'Slide the delay to 0 to see the same poses with everything moving at once.' },
+          '<p><b>Arcs</b>: follow the pink dots. The fist never travels in a straight line from A to B; it swings out and around. Straight paths look mechanical. When you plan a move, draw the arc of the hand and the hips first, then hang the poses on it.</p>',
+          '<p><b>Weight shift</b>: before a character can move one way, the weight has to come off the foot on that side. Step, plant, then strike. In the shows you are studying, watch the feet during a punch: the front foot lands a frame or two <i>before</i> the fist does.</p>',
+          { demo: 'overlap', caption: 'The same rule on loose parts: the tip is always late.' },
+        ],
+        keys: ['One clear C or S curve per pose; it reverses from wind-up to release.', 'Hips → chest → shoulder → elbow → hand, each 1–2 frames late.', 'Everything travels on arcs.'],
+        quiz: [
+          { q: 'In a punch, which part starts moving first?', a: ['The hips', 'The fist', 'The head'], c: 0, why: 'Power travels up from the ground: feet and hips, then chest, shoulder, elbow, fist.' },
+          { q: 'A pose looks stiff. What is the first thing to check?', a: ['Its line of action: is there one clear curve?', 'The line thickness', 'The frame rate'], c: 0, why: 'A straight, vertical pose has no direction. Push it into a C or S curve.' },
+        ],
+        challenge: { title: 'Whip and sword swing', text: 'Animate a mannequin swinging a sword (or throwing a ball) in 24–36 frames, with a scarf or ponytail.', steps: ['Draw 3 keys: coiled (C curve), release (opposite C), settle. Draw the line of action first, the figure on top of it.', 'Draw the arc of the hand as a guide on its own track.', 'Break the joints: hips turn on the key, chest 1–2 frames later, then arm, then the blade.', 'Animate the scarf last, on its own track, 2 frames behind the neck.'], studio: studioAnim('Animation 3 — fluid swing', 36) },
+        sources: [S.williams, S.illusion, S.sakuga, S.pantoja],
+      },
+      {
+        id: 'hit', title: 'Anatomy of a hit: anticipation, smear, impact', min: 12,
+        body: [
+          '<p>A hit on screen is a magic trick. At full speed you never see the fist travel; you see <b>where it was</b> and <b>where it ended up</b>, and your brain fills in the speed. A hit is built from five kinds of drawings:</p>',
+          { demo: 'fight-hit', caption: 'Step through the cut; the coloured strip shows how long each drawing is held.' },
+          '<ol><li><b>Anticipation</b> (blue): the wind-up, opposite to the strike. This is the pose the audience actually reads, so it is held <b>longest</b>: 6–10 frames, with a slow drift so it stays alive.</li><li><b>Smear</b> (pink): one or two drawings where the arm is stretched, multiplied or blurred along its path. It replaces all the inbetweens.</li><li><b>Impact</b> (red): the extreme pose, pushed <b>past</b> where the contact would be (overshoot). Often one frame is drawn as an <b>impact frame</b>: inverted or black-and-white, with radiating lines.</li><li><b>Hit-stop</b>: the impact pose is <b>held</b> for 3–6 frames, sometimes with a camera shake. Without the hold, the hit has no weight.</li><li><b>Follow-through</b> (green): recoil and settle. The thing that was hit reacts a beat <i>later</i> than the fist arrives.</li></ol>',
+          '<p><b>The numbers</b>, for a punch at 24 fps: anticipation 8, travel 1, impact + hold 5, recoil 6. Twenty frames, and only one of them is the punch. Heavier blows get a longer anticipation and a longer hold; a quick jab can be 3 – 1 – 2.</p>',
+          '<p><b>Where the power shows</b>: not in the attacker but in the <b>reaction</b>. Head snaps back first, the body follows; hair, clothes and debris keep travelling. When you study Jujutsu Kaisen or Hitori no Shita cuts, count how many frames the <i>victim</i> gets compared to the hit itself.</p>',
+        ],
+        keys: ['Hold the anticipation, skip the travel, hold the impact.', 'One smear frame replaces the inbetweens.', 'Overshoot the impact pose; the target reacts a beat late.'],
+        quiz: [
+          { q: 'Which part of a punch gets the MOST frames?', a: ['The anticipation', 'The fist travelling', 'The smear'], c: 0, why: 'The wind-up is what the audience reads. The travel is often a single frame.' },
+          { q: 'What does hit-stop do?', a: ['Holds the impact pose a few frames so the hit has weight', 'Makes the animation smoother', 'Slows the whole cut down'], c: 0, why: 'A hold right at the impact lets the eye register the pose and feel the force.' },
+          { q: 'A smear frame is…', a: ['One stretched or multiplied drawing that covers a fast move', 'A mistake to clean up later', 'A blurry photograph'], c: 0, why: 'It stands in for all the inbetweens of a move too fast to see.' },
+        ],
+        challenge: { title: 'One punch, three weights', text: 'Animate the same straight punch into a sandbag three times: a light jab, a normal cross and a huge finishing blow.', steps: ['Jab: 3 anticipation, 1 travel, 2 hold.', 'Cross: 8 – 1 – 4, with one smear drawing.', 'Finisher: 14 – 2 – 8, an impact frame, a 2-frame camera shake, and the bag flying off.', 'Check each with the timing written under it.'], studio: studioAnim('Animation 3 — three punches', 72) },
+        sources: [S.williams, S.sakuga, S.sakugaBlog, S.wimshurst],
+      },
+      {
+        id: 'snap', title: 'Spacing and snap: slow, FAST, hold', min: 10,
+        body: [
+          '<p>Take two key poses and twelve frames. Where you put the inbetweens decides everything:</p>',
+          { demo: 'fight-snap', caption: 'Same keys, same number of frames: only the spacing changes.' },
+          '<ul><li><b>Even spacing</b> floats: no acceleration, no weight.</li><li><b>Ease in and out</b> is natural for calm acting, but soft for action.</li><li><b>Snap</b> is the action spacing: creep slowly inside the anticipation (a "moving hold"), cross almost the whole distance in <b>one</b> frame, <b>overshoot</b>, then settle back in 2–3 frames.</li></ul>',
+          '<p><b>Ones, twos and threes inside one cut.</b> Action in anime is rarely on ones throughout. A common pattern: holds and slow drifts on <b>threes</b> (one drawing for 3 frames), normal movement on <b>twos</b>, and only the fastest moments, the hit itself and fast camera moves, on <b>ones</b>. Changing gear like this is called <b>timing modulation</b>, and it is a big part of why hand-drawn action feels punchy instead of smooth and floaty.</p>',
+          { demo: 'ones-twos', caption: 'The same movement on ones, twos and threes.' },
+          '<p><b>Rhythm</b>: think in beats, like music. <i>slow – slow – FAST – hold. FAST – FAST – slow.</i> A sequence of five equal hits is boring; three quick ones and one big one with a long wind-up is exciting. When you count frames in a real cut, write the rhythm as numbers and say it out loud.</p>',
+        ],
+        keys: ['Spacing, not frame count, makes speed.', 'Moving hold → one-frame cross → overshoot → settle.', 'Threes for holds, twos for motion, ones for the fastest moments.'],
+        quiz: [
+          { q: 'Two cuts both use 12 frames for a punch. One feels much faster. Why?', a: ['Its inbetweens are bunched at the start and end, with one big gap', 'It has more drawings', 'It is on ones'], c: 0, why: 'Bunched spacing with one large gap reads as a sudden burst of speed.' },
+          { q: 'What is a moving hold?', a: ['A pose that keeps drifting slightly so it does not freeze', 'A camera pan', 'A held breath'], c: 0, why: 'A tiny drift keeps a held pose alive while the audience reads it.' },
+        ],
+        challenge: { title: 'Dash and stop', text: 'Animate a character dashing across the screen and stopping dead in a fighting stance, in 24 frames.', steps: ['Crouch (moving hold) for 8 frames on threes and twos.', 'Cross the screen in 2 frames with a smear / speed lines.', 'Overshoot the stop by leaning too far, then settle back over 6 frames.', 'Hair and clothes arrive 2–4 frames after the body.'], studio: studioAnim('Animation 3 — dash and stop', 36) },
+        sources: [S.williams, S.illusion, S.sakugaBlog, S.pantoja],
+      },
+      {
+        id: 'choreo', title: 'Fight choreography: action and reaction', min: 14,
+        body: [
+          '<p>A fight is a <b>conversation</b>. Every line (attack) gets an answer (block, dodge, counter, or taking the hit), and the answer sets up the next line.</p>',
+          { demo: 'fight-choreo', caption: 'Attack → read → dodge → counter → hit → recover. Step through it and try the silhouette test.' },
+          '<ol><li><b>The defender reacts early.</b> B starts to move during A\'s wind-up, not when the fist arrives. That is what makes a dodge look skilful instead of lucky, and it gives the audience time to see both characters.</li><li><b>One pose, two jobs.</b> The end of a dodge is the anticipation of the counter; the follow-through of a missed punch is the opening. Chains of attacks flow because each move starts where the last one ended.</li><li><b>Silhouette and the gap.</b> In every key, the two bodies must read as a clear black shape. Keep limbs out of the torsos, and when a strike misses, show clear empty space between fist and head. When it lands, the shapes <b>touch</b> for the hold.</li><li><b>Stage it flat first.</b> Plan fights side-on, moving left and right across the screen like a stage. Add camera angles and depth only after the flat version reads.</li><li><b>Rhythm.</b> Alternate readable slow beats with fast bursts, and end a phrase on a strong held pose. Three or four exchanges, then a pause where the characters reset and look at each other.</li><li><b>Change something.</b> Each exchange should end with the situation different: someone lost ground, lost balance, lost their weapon, or changed their mind.</li></ol>',
+          '<p><b>How to plan one:</b> write it as beats first ("A jabs, B slips outside, B hooks the body, A folds"). Thumbnail one key per beat, both characters in the same drawing. Give every beat a frame count. Check the keys play like a slide show before you draw a single inbetween. This is exactly the keys → breakdowns → inbetweens workflow from Animation 2, with two characters on separate tracks.</p>',
+          '<p>When you watch a Hitori no Shita or Jujutsu Kaisen exchange now, pause on each contact and ask: who is in control, where is each character\'s weight, and which pose was the anticipation for this hit?</p>',
+        ],
+        keys: ['Attack → answer → new attack: the defender moves during the wind-up.', 'Each ending pose is the next anticipation.', 'Clear silhouettes; a visible gap on a miss; shapes touch on a hit.'],
+        quiz: [
+          { q: 'When should the defender start reacting to a punch?', a: ['During the attacker\'s wind-up', 'On the impact frame', 'After the punch has finished'], c: 0, why: 'Reading the anticipation is what makes a dodge or block believable, and readable.' },
+          { q: 'What is the silhouette test for?', a: ['Checking both poses read as clear shapes without detail', 'Checking the colours', 'Checking the frame rate'], c: 0, why: 'If the action is not clear as flat black shapes, detail will not save it.' },
+        ],
+        challenge: { title: 'Three-beat exchange', text: 'Animate two mannequins: A attacks, B dodges or blocks and counters, A takes the hit. 48–72 frames, side view.', steps: ['Write the three beats in words and give each a frame count.', 'One track per character. Draw only the keys, both characters, and play them as a slide show.', 'Fill each key black for a moment: is every pose readable? Is there a gap on the miss?', 'Add breakdowns and smears, then the hit-stop, then hair and clothes.', 'Film yourself and a friend walking through it slowly as reference.'], studio: studioAnim('Animation 3 — three-beat exchange', 72) },
+        sources: [S.williams, S.sakuga, S.wimshurst, S.pantoja],
+      },
+      {
+        id: 'sell', title: 'Selling it: weight, camera shake and effects', min: 9,
+        body: [
+          '<p>The body animation is the cake. These are the layers that make an action cut feel finished, in the order to add them:</p>',
+          '<ol><li><b>Weight in the ground.</b> Feet slide back on a block, knees bend deeper on a heavy landing, dust kicks up from the planted foot. A character who never loses balance never looks hit.</li><li><b>Secondary motion.</b> Hair, sleeves, coat tails and straps, each on its own track, each a little later than the body. In the Super Cube cuts, look at how much of the feeling of flow comes from the cloth alone.</li><li><b>Speed lines and smears.</b> Short lines trailing a fast limb, or a full-screen streak background for one or two frames on the biggest move.</li><li><b>Impact frames.</b> One or two frames of pure graphic shape at the moment of contact: black and white, inverted, or a flat colour with radiating lines. Keep them to the hits that matter.</li><li><b>Camera.</b> A 2–4 frame shake on impact (move the whole picture a few pixels in alternating directions, getting smaller), a quick push-in on the wind-up, a follow pan on a dash. In Inkwell: select all tracks\' drawings for those frames and nudge them with Transform, or animate the Move tool on a group.</li><li><b>Effects.</b> Dust, sparks, shockwave rings and debris, animated straight ahead on ones or twos. They start at the contact point on the impact frame and expand quickly, then linger and fade slowly.</li></ol>',
+          { demo: 'fight-hit', caption: 'Turn "Impact frame + hit-stop" off and on: the same drawings, a completely different weight.' },
+          '<p><b>Less is more</b>: if every hit has an impact frame, a shake and a shockwave, none of them stand out. Save the full treatment for the finishing blow and let the smaller hits live on timing alone.</p>',
+        ],
+        keys: ['Body first; cloth, lines, impact frames, shake and effects after.', 'Shake: 2–4 frames, alternating, shrinking.', 'Spend the big effects on the hits that matter.'],
+        quiz: [
+          { q: 'How long is a typical impact camera shake?', a: ['2–4 frames', 'About 2 seconds', '24 frames'], c: 0, why: 'A shake is a very short jolt right on the impact, getting smaller each frame.' },
+          { q: 'Which hit should get the impact frame, shake and shockwave together?', a: ['The most important one', 'Every hit', 'None'], c: 0, why: 'Contrast: big effects only read as big if the others are restrained.' },
+        ],
+        challenge: { title: 'Polish your exchange', text: 'Take the three-beat exchange from the last lesson and add one layer at a time.', steps: ['Hair and clothing on their own tracks.', 'One smear and speed lines on the fastest move.', 'An impact frame and a 3-frame shake on the final hit only.', 'A dust puff from the planted foot and debris from the contact point.', 'Export it (it stops at your last drawn frame) and watch it on your phone.'], studio: studioAnim('Animation 3 — polish', 72) },
+        sources: [S.sakuga, S.sakugaBlog, S.williams, S.wimshurst],
+      },
+    ],
+    capstone: { title: 'Capstone: a 4-second fight cut', text: 'Plan and animate a fight cut of about 96 frames between two of your own characters: an opening exchange, a dodge and counter, and a finishing blow, with fluid full-body motion throughout. Break down one real cut from Jujutsu Kaisen, Hitori no Shita or Super Cube first and borrow its rhythm (its frame counts), not its drawings.', ideas: ['Your protagonist versus a rival, each with a different fighting style', 'A small fast character against a big slow one', 'A sword against bare hands'], studio: studioAnim('Capstone — fight cut', 96) },
   },
 
   // ════════════════════════ WEBTOON 1 ════════════════════════

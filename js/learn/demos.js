@@ -1351,6 +1351,289 @@ function coloringPipeline(host) {
   return () => {};
 }
 
+// ───────── Animation 3: fluid motion and fight animation ─────────
+// A small posable figure, animated the way a fight cut is built: as a list of DRAWINGS, each
+// held for a number of frames at 24 fps. Every demo can be stepped frame by frame, like
+// studying a real cut on Sakugabooru.
+const FG = { torso: 60, upper: 33, fore: 31, thigh: 43, shin: 43, head: 13 };
+const GUARD = { x: 0, y: 84, lean: 8, head: 0, aF: [38, 112], aB: [18, 122], lF: [24, -22], lB: [-20, -14] };
+const pose = (o) => ({ ...GUARD, ...o });
+const mixPose = (A, B, t) => {
+  const o = {};
+  for (const k of Object.keys(GUARD)) o[k] = Array.isArray(A[k]) ? [lerp(A[k][0], B[k][0], t), lerp(A[k][1], B[k][1], t)] : lerp(A[k], B[k], t);
+  return o;
+};
+const D2R = Math.PI / 180;
+// joints of a pose in stage space. dir: 1 faces right, -1 faces left
+export function joints(P, ox, gy, dir = 1, s = 1) {
+  const hip = { x: ox + dir * P.x * s, y: gy - P.y * s };
+  const tl = P.lean * D2R, neck = { x: hip.x + Math.sin(tl) * dir * FG.torso * s, y: hip.y - Math.cos(tl) * FG.torso * s };
+  const hl = (P.lean + P.head) * D2R, head = { x: neck.x + Math.sin(hl) * dir * (FG.head + 5) * s, y: neck.y - Math.cos(hl) * (FG.head + 5) * s };
+  const limb = (from, a, l1, l2) => {
+    const a1 = a[0] * D2R, a2 = (a[0] + a[1]) * D2R;
+    const mid = { x: from.x + Math.sin(a1) * dir * l1 * s, y: from.y + Math.cos(a1) * l1 * s };
+    return [mid, { x: mid.x + Math.sin(a2) * dir * l2 * s, y: mid.y + Math.cos(a2) * l2 * s }];
+  };
+  const sh = { x: neck.x - Math.sin(tl) * dir * 6 * s, y: neck.y + Math.cos(tl) * 6 * s };
+  const [elF, haF] = limb(sh, P.aF, FG.upper, FG.fore), [elB, haB] = limb(sh, P.aB, FG.upper, FG.fore);
+  const [knF, ftF] = limb(hip, P.lF, FG.thigh, FG.shin), [knB, ftB] = limb(hip, P.lB, FG.thigh, FG.shin);
+  return { hip, neck, head, sh, elF, haF, elB, haB, knF, ftF, knB, ftB };
+}
+// draws the figure. o: { dir, color, back, s, alpha, silhouette, smearFrom (previous hand → speed smear), fist }
+function fighter(x, P, ox, gy, o = {}) {
+  const { dir = 1, color = '#e9e2ff', back = '#7d77a0', s = 1, alpha = 1, silhouette = false } = o;
+  const J = joints(P, ox, gy, dir, s);
+  x.save(); x.globalAlpha = alpha; x.lineCap = 'round'; x.lineJoin = 'round';
+  const line = (pts, w, col) => { x.strokeStyle = col; x.lineWidth = w * s; x.beginPath(); pts.forEach((p, i) => (i ? x.lineTo(p.x, p.y) : x.moveTo(p.x, p.y))); x.stroke(); };
+  const cF = silhouette ? '#111' : color, cB = silhouette ? '#111' : back;
+  line([J.hip, J.knB, J.ftB], 10, cB); line([J.sh, J.elB, J.haB], 8, cB);
+  line([J.hip, J.neck], 15, cF);
+  x.fillStyle = cF; x.beginPath(); x.arc(J.head.x, J.head.y, FG.head * s, 0, 7); x.fill();
+  line([J.hip, J.knF, J.ftF], 10, cF);
+  if (o.smearFrom) {
+    // speed smear: the arm is drawn stretched along its path for one frame
+    const a = o.smearFrom, b = J.haF;
+    x.fillStyle = cF; x.beginPath();
+    const nx = -(b.y - a.y), ny = b.x - a.x, L = Math.hypot(nx, ny) || 1, w = 9 * s;
+    x.moveTo(a.x, a.y); x.quadraticCurveTo((a.x + b.x) / 2 + nx / L * w * 1.6, (a.y + b.y) / 2 + ny / L * w * 1.6, b.x + nx / L * w, b.y + ny / L * w);
+    x.lineTo(b.x - nx / L * w, b.y - ny / L * w); x.quadraticCurveTo((a.x + b.x) / 2 - nx / L * w * 0.6, (a.y + b.y) / 2 - ny / L * w * 0.6, a.x, a.y); x.fill();
+    line([J.sh, J.elF], 8, cF);
+  } else line([J.sh, J.elF, J.haF], 8, cF);
+  x.fillStyle = cF; x.beginPath(); x.arc(J.haF.x, J.haF.y, 6.5 * s, 0, 7); x.fill();
+  x.restore();
+  return J;
+}
+// a cut as drawings: [{ p: pose, n: frames held, tag, label }] → frame lookup
+function cutOf(drawings) {
+  const starts = []; let f = 0; for (const d of drawings) { starts.push(f); f += d.n; }
+  return { drawings, starts, total: f, at(fr) { let i = 0; while (i < drawings.length - 1 && starts[i + 1] <= fr) i++; return i; } };
+}
+const TAG = { key: '#ffd23f', antic: '#3dc5ff', smear: '#ff7ab4', impact: '#ff5a4f', follow: '#7be08a', hold: '#8a8a96', inb: '#b9b4d6' };
+// timing strip under the stage: one box per drawing, as wide as it is held
+function timingStrip(x, cut, fr, X, Y, Wd, Ht) {
+  const cur = cut.at(fr), u = Wd / cut.total;
+  cut.drawings.forEach((d, i) => {
+    const bx = X + cut.starts[i] * u, bw = d.n * u;
+    x.fillStyle = TAG[d.tag] || TAG.inb; x.globalAlpha = i === cur ? 1 : 0.38; x.fillRect(bx + 1, Y, Math.max(1, bw - 2), Ht); x.globalAlpha = 1;
+    if (i === cur) { x.strokeStyle = '#fff'; x.lineWidth = 2; x.strokeRect(bx + 1, Y, Math.max(1, bw - 2), Ht); }
+  });
+  x.fillStyle = 'rgba(255,255,255,0.25)'; for (let k = 0; k <= cut.total; k++) x.fillRect(X + k * u, Y + Ht + 2, 1, k % 12 === 0 ? 7 : 3);
+  x.fillStyle = '#fff'; x.fillRect(X + (fr + 0.5) * u - 1, Y - 4, 2, Ht + 8);
+}
+// play / step controls shared by the cut demos
+function cutPlayer(box, st, total, redraw) {
+  const play = button(box, '❚❚ Pause', () => { st.play = !st.play; play.textContent = st.play ? '❚❚ Pause' : '▶ Play'; });
+  const step = (dv) => { st.play = false; play.textContent = '▶ Play'; st.f = ((Math.floor(st.f) + dv) % total() + total()) % total(); redraw(); };
+  button(box, '◀ frame', () => step(-1), 'ghost'); button(box, 'frame ▶', () => step(1), 'ghost');
+  chips(box, [['24', 'Full speed'], ['8', '⅓ speed'], ['3', 'Slow']], String(st.fps), (v) => { st.fps = +v; });
+}
+const caption = (x, text, sub, W) => { x.fillStyle = '#fff'; x.font = '700 14px -apple-system, sans-serif'; x.fillText(text, 14, 24); if (sub) { x.fillStyle = 'rgba(255,255,255,0.6)'; x.font = '12px -apple-system, sans-serif'; x.fillText(sub, 14, 42); } };
+const floor = (x, W, H, gy) => { x.fillStyle = '#1b1c21'; x.fillRect(0, 0, W, H); x.fillStyle = '#26272d'; x.fillRect(0, gy, W, H - gy); };
+
+// poses for a straight punch (the lead arm punches so it is easy to read)
+export const PUNCH = {
+  guard: pose({}),
+  antic: pose({ x: -12, y: 76, lean: -8, aF: [-48, 128], aB: [44, 104], lF: [30, -34], lB: [-26, -30] }),
+  antic2: pose({ x: -15, y: 74, lean: -11, aF: [-56, 132], aB: [46, 102], lF: [32, -38], lB: [-28, -34] }),
+  mid: pose({ x: 6, y: 80, lean: 12, aF: [48, 52], aB: [0, 124], lF: [30, -30], lB: [-28, -10] }),
+  hit: pose({ x: 26, y: 82, lean: 26, head: -6, aF: [84, 4], aB: [-30, 118], lF: [36, -34], lB: [-36, -4] }),
+  over: pose({ x: 30, y: 80, lean: 31, head: -8, aF: [90, -4], aB: [-36, 120], lF: [38, -38], lB: [-38, -2] }),
+  recoil: pose({ x: 18, y: 84, lean: 14, aF: [60, 70], aB: [-6, 122], lF: [30, -28], lB: [-28, -10] }),
+};
+// 1. anatomy of a hit
+function fightHit(host) {
+  const S = stage(host, 720, 360), st = { antic: true, smear: true, stop: true, play: true, f: 0, fps: 24 };
+  const build = () => {
+    const d = [{ p: PUNCH.guard, n: 6, tag: 'hold', label: 'Guard (hold)' }];
+    if (st.antic) d.push({ p: mixPose(PUNCH.guard, PUNCH.antic, 0.6), n: 2, tag: 'antic', label: 'Anticipation: pull back' }, { p: PUNCH.antic, n: 3, tag: 'antic', label: 'Anticipation: coil' }, { p: PUNCH.antic2, n: 3, tag: 'antic', label: 'Anticipation: a slow drift keeps it alive' });
+    else d.push({ p: mixPose(PUNCH.guard, PUNCH.mid, 0.3), n: 2, tag: 'inb', label: 'Inbetween' });
+    d.push(st.smear ? { p: PUNCH.mid, n: 1, tag: 'smear', label: 'SMEAR: one stretched drawing covers the whole travel', smear: true } : { p: PUNCH.mid, n: 2, tag: 'inb', label: 'Inbetween (no smear)' });
+    d.push({ p: PUNCH.over, n: st.stop ? 1 : 1, tag: 'impact', label: 'IMPACT: overshoot past the contact', flash: st.stop });
+    if (st.stop) d.push({ p: PUNCH.hit, n: 4, tag: 'impact', label: 'Hit-stop: hold the impact pose so it registers' });
+    d.push({ p: PUNCH.recoil, n: 3, tag: 'follow', label: 'Recoil' }, { p: mixPose(PUNCH.recoil, PUNCH.guard, 0.6), n: 3, tag: 'follow', label: 'Settle' }, { p: PUNCH.guard, n: 8, tag: 'hold', label: 'Guard (hold)' });
+    return cutOf(d);
+  };
+  let cut = build();
+  const draw = () => {
+    const x = S.x, W = S.W, H = S.H, gy = H - 78, fr = Math.floor(st.f) % cut.total, i = cut.at(fr), d = cut.drawings[i];
+    const hitI = cut.drawings.findIndex((q) => q.tag === 'impact'), since = fr - cut.starts[hitI];
+    const shake = d.flash ? 5 : since >= 0 && since < 4 && st.stop ? (4 - since) * (since % 2 ? 1 : -1) : 0;
+    x.save(); x.translate(shake, 0);
+    floor(x, W, H, gy);
+    if (d.flash) { x.fillStyle = '#fff'; x.fillRect(-10, 0, W + 20, gy); }
+    // sandbag: swings after the hit, a beat later than the fist
+    const sw = since >= 0 ? 0.5 * Math.exp(-since * 0.11) * Math.cos(since * 0.32) * Math.min(1, since / 2) : 0, bx = 462, by = 40;
+    x.save(); x.translate(bx, by); x.rotate(-sw); x.strokeStyle = '#555'; x.lineWidth = 3; x.beginPath(); x.moveTo(0, 0); x.lineTo(0, 70); x.stroke();
+    x.fillStyle = d.flash ? '#111' : '#a3563f'; x.beginPath(); x.roundRect ? x.roundRect(-30, 70, 60, 150, 22) : x.rect(-30, 70, 60, 150); x.fill(); x.restore();
+    const prev = i > 0 ? joints(cut.drawings[i - 1].p, 300, gy).haF : null;
+    fighter(x, d.p, 300, gy, { smearFrom: d.smear ? prev : null, silhouette: !!d.flash });
+    if (since >= 0 && since < 3 && st.stop) { x.strokeStyle = d.flash ? '#111' : '#ffd23f'; x.lineWidth = 3; for (let k = 0; k < 9; k++) { const a = k * 0.7 + 0.2, r0 = 22 + since * 10, r1 = r0 + 16; x.beginPath(); x.moveTo(432 + Math.cos(a) * r0, gy - 122 + Math.sin(a) * r0); x.lineTo(432 + Math.cos(a) * r1, gy - 122 + Math.sin(a) * r1); x.stroke(); } }
+    x.restore();
+    caption(x, d.label, `drawing ${i + 1} of ${cut.drawings.length} · held ${d.n} frame${d.n === 1 ? '' : 's'} · frame ${fr + 1} / ${cut.total} at 24 fps`, W);
+    timingStrip(x, cut, fr, 20, H - 46, W - 40, 20);
+  };
+  const stop = loop((dt) => { if (st.play) { st.f = (st.f + dt * st.fps) % cut.total; } draw(); });
+  const box = controls(host);
+  cutPlayer(box, st, () => cut.total, draw);
+  const re = () => { cut = build(); st.f = 0; };
+  toggle(box, 'Anticipation', true, (v) => { st.antic = v; re(); });
+  toggle(box, 'Smear frame', true, (v) => { st.smear = v; re(); });
+  toggle(box, 'Impact frame + hit-stop', true, (v) => { st.stop = v; re(); });
+  note(box, 'Step through it one frame at a time. The wind-up takes 8 frames, the punch itself ONE, and the impact is held for 4. Slow in the poses, almost no drawings in between: that contrast is what makes a hit feel fast and heavy. Turn the three switches off one by one and watch it go soft.');
+  return stop;
+}
+
+// 2. fluid motion: the action travels through the body like a wave
+function fightFlow(host) {
+  const S = stage(host, 720, 360), st = { lag: 2, loa: true, trail: true, play: true, t: 0, fps: 24 };
+  const K = [
+    [0, pose({})],
+    [10, pose({ x: -14, y: 70, lean: -14, aF: [-70, 96], aB: [50, 96], lF: [34, -46], lB: [-30, -40] })],
+    [16, pose({ x: 20, y: 86, lean: 30, head: -8, aF: [118, -6], aB: [-40, 110], lF: [38, -30], lB: [-40, 0] })],
+    [22, pose({ x: 24, y: 82, lean: 24, aF: [150, 30], aB: [-30, 112], lF: [36, -32], lB: [-36, -4] })],
+    [34, pose({})], [44, pose({})],
+  ];
+  const TOTAL = 44;
+  const ez = (t) => t * t * (3 - 2 * t);
+  const at = (f) => { f = ((f % TOTAL) + TOTAL) % TOTAL; let i = 0; while (i < K.length - 2 && K[i + 1][0] <= f) i++; const a = K[i], b = K[i + 1]; return mixPose(a[1], b[1], ez(clamp((f - a[0]) / (b[0] - a[0]), 0, 1))); };
+  const N = 10, chain = Array.from({ length: N }, () => ({ x: 0, y: 0 })); let init = false; const trail = [];
+  const draw = () => {
+    const x = S.x, W = S.W, H = S.H, gy = H - 46, f = st.t, L = st.lag;
+    floor(x, W, H, gy);
+    // each part of the body reads the same animation a little later than the part before it
+    const base = at(f), P = { ...base };
+    const tor = at(f - L), arm = at(f - L * 2), fore = at(f - L * 3), hd = at(f - L * 1.5);
+    P.lean = tor.lean; P.head = hd.head + (hd.lean - tor.lean) * 0.6; P.aF = [arm.aF[0] + (arm.lean - tor.lean), fore.aF[1]]; P.aB = [arm.aB[0], fore.aB[1]];
+    const J = joints(P, 330, gy);
+    if (st.trail) { trail.push({ x: J.haF.x, y: J.haF.y }); if (trail.length > 14) trail.shift(); x.strokeStyle = 'rgba(255,122,180,0.75)'; x.lineWidth = 3; x.beginPath(); trail.forEach((p, i) => (i ? x.lineTo(p.x, p.y) : x.moveTo(p.x, p.y))); x.stroke(); x.fillStyle = '#ff7ab4'; for (const p of trail) { x.beginPath(); x.arc(p.x, p.y, 2.5, 0, 7); x.fill(); } } else trail.length = 0;
+    // scarf: a chain that follows the neck (drag and overlap)
+    if (!init) { chain.forEach((c, i) => { c.x = J.neck.x - i * 9; c.y = J.neck.y + i * 3; }); init = true; }
+    chain[0].x = J.neck.x; chain[0].y = J.neck.y + 4;
+    for (let i = 1; i < N; i++) { const p = chain[i - 1], c = chain[i]; c.x += (p.x - 8 - c.x) * 0.35; c.y += (p.y + 5 - c.y) * 0.3 + 1.2; const dx = c.x - p.x, dy = c.y - p.y, d = Math.hypot(dx, dy) || 1; c.x = p.x + dx / d * 11; c.y = p.y + dy / d * 11; }
+    x.strokeStyle = '#ff5a4f'; x.lineWidth = 7; x.lineCap = 'round'; x.lineJoin = 'round'; x.beginPath(); chain.forEach((c, i) => (i ? x.lineTo(c.x, c.y) : x.moveTo(c.x, c.y))); x.stroke();
+    fighter(x, P, 330, gy);
+    if (st.loa) { // line of action: one curve from the back foot through the spine to the fist
+      x.strokeStyle = '#ffb020'; x.lineWidth = 2.5; x.setLineDash([7, 5]); x.beginPath(); x.moveTo(J.ftB.x, J.ftB.y); x.quadraticCurveTo(J.hip.x, J.hip.y, J.neck.x, J.neck.y); x.quadraticCurveTo(J.elF.x, J.elF.y, J.haF.x, J.haF.y); x.stroke(); x.setLineDash([]);
+    }
+    const fr = Math.floor(((f % TOTAL) + TOTAL) % TOTAL);
+    caption(x, L < 0.5 ? 'Everything moves at once: stiff' : 'Hips → chest → shoulder → elbow → fist: the move travels like a whip', `frame ${fr + 1} / ${TOTAL} · each part ${L.toFixed(1)} frame${L === 1 ? '' : 's'} behind the one before`, W);
+  };
+  const stop = loop((dt) => { if (st.play) st.t = (st.t + dt * st.fps) % TOTAL; draw(); });
+  const box = controls(host);
+  const play = button(box, '❚❚ Pause', () => { st.play = !st.play; play.textContent = st.play ? '❚❚ Pause' : '▶ Play'; });
+  button(box, '◀ frame', () => { st.play = false; play.textContent = '▶ Play'; st.t = (Math.floor(st.t) - 1 + TOTAL) % TOTAL; }, 'ghost'); button(box, 'frame ▶', () => { st.play = false; play.textContent = '▶ Play'; st.t = (Math.floor(st.t) + 1) % TOTAL; }, 'ghost');
+  chips(box, [['24', 'Full speed'], ['8', '⅓ speed'], ['3', 'Slow']], String(st.fps), (v) => { st.fps = +v; });
+  slider(box, 'Delay between body parts', 0, 3, 0.5, st.lag, (v) => { st.lag = v; }, (v) => v.toFixed(1) + ' frames');
+  toggle(box, 'Line of action', true, (v) => { st.loa = v; });
+  toggle(box, 'Path of the fist (arc)', true, (v) => { st.trail = v; });
+  note(box, 'Set the delay to 0: every joint arrives together and the punch looks like a robot. At 1.5–2 frames the hips lead, the chest follows, then the shoulder, elbow and fist, and the scarf last. The orange line of action flips from a C curve (coiled) to the opposite C (released). The pink dots show the fist travelling on an arc, never a straight line.');
+  return stop;
+}
+
+// 3. spacing: the same two keys, three ways to get from one to the other
+function fightSnap(host) {
+  const S = stage(host, 720, 360), st = { mode: 'snap', ghosts: true, play: true, f: 0, fps: 24 };
+  const A = PUNCH.antic, B = PUNCH.hit, FR = 12;
+  const curves = {
+    even: (i) => i / (FR - 1),
+    ease: (i) => { const t = i / (FR - 1); return t * t * (3 - 2 * t); },
+    // anime snap: creep for 7 frames, cross in one, overshoot, settle
+    snap: (i) => [0, 0.015, 0.03, 0.05, 0.07, 0.09, 0.11, 0.62, 1.1, 1.04, 1.0, 1.0][i],
+  };
+  const names = { even: 'Even spacing: floaty, no weight', ease: 'Ease in and out: soft, like a wave goodbye', snap: 'Snap: creep, cross in ONE frame, overshoot, settle' };
+  const build = () => cutOf([{ p: A, n: 6, tag: 'hold', label: 'hold' }, ...Array.from({ length: FR }, (_, i) => ({ p: mixPose(A, B, curves[st.mode](i)), n: 1, tag: i === 0 || i === FR - 1 ? 'key' : curves[st.mode](i) - curves[st.mode](i - 1) > 0.3 ? 'smear' : 'inb', label: '' })), { p: B, n: 8, tag: 'hold', label: 'hold' }]);
+  let cut = build();
+  const draw = () => {
+    const x = S.x, W = S.W, H = S.H, gy = H - 78, fr = Math.floor(st.f) % cut.total, i = cut.at(fr);
+    floor(x, W, H, gy);
+    if (st.ghosts) for (let k = 0; k < FR; k++) fighter(x, cut.drawings[1 + k].p, 320, gy, { alpha: 0.1 });
+    const J = fighter(x, cut.drawings[i].p, 320, gy);
+    // the fist on every one of the 12 frames: the gaps ARE the spacing
+    for (let k = 0; k < FR; k++) { const q = joints(cut.drawings[1 + k].p, 320, gy).haF; x.fillStyle = 1 + k === i ? '#fff' : '#ffb020'; x.beginPath(); x.arc(q.x, q.y - 34, 1 + k === i ? 5 : 3.5, 0, 7); x.fill(); x.fillStyle = 'rgba(255,255,255,0.55)'; x.font = '10px -apple-system, sans-serif'; if (st.mode !== 'snap' || k < 2 || k > 6) x.fillText(String(k + 1), q.x - 3, q.y - 44); }
+    void J;
+    caption(x, names[st.mode], `the same 2 key poses, the same 12 frames · frame ${fr + 1} / ${cut.total}`, W);
+    timingStrip(x, cut, fr, 20, H - 46, W - 40, 20);
+  };
+  const stop = loop((dt) => { if (st.play) st.f = (st.f + dt * st.fps) % cut.total; draw(); });
+  const box = controls(host);
+  cutPlayer(box, st, () => cut.total, draw);
+  chips(box, [['even', 'Even'], ['ease', 'Ease in / out'], ['snap', 'Snap']], st.mode, (v) => { st.mode = v; cut = build(); st.f = 0; });
+  toggle(box, 'Show all 12 drawings (onion skin)', true, (v) => { st.ghosts = v; });
+  note(box, 'Nothing changes but WHERE the inbetweens sit. The orange dots are the fist on each frame: bunched dots = slow, a big gap = fast. In the Snap version seven drawings barely move, then one gap covers most of the distance and the pose overshoots before it settles. This is the "slow → FAST → hold" rhythm of anime action.');
+  return stop;
+}
+
+// the exchange as rows: [attacker pose, defender pose, frames, tag, label, beat, smear?, flash?]
+export function choreoRows() {
+  const G = pose({});
+  const a = { // attacker (left, faces right)
+    wind: pose({ x: -14, y: 74, lean: -10, aF: [-54, 130], aB: [44, 104], lF: [32, -38], lB: [-28, -32] }),
+    hit: pose({ x: 34, y: 80, lean: 30, head: -8, aF: [88, 0], aB: [-34, 120], lF: [40, -38], lB: [-40, -2] }),
+    over: pose({ x: 40, y: 78, lean: 36, head: -4, aF: [80, 10], aB: [-36, 118], lF: [42, -42], lB: [-42, 0] }),
+    struck: pose({ x: 30, y: 88, lean: 8, head: -44, aF: [44, 28], aB: [-28, 58], lF: [32, -22], lB: [-32, -8] }),
+    stagger: pose({ x: -34, y: 80, lean: -18, head: -16, aF: [-30, 60], aB: [-56, 70], lF: [-8, -20], lB: [-44, -30] }),
+    recover: pose({ x: -48, y: 80, lean: 2, head: 6, aF: [30, 100], aB: [10, 110], lF: [18, -26], lB: [-26, -22] }),
+  };
+  const b = { // defender (right, faces left)
+    ready: pose({ y: 82, lean: 6 }),
+    read: pose({ x: -4, y: 78, lean: 0, aF: [42, 116], aB: [22, 124] }),
+    duck: pose({ x: 4, y: 34, lean: 56, head: -24, aF: [34, 122], aB: [-10, 128], lF: [62, -108], lB: [-30, -96] }),
+    coil: pose({ x: 16, y: 36, lean: 52, head: -18, aF: [-34, 104], aB: [36, 112], lF: [66, -114], lB: [-26, -100] }),
+    upper: pose({ x: 116, y: 90, lean: 6, head: 12, aF: [112, 46], aB: [-36, 116], lF: [26, -10], lB: [-36, -6] }),
+    upper2: pose({ x: 120, y: 93, lean: 3, head: 14, aF: [118, 42], aB: [-38, 116], lF: [24, -8], lB: [-36, -4] }),
+    settle: pose({ x: 84, y: 84, lean: 8, aF: [40, 110], aB: [18, 120] }),
+  };
+  const T = (A, B, t) => mixPose(A, B, t);
+  // one row per drawing: [attacker pose, defender pose, frames, tag, label, beat]
+  const rows = [
+    [G, b.ready, 6, 'hold', 'Both in guard: let the audience read the positions', 'slow'],
+    [T(G, a.wind, 0.6), b.ready, 2, 'antic', 'A winds up…', 'slow'],
+    [a.wind, b.read, 4, 'antic', '…and B READS it: the reaction starts before the punch', 'slow'],
+    [T(a.wind, a.hit, 0.5), T(b.read, b.duck, 0.55), 1, 'smear', 'A fires (smear) · B is already dropping', 'FAST', true],
+    [a.over, b.duck, 2, 'impact', 'MISS: the fist passes over B. Clear gap between them', 'FAST'],
+    [a.hit, b.coil, 5, 'antic', 'A is over-extended · B coils: the dodge IS the anticipation', 'slow'],
+    [a.hit, T(b.coil, b.upper, 0.55), 1, 'smear', 'B fires the uppercut (smear)', 'FAST', true],
+    [a.struck, b.upper2, 1, 'impact', 'IMPACT frame', 'FAST', false, true],
+    [a.struck, b.upper, 4, 'impact', 'Hit-stop: both hold. A\'s head snaps back, hips still forward', 'hold'],
+    [T(a.struck, a.stagger, 0.6), b.upper, 3, 'follow', 'A flies back: the body follows the head', 'slow'],
+    [a.stagger, T(b.upper, b.settle, 0.5), 4, 'follow', 'Stagger · B\'s arm follows through', 'slow'],
+    [a.recover, b.settle, 5, 'follow', 'Recover', 'slow'],
+    [T(a.recover, pose({ x: -48 }), 0.8), b.ready, 8, 'hold', 'Reset: both readable again', 'slow'],
+  ];
+  return rows;
+}
+// 4. choreography: attack, dodge, counter. Action and reaction, rhythm, silhouettes
+function fightChoreo(host, o = {}) {
+  const S = stage(host, 720, 380), st = { sil: false, rhythm: true, play: o.frame == null, f: o.frame || 0, fps: 24 };
+  const rows = choreoRows();
+  const cut = cutOf(rows.map((r) => ({ p: r[0], n: r[2], tag: r[3], label: r[4] })));
+  const draw = () => {
+    const x = S.x, W = S.W, H = S.H, gy = H - 96, fr = Math.floor(st.f) % cut.total, i = cut.at(fr), r = rows[i];
+    const flash = !!r[7];
+    x.fillStyle = st.sil ? '#f2f2f2' : '#1b1c21'; x.fillRect(0, 0, W, H); x.fillStyle = st.sil ? '#dcdcdc' : '#26272d'; x.fillRect(0, gy, W, H - gy);
+    if (flash && !st.sil) { x.fillStyle = '#fff'; x.fillRect(0, 0, W, gy); }
+    const AX = 270, BX = 470, prevA = i > 0 ? joints(rows[i - 1][0], AX, gy, 1).haF : null, prevB = i > 0 ? joints(rows[i - 1][1], BX, gy, -1).haF : null;
+    const smA = r[6] && i === 3, smB = r[6] && i === 6;
+    fighter(x, r[0], AX, gy, { dir: 1, color: '#e9e2ff', back: '#7d77a0', silhouette: st.sil || flash, smearFrom: smA ? prevA : null });
+    fighter(x, r[1], BX, gy, { dir: -1, color: '#9fe3ff', back: '#4f7f95', silhouette: st.sil || flash, smearFrom: smB ? prevB : null });
+    if (!st.sil) { x.fillStyle = flash ? '#111' : '#fff'; x.font = '700 14px -apple-system, sans-serif'; x.fillText(r[4], 14, 24); x.fillStyle = flash ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)'; x.font = '12px -apple-system, sans-serif'; x.fillText(`A = attacker (white) · B = defender (blue) · drawing ${i + 1} / ${rows.length} · held ${r[2]} · frame ${fr + 1} / ${cut.total}`, 14, 42); }
+    else { x.fillStyle = '#111'; x.font = '700 14px -apple-system, sans-serif'; x.fillText('Silhouette test: can you still tell who does what?', 14, 24); }
+    if (st.rhythm) { // beats: long boxes = slow, short = fast
+      const X = 20, Wd = W - 40, u = Wd / cut.total, Y = H - 80;
+      rows.forEach((q, k) => { x.fillStyle = q[5] === 'FAST' ? '#ff5a4f' : q[5] === 'hold' ? '#ffd23f' : '#4f7f95'; x.globalAlpha = k === i ? 1 : 0.45; x.fillRect(X + cut.starts[k] * u + 1, Y, Math.max(1, q[2] * u - 2), 12); x.globalAlpha = 1; });
+      x.fillStyle = st.sil ? '#333' : 'rgba(255,255,255,0.7)'; x.font = '11px -apple-system, sans-serif'; x.fillText('rhythm:  blue = slow / readable   red = FAST   yellow = hold', X, Y - 6);
+    }
+    timingStrip(x, cut, fr, 20, H - 46, W - 40, 20);
+  };
+  const stop = loop((dt) => { if (st.play) st.f = (st.f + dt * st.fps) % cut.total; draw(); });
+  const box = controls(host);
+  cutPlayer(box, st, () => cut.total, draw);
+  toggle(box, 'Silhouette test', false, (v) => { st.sil = v; });
+  toggle(box, 'Rhythm bar', true, (v) => { st.rhythm = v; });
+  note(box, 'A fight is a conversation: every attack needs an answer. B starts to duck BEFORE the punch arrives (drawing 3), the dodge pose doubles as the wind-up for the counter, and the two fast moments are separated by slow, readable poses. Step through it, then turn on the silhouette test: in every drawing the two bodies make one clear shape, with a visible gap where the punch misses.');
+  return stop;
+}
+
 export const DEMOS = {
   'persp-horizon': (el) => perspectiveLab(el, { mode: 'horizon' }),
   'persp-1pt': (el) => perspectiveLab(el, { mode: '1pt' }),
@@ -1364,5 +1647,6 @@ export const DEMOS = {
   'light-sphere': lightSphere, harmony, 'value-hue': valueVsHue,
   grading: (el) => grading(el), 'grade-match': (el) => grading(el, { match: true }),
   ball: bouncingBall, spacing: spacingChart, arcs, anticipation, overlap, walk: walkCycle, 'ones-twos': onesTwos,
+  'fight-hit': fightHit, 'fight-flow': fightFlow, 'fight-snap': fightSnap, 'fight-choreo': fightChoreo,
   'webtoon-scroll': webtoonScroll, 'dialogue-order': dialogueOrder, slicing, pipeline: coloringPipeline,
 };

@@ -4,7 +4,7 @@
 //   2 Half help  – only the key lines; finish the rest
 //   3 Start only – just the starting marks
 //   4 On your own – no guide (perspective guides keep snapping off for the real test)
-import { walkPose } from './demos.js';
+import { walkPose, joints, PUNCH, choreoRows } from './demos.js';
 import { ART } from './art.js';
 
 export const LEVELS = ['Trace it', 'Half help', 'Start only', 'On your own'];
@@ -436,6 +436,48 @@ const KINDS = {
       }
     },
   },
+  // Animation 3 · the key poses of a punch, with how long each is held
+  punch: {
+    tips: ['The 5 key drawings of a punch are laid out left to right with the frame each starts on and how long it is held. Draw them in place in the middle of the canvas, one per frame number, then play it.', 'Only the anticipation and the impact poses are shown. Design the smear and the recoil yourself.', 'Only the ground and the timing (8 – 1 – 5 – 6). All poses are yours.', 'On your own: a punch into a sandbag with anticipation, a smear, hit-stop and recoil.'],
+    draw(x, d, level) {
+      const W = d.width, H = d.height, gy = H * 0.92;
+      if (level < 3) { pen(x, W, { color: '#888', dash: false }); line(x, P(0, gy), P(W, gy)); }
+      if (level === 3) return;
+      const keys = [[PUNCH.guard, 'GUARD', 1, 'hold 6'], [PUNCH.antic, 'ANTICIPATION', 7, 'hold 8'], [PUNCH.mid, 'SMEAR', 15, '1 frame'], [PUNCH.over, 'IMPACT', 16, 'hold 5'], [PUNCH.recoil, 'RECOIL', 21, '6 frames']];
+      const u = W / 900;
+      label(x, W, 'timing:  6  –  8  –  1  –  5  –  6   (24 fps)', W * 0.04, H * 0.07, { color: ORANGE });
+      if (level === 2) return;
+      keys.forEach(([p, name, f, hold], i) => {
+        if (level === 1 && ![1, 3].includes(i)) return;
+        const sc = H * 0.0017, ox = W * (0.1 + i * 0.2), by = H * 0.5, J = joints(p, ox, by, 1, sc);
+        pen(x, W, { dash: false, color: i === 3 ? RED : i === 2 ? ORANGE : BLUE });
+        poly(x, [J.hip, J.knB, J.ftB], false); poly(x, [J.sh, J.elB, J.haB], false); poly(x, [J.hip, J.neck], false); poly(x, [J.hip, J.knF, J.ftF], false); poly(x, [J.sh, J.elF, J.haF], false);
+        x.beginPath(); x.arc(J.head.x, J.head.y, 13 * sc, 0, 7); x.stroke();
+        // line of action
+        pen(x, W, { color: ORANGE, alpha: 0.55 }); x.beginPath(); x.moveTo(J.ftB.x, J.ftB.y); x.quadraticCurveTo(J.hip.x, J.hip.y, J.neck.x, J.neck.y); x.quadraticCurveTo(J.elF.x, J.elF.y, J.haF.x, J.haF.y); x.stroke();
+        label(x, W, name, ox, by + 30 * u, { align: 'center', size: 0.8 }); label(x, W, 'frame ' + f + ' · ' + hold, ox, by + 50 * u, { align: 'center', size: 0.7 });
+      });
+    },
+  },
+  // Animation 3 · a three-beat exchange for two characters
+  exchange: {
+    tips: ['The key drawings of the exchange run along the top: A (blue) attacks, B (red) ducks and counters. The frame each starts on is under it. Draw both characters in the middle, each on their own track.', 'Only three keys: the wind-up, the miss and the counter landing. Plan the rest.', 'Only the ground and the beat list.', 'On your own: attack, dodge or block, counter. Two tracks, 48–72 frames.'],
+    draw(x, d, level) {
+      const W = d.width, H = d.height, gy = H * 0.92, u = W / 900;
+      if (level < 3) { pen(x, W, { color: '#888', dash: false }); line(x, P(0, gy), P(W, gy)); }
+      if (level === 3) return;
+      label(x, W, 'beats:  guard (6)  ·  A winds up, B reads it (6)  ·  punch misses (3)  ·  B coils (5)  ·  uppercut + hold (6)  ·  A staggers (12)', W * 0.03, H * 0.06, { color: ORANGE, size: 0.75 });
+      if (level === 2) return;
+      const rows = choreoRows(), starts = []; let f = 1; for (const r of rows) { starts.push(f); f += r[2]; }
+      const pick = level === 1 ? [2, 4, 8] : [0, 2, 4, 5, 8, 10];
+      pick.forEach((ri, i) => {
+        const r = rows[ri], sc = H * 0.00125, cw = W / pick.length, cx = cw * (i + 0.5), by = H * 0.42;
+        const fig = (p, ox, dir, col) => { const J = joints(p, ox, by, dir, sc); pen(x, W, { dash: false, color: col }); poly(x, [J.hip, J.knB, J.ftB], false); poly(x, [J.sh, J.elB, J.haB], false); poly(x, [J.hip, J.neck], false); poly(x, [J.hip, J.knF, J.ftF], false); poly(x, [J.sh, J.elF, J.haF], false); x.beginPath(); x.arc(J.head.x, J.head.y, 13 * sc, 0, 7); x.stroke(); };
+        fig(r[0], cx - 85 * sc, 1, BLUE); fig(r[1], cx + 85 * sc, -1, RED);
+        label(x, W, 'frame ' + starts[ri] + ' · ' + r[2] + 'f', cx, by + 26 * u, { align: 'center', size: 0.7 });
+      });
+    },
+  },
   // Webtoon · panel layout down the strip
   panels: {
     tips: ['Trace the panels. Each one has its story beat written in it, and the gutter sizes are marked: a long gutter = a pause before the big moment.', 'Only the panel boxes. Decide what happens in each one, and leave room for balloons.', 'Only the gutter marks on the left. Draw your own panels.', 'On your own: thumbnail a whole episode.'],
@@ -491,6 +533,7 @@ export const GUIDE_FOR = {
   'color/value': 'colorReal', 'color/harmony': 'colorReal', 'color/light': 'spheres', 'color/workflow': 'colorReal', 'color/mood': 'spheres',
   'grading/what': 'gradeReal', 'grading/tools': 'gradeReal', 'grading/eye': 'gradeReal', 'grading/webtoon-grade': 'panels',
   'anim1/frames': 'arc', 'anim1/timing': 'slide', 'anim1/ball': 'bounce', 'anim1/squash': 'jump', 'anim1/arcs': 'arc',
+  'anim3/flow': 'punch', 'anim3/hit': 'punch', 'anim3/snap': 'punch', 'anim3/choreo': 'exchange', 'anim3/sell': 'exchange',
   'anim2/antic': 'jump', 'anim2/keys': 'jump', 'anim2/overlap': 'arc', 'anim2/walk': 'walk', 'anim2/color-anim': 'walk',
   'toon1/format': 'panels', 'toon1/size': 'panels', 'toon1/panels': 'panels', 'toon1/flow': 'panels',
   'toon2/order': 'balloons', 'toon2/types': 'balloons', 'toon2/sfx': 'panels',
