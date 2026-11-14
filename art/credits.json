@@ -1,0 +1,138 @@
+{
+ "caillebotte": {
+  "file": "caillebotte.jpg",
+  "title": "Gustave Caillebotte - Paris Street; Rainy Day - Google Art Project.jpg",
+  "artist": "Gustave Caillebotte",
+  "date": "1877date QS:P571,+1877-00-00T00:00:00Z/9",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:Gustave_Caillebotte_-_Paris_Street;_Rainy_Day_-_Google_Art_Project.jpg"
+ },
+ "ideal-city": {
+  "file": "ideal-city.jpg",
+  "title": "Formerly Piero della Francesca - Ideal City - Galleria Nazionale delle Marche Urbino.jpg",
+  "artist": "Unknown authorUnknown author",
+  "date": "1480sdate QS:P,+1480-00-00T00:00:00Z/8",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:Formerly_Piero_della_Francesca_-_Ideal_City_-_Galleria_Nazionale_delle_Marche_Urbino.jpg"
+ },
+ "piranesi": {
+  "file": "piranesi.jpg",
+  "title": "The Drawbridge, from Carceri d'invenzione (Imaginary Prisons) MET DP828200.jpg",
+  "artist": "Giovanni Battista Piranesi",
+  "date": "circa 1749date QS:P571,+1749-00-00T00:00",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:The_Drawbridge,_from_Carceri_d%27invenzione_(Imaginary_Prisons)_MET_DP828200.jpg"
+ },
+ "bierstadt": {
+  "file": "bierstadt.jpg",
+  "title": "Albert Bierstadt - Among the Sierra Nevada, California - Google Art Project.jpg",
+  "artist": "Albert Bierstadt",
+  "date": "1868",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg"
+ },
+ "friedrich": {
+  "file": "friedrich.jpg",
+  "title": "Caspar David Friedrich - Wanderer above the sea of fog.jpg",
+  "artist": "Caspar David Friedrich",
+  "date": "circa 1817date QS:P571,+1817-00-00T00:00",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg"
+ },
+ "hokusai": {
+  "file": "hokusai.jpg",
+  "title": "冨嶽三十六景 神奈川沖浪裏-Under the Wave off Kanagawa (Kanagawa oki nami ura), also known as The Great Wave, from the series Thirty-six Views of Mount Fuji (Fugaku sanjūrokkei) MET DP141063.jpg",
+  "artist": "Katsushika Hokusai",
+  "date": "circa 1830date QS:P571,+1830-00-00T00:00",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:%E5%86%A8%E5%B6%BD%E4%B8%89%E5%8D%81%E5%85%AD%E6%99%AF_%E7%A5%9E%E5%A5%88%E5%B7%9D%E6%B2%96%E6%B5%AA%E8%A3%8F-Under_the_Wave_off_Kanagawa_(Kanagawa_oki_nami_ura),_also_known_as_The_Great_Wave,_from_the_series_Thirty-six_Views_of_Mount_Fuji_(Fugaku_sanj%C5%ABrokkei)_MET_DP141063.jpg"
+ },
+ "lebrun-sadness": {
+  "file": "lebrun-sadness.jpg",
+  "title": "Sadness (from Heads Representing the Various Passions of the Soul; as they are Expressed in the Human Countenance- Drawn by that Great Master Monsieur Le Brun) MET DP854030.jpg",
+  "artist": "Charles Le Brun / Robert Sayer",
+  "date": "1765date QS:P571,+1765-00-00T00:00:00Z/9",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:Sadness_(from_Heads_Representing_the_Various_Passions_of_the_Soul;_as_they_are_Expressed_in_the_Human_Countenance-_Drawn_by_that_Great_Master_Monsieur_Le_Brun)_MET_DP854030.jpg"
+ },
+ "lebrun-laughter": {
+  "file": "lebrun-laughter.jpg",
+  "title": "Laughter (from Heads Representing the Various Passions of the Soul; as they are Expressed in the Human Countenance- Drawn by that Great Master Monsieur Le Brun) MET DP854026.jpg",
+  "artist": "Charles Le Brun / Robert Sayer",
+  "date": "1765date QS:P571,+1765-00-00T00:00:00Z/9",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:Laughter_(from_Heads_Representing_the_Various_Passions_of_the_Soul;_as_they_are_Expressed_in_the_Human_Countenance-_Drawn_by_that_Great_Master_Monsieur_Le_Brun)_MET_DP854026.jpg"
+ },
+ "lebrun-fright": {
+  "file": "lebrun-fright.jpg",
+  "title": "Terrour or Fright (from Heads Representing the Various Passions of the Soul; as they are Expressed in the Human Countenance- Drawn by that Great Master Monsieur Le Brun) MET DP854027.jpg",
+  "artist": "Charles Le Brun / Robert Sayer",
+  "date": "1765date QS:P571,+1765-00-00T00:00:00Z/9",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:Terrour_or_Fright_(from_Heads_Representing_the_Various_Passions_of_the_Soul;_as_they_are_Expressed_in_the_Human_Countenance-_Drawn_by_that_Great_Master_Monsieur_Le_Brun)_MET_DP854027.jpg"
+ },
+ "lebrun-hatred": {
+  "file": "lebrun-hatred.jpg",
+  "title": "Hatred or Jealousy (from Heads Representing the Various Passions of the Soul; as they are Expressed in the Human Countenance- Drawn by that Great Master Monsieur Le Brun) MET DP854028.jpg",
+  "artist": "Charles Le Brun / Robert Sayer",
+  "date": "1765date QS:P571,+1765-00-00T00:00:00Z/9",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:Hatred_or_Jealousy_(from_Heads_Representing_the_Various_Passions_of_the_Soul;_as_they_are_Expressed_in_the_Human_Countenance-_Drawn_by_that_Great_Master_Monsieur_Le_Brun)_MET_DP854028.jpg"
+ },
+ "lebrun-desire": {
+  "file": "lebrun-desire.jpg",
+  "title": "Desire (from Heads Representing the Various Passions of the Soul; as they are Expressed in the Human Countenance- Drawn by that Great Master Monsieur Le Brun) MET DP854025.jpg",
+  "artist": "Charles Le Brun / Robert Sayer",
+  "date": "1765date QS:P571,+1765-00-00T00:00:00Z/9",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:Desire_(from_Heads_Representing_the_Various_Passions_of_the_Soul;_as_they_are_Expressed_in_the_Human_Countenance-_Drawn_by_that_Great_Master_Monsieur_Le_Brun)_MET_DP854025.jpg"
+ },
+ "lebrun-pain": {
+  "file": "lebrun-pain.jpg",
+  "title": "Simple Bodily Pain (from Heads Representing the Various Passions of the Soul; as they are Expressed in the Human Countenance- Drawn by that Great Master Monsieur Le Brun) MET DP854029.jpg",
+  "artist": "Robert Sayer / Charles Le Brun",
+  "date": "1765date QS:P571,+1765-00-00T00:00:00Z/9",
+  "license": "CC0",
+  "page": "https://commons.wikimedia.org/wiki/File:Simple_Bodily_Pain_(from_Heads_Representing_the_Various_Passions_of_the_Soul;_as_they_are_Expressed_in_the_Human_Countenance-_Drawn_by_that_Great_Master_Monsieur_Le_Brun)_MET_DP854029.jpg"
+ },
+ "muybridge": {
+  "file": "muybridge.jpg",
+  "title": "The Horse in Motion high res.jpg",
+  "artist": "Eadweard Muybridge",
+  "date": "1878",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:The_Horse_in_Motion_high_res.jpg"
+ },
+ "monet-sunset": {
+  "file": "monet-sunset.jpg",
+  "title": "Claude Monet - Rouen Cathedral, Facade (Sunset).JPG",
+  "artist": "Claude Monet",
+  "date": "{Date 1892}",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:Claude_Monet_-_Rouen_Cathedral,_Facade_(Sunset).JPG"
+ },
+ "monet-west": {
+  "file": "monet-west.jpg",
+  "title": "Claude Monet - Rouen Cathedral, West Façade - Google Art Project.jpg",
+  "artist": "Claude Monet",
+  "date": "1894date QS:P571,+1894-00-00T00:00:00Z/9",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:Claude_Monet_-_Rouen_Cathedral,_West_Fa%C3%A7ade_-_Google_Art_Project.jpg"
+ },
+ "monet-portal": {
+  "file": "monet-portal.jpg",
+  "title": "Claude Monet - Rouen Cathedral - The Portal (Sunlight).jpg",
+  "artist": "Claude Monet",
+  "date": "1894date QS:P571,+1894-00-00T00:00:00Z/9",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:Claude_Monet_-_Rouen_Cathedral_-_The_Portal_(Sunlight).jpg"
+ },
+ "muybridge-anim": {
+  "file": "muybridge-anim.gif",
+  "title": "The Horse in Motion-anim.gif",
+  "artist": "Eadweard Muybridge, Animation: Nevit Dilmen",
+  "date": "1878",
+  "license": "Public domain",
+  "page": "https://commons.wikimedia.org/wiki/File:The_Horse_in_Motion-anim.gif"
+ }
+}
