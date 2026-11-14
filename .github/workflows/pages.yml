@@ -21,6 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp version
+        run: |
+          echo "export const VERSION = { version: 'web', build: '${GITHUB_RUN_NUMBER}', commit: '${GITHUB_SHA::7}', date: '$(date -u +%Y-%m-%d)' };" > js/version.js
       - run: node scripts/build-www.mjs && touch www/.nojekyll
       - name: Push to gh-pages
         run: |

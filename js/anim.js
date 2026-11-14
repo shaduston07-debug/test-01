@@ -262,28 +262,45 @@ export class Timeline {
 
   // ── playback ──
   toggle() { this.playing ? this.stop() : this.play(); }
+  // last frame that has drawings or motion: playback stops / loops there instead of running on
+  // through empty frames up to the timeline length. A track that is one held drawing (a
+  // background or the exercise guide) or a hidden / draft track doesn't stretch it.
+  playEnd() {
+    const d = this.doc, L = d.anim.length;
+    let end = 0, any = 0;
+    for (const t of d.tracks) {
+      if (!t.visible) continue;
+      const ce = t.cels.length ? Math.max(...t.cels.map((c) => c.start + c.dur)) : 0;
+      const ke = t.keys && t.keys.length ? Math.max(...t.keys.map((k) => k.f + 1)) : 0;
+      any = Math.max(any, ce, ke);
+      if (t.draft || (t.cels.length <= 1 && (!t.keys || t.keys.length <= 1))) continue;
+      end = Math.max(end, ce, ke);
+    }
+    return clamp(end || any || L, 1, L);
+  }
   play() {
     if (this.playing || !this.doc) return;
     this.app.finishTransient();
     this.playing = true; this.dir = 1;
+    if (this.doc.playhead >= this.playEnd() - 1) this.doc.playhead = 0; // start over from the top
     let last = performance.now(), acc = 0;
     const tick = (now) => {
       if (!this.playing) return;
-      const d = this.doc, a = d.anim, spf = 1000 / a.fps;
+      const d = this.doc, a = d.anim, spf = 1000 / a.fps, E = this.playEnd();
       acc += now - last; last = now;
       while (acc >= spf) {
         acc -= spf;
         let f = d.playhead + this.dir;
-        if (f >= a.length || f < 0) {
+        if (f >= E || f < 0) {
           if (a.loop === 'loop') f = 0;
-          else if (a.loop === 'pingpong') { this.dir *= -1; f = d.playhead + this.dir; f = clamp(f, 0, a.length - 1); }
+          else if (a.loop === 'pingpong') { this.dir *= -1; f = d.playhead + this.dir; f = clamp(f, 0, E - 1); }
           else { this.stop(); return; }
         }
         d.playhead = f;
         if (this.recording && this.app.active && this.app.active.tool === 'move') this.app.tools.move.tick();
       }
       if (this.playheadEl) this.playheadEl.style.left = d.playhead * CELL + CELL / 2 - 1 + 'px';
-      this.frameLbl.textContent = `${d.playhead + 1} / ${a.length}`;
+      this.frameLbl.textContent = `${d.playhead + 1} / ${E}`;
       this.app.requestRender();
       this.raf = requestAnimationFrame(tick);
     };

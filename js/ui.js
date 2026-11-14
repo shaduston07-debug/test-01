@@ -22,6 +22,7 @@ import { QUALITIES as TL_QUALITIES } from './timelapse.js';
 import { ADJUSTMENTS, FloatingTransform, alphaBounds, wandMask, wandRegion, regionToCanvas, GRADIENT_PRESETS } from './tools.js';
 import { parallelAdjust, wandRegionAsync } from './pool.js';
 import * as store from './storage.js';
+import { VERSION } from './version.js';
 import { openStacks } from './stacks.js';
 import { openOutline } from './filters.js';
 import { pickedLayers, membersOf } from './layers.js';
@@ -1305,6 +1306,8 @@ export function openSettings(app) {
     switchRow('Clipping layers: delete paint that goes outside the base layer', s.clipTrim !== false, (v) => { s.clipTrim = v; save(); }),
     switchRow('Make a project palette from inserted pictures', s.picturePalette !== false, (v) => { s.picturePalette = v; save(); }),
   );
+  const V = VERSION, vtxt = V.version === 'dev' ? 'development build' : `Version ${V.version}` + (V.build ? ` (build ${V.build})` : '');
+  body.append(h('div', { class: 'app-version' }, h('b', {}, 'Inkwell Studio'), h('span', {}, vtxt), V.commit || V.date ? h('small', {}, [V.date, V.commit].filter(Boolean).join(' · ')) : null));
   const dlg = dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });
 }
 

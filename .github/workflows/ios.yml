@@ -23,6 +23,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # version shown in the app (Settings), matching the .ipa's version
+      - name: Stamp version
+        run: |
+          echo "export const VERSION = { version: '1.0.${GITHUB_RUN_NUMBER}', build: '${GITHUB_RUN_NUMBER}', commit: '${GITHUB_SHA::7}', date: '$(date -u +%Y-%m-%d)' };" > js/version.js
       - run: npm run build && npx cap sync ios
       - name: Build (unsigned)
         run: |
