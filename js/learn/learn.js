@@ -1,5 +1,6 @@
 // Inkwell Learning — the "Learning" tab: tracks → courses → lessons, with live demos, quizzes,
 // challenges that open a ready-made canvas in the Studio, sources, and saved progress.
+import { sakugaPlayer } from './sakuga.js';
 import { $, $$, h, toast, confirmDialog } from '../util.js';
 import { ICONS } from '../icons.js';
 import { Doc, Layer, Track } from '../doc.js';
@@ -84,7 +85,12 @@ function route(r) {
   const body = $('#learn-body');
   body.innerHTML = '';
   $('#learning').scrollTop = 0;
-  if (r.view === 'drafts') renderDrafts(body);
+  if (r.view === 'cuts') {
+    body.append(h('div', { class: 'ln-backbar' }, h('button', { class: 'pill', onclick: () => route({ view: 'home' }) }, '‹ Learning'), h('span', { class: 'ln-backbar-title' }, 'Cut library')),
+      h('header', { class: 'ln-drafts-head' }, h('h1', {}, 'Cut library'), h('p', { class: 'hint' }, 'Study real animation frame by frame. Search Sakugabooru by show, topic or artist, star what you want to come back to, and save cuts on this device to study them without internet.')));
+    const host = h('div', { class: 'sk-page' }); body.append(host);
+    cleanups.push(sakugaPlayer(host));
+  } else if (r.view === 'drafts') renderDrafts(body);
   else if (r.view === 'course') renderCourse(body, r.course);
   else if (r.view === 'lesson') renderLesson(body, r.course, r.lesson);
   else renderHome(body);
@@ -113,6 +119,7 @@ function renderHome(body) {
     h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Inkwell ', h('em', {}, 'Learning')),
     h('div', { class: 'gal-actions glass' },
       last && last.lesson ? h('button', { class: 'pill primary', onclick: () => route({ view: 'lesson', course: last.course.id, lesson: last.lesson.id }) }, '▶ Continue: ' + last.lesson.title) : null,
+      h('button', { class: 'pill', onclick: () => route({ view: 'cuts' }) }, '🎞 Cut library'),
       h('button', { class: 'pill', onclick: () => route({ view: 'drafts' }) }, '🗂 My drafts'),
       h('button', { class: 'pill', onclick: creditsDialog }, 'Credits'))));
   const modes = h('div', { class: 'gal-modes' });

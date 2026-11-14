@@ -22,6 +22,24 @@ async function getJSON(url) {
   if (!r.ok) throw new Error('Sakugabooru answered ' + r.status);
   return r.json();
 }
+// the bytes of a file, for saving a cut offline
+async function getBytes(url) {
+  const cap = window.Capacitor;
+  if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
+    const http = cap.Plugins && cap.Plugins.CapacitorHttp;
+    const r = await (http ? http.get({ url, responseType: 'arraybuffer' }) : cap.nativePromise('CapacitorHttp', 'request', { url, method: 'GET', responseType: 'arraybuffer' }));
+    if (r.status && r.status >= 400) throw new Error('answered ' + r.status);
+    if (r.data instanceof ArrayBuffer) return r.data;
+    const bin = atob(String(r.data)), out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  }
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('answered ' + r.status);
+  return r.arrayBuffer();
+}
+const mime = (url) => (/\.webm(\?|$)/i.test(url) ? 'video/webm' : 'video/mp4');
+const mb = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
 const isVideo = (p) => /\.(mp4|webm)(\?|$)/i.test(p.file_url || '') || ['mp4', 'webm'].includes(p.file_ext);
 // posts for a tag query, with each tag's type (artist / copyright / …) when the site sends it
 export async function searchCuts(tags, page = 1, base = SAKUGA) {
@@ -42,6 +60,7 @@ const pretty = (t) => t.replace(/_/g, ' ');
 export function sakugaPlayer(host, o = {}) {
   const base = o.base || SAKUGA;
   const st = { show: store.prefs.get('sakuga.show', SHOWS[0][0]), topic: '', artist: '', text: '', page: 1, list: [], cur: null, fps: 24, starred: store.prefs.get('sakuga.stars', []) };
+  if (o.show) st.show = o.show;
   const root = h('div', { class: 'sk' });
   host.append(root);
   // ── search ──
@@ -50,7 +69,7 @@ export function sakugaPlayer(host, o = {}) {
     const draw = () => { el.innerHTML = ''; for (const [v, label] of items) el.append(h('button', { class: get() === v ? 'on' : '', onclick: () => { set(v); draw(); run(1); } }, label)); };
     draw(); el.redraw = draw; return el;
   };
-  const showRow = chipsRow([...SHOWS, ['', 'Any show'], ['★', '★ Starred']], () => st.show, (v) => { st.show = v; store.prefs.set('sakuga.show', v); });
+  const showRow = chipsRow([...SHOWS, ['', 'Any show'], ['★', '★ Starred'], ['⬇', '⬇ Offline']], () => st.show, (v) => { st.show = v; if (v !== '⬇') store.prefs.set('sakuga.show', v); });
   const topicRow = chipsRow(TOPICS, () => st.topic, (v) => { st.topic = v; });
   const input = h('input', { class: 'text-in', placeholder: 'Artist or tag (for example an animator’s name)', value: '' });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { st.text = input.value; st.artist = ''; run(1); } });
@@ -73,8 +92,18 @@ export function sakugaPlayer(host, o = {}) {
   const fpsSel = h('div', { class: 'lx-chips' });
   for (const v of [24, 30, 12]) fpsSel.append(h('button', { class: v === 24 ? 'on' : '', title: 'Frame rate used for stepping and the counter', onclick: (e) => { st.fps = v; for (const b of fpsSel.children) b.classList.toggle('on', b === e.currentTarget); tick(); } }, v + ' fps'));
   const star = h('button', { class: 'lx-btn ghost', onclick: () => toggleStar() }, '☆ Star');
+  const offBtn = h('button', { class: 'lx-btn ghost', onclick: () => toggleOffline() }, '⬇ Save offline');
+  const fullBtn = h('button', { class: 'lx-btn ghost', title: 'Full screen', onclick: () => { player.classList.toggle('sk-full'); fullBtn.textContent = player.classList.contains('sk-full') ? '✕ Close' : '⛶ Full screen'; } }, '⛶ Full screen');
+  // like a native player: tap = play / pause, drag sideways = scrub frame by frame
+  let drag = null;
+  video.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, t: video.currentTime, moved: false, was: !video.paused }; video.setPointerCapture(e.pointerId); });
+  video.addEventListener('pointermove', (e) => { if (!drag) return; const dx = e.clientX - drag.x; if (!drag.moved && Math.abs(dx) < 8) return; drag.moved = true; video.pause(); const fr = Math.round(dx / 9); video.currentTime = Math.max(0, Math.min((video.duration || 1e9) - 0.001, drag.t + fr / st.fps)); });
+  const endDrag = () => { if (!drag) return; if (!drag.moved) (video.paused ? video.play().catch(() => {}) : video.pause()); drag = null; };
+  video.addEventListener('pointerup', endDrag); video.addEventListener('pointercancel', () => { drag = null; });
+  const onKey = (e) => { if (player.hidden || !root.isConnected || /INPUT|TEXTAREA/.test(e.target.tagName)) return; if (e.key === ' ') { e.preventDefault(); video.paused ? video.play().catch(() => {}) : video.pause(); } else if (e.key === ',' || e.key === 'ArrowLeft') stepBy(-1); else if (e.key === '.' || e.key === 'ArrowRight') stepBy(1); };
+  window.addEventListener('keydown', onKey);
   const controls = h('div', { class: 'lx-controls' }, playBtn,
-    h('button', { class: 'lx-btn ghost', onclick: () => stepBy(-1) }, '◀ frame'), h('button', { class: 'lx-btn ghost', onclick: () => stepBy(1) }, 'frame ▶'), counter, speeds, fpsSel, star);
+    h('button', { class: 'lx-btn ghost', onclick: () => stepBy(-1) }, '◀ frame'), h('button', { class: 'lx-btn ghost', onclick: () => stepBy(1) }, 'frame ▶'), counter, speeds, fpsSel, star, offBtn, fullBtn);
   const player = h('div', { class: 'sk-player', hidden: true }, video, scrub, controls, info);
   const tick = () => {
     const f = Math.floor(video.currentTime * st.fps + 0.001) + 1, tot = video.duration ? Math.round(video.duration * st.fps) : 0;
@@ -86,15 +115,50 @@ export function sakugaPlayer(host, o = {}) {
   video.addEventListener('error', () => { if (st.cur) info.prepend(h('div', { class: 'sk-err' }, 'This cut would not play here. ', h('a', { href: st.cur.page, target: '_blank', rel: 'noopener' }, 'Open it on Sakugabooru'))); });
   let raf = 0; const loopTick = () => { if (!video.paused) tick(); raf = requestAnimationFrame(loopTick); }; raf = requestAnimationFrame(loopTick);
   const isStar = (c) => st.starred.some((s) => s.id === c.id);
+  const saved = (c) => { const s2 = st.starred.find((q) => q.id === c.id); return !!(s2 && s2.offline); };
+  const keep = (c, extra = {}) => ({ id: c.id, url: c.url, thumb: c.thumb, artists: c.artists, shows: c.shows, tags: c.tags.slice(0, 30), page: c.page, w: c.w, h: c.h, source: c.source, offline: !!c.offline, size: c.size || 0, ...extra });
+  const setStars = (list) => { st.starred = list.slice(0, 400); store.prefs.set('sakuga.stars', st.starred); };
+  const thumbs = new Map(); // object URLs of saved thumbnails
+  const offlineLabel = () => { const c = st.cur; offBtn.textContent = c && saved(c) ? '✓ Offline · remove' : '⬇ Save offline'; };
+  async function toggleOffline() {
+    const c = st.cur; if (!c || offBtn.dataset.busy) return;
+    if (saved(c)) {
+      await store.deleteCut('cut:' + c.id).catch(() => {});
+      setStars(st.starred.map((q) => (q.id === c.id ? { ...q, offline: false, size: 0 } : q)));
+      c.offline = false; offlineLabel(); usage(); if (st.show === '⬇') drawGrid();
+      return;
+    }
+    offBtn.dataset.busy = '1'; offBtn.textContent = 'Saving…';
+    try {
+      const bytes = await getBytes(c.url);
+      let thumb = null; if (c.thumb) { try { thumb = await getBytes(c.thumb); } catch { /* no thumbnail offline */ } }
+      await store.putCut({ id: 'cut:' + c.id, bytes, type: mime(c.url), thumb, added: Date.now() });
+      c.offline = true; c.size = bytes.byteLength;
+      setStars([keep(c, { offline: true, size: bytes.byteLength }), ...st.starred.filter((q) => q.id !== c.id)]);
+      star.textContent = '★ Starred'; status.textContent = `Saved for offline (${mb(bytes.byteLength)}). It now plays without internet.`;
+      store.requestPersistence && store.requestPersistence();
+    } catch (e) {
+      status.textContent = 'Could not save this cut (' + (e.message || 'network') + '). Saving needs the iPad app and an internet connection.';
+    }
+    delete offBtn.dataset.busy; offlineLabel(); usage();
+  }
+  const useNote = h('div', { class: 'sk-dim sk-usage' });
+  function usage() { const off = st.starred.filter((q) => q.offline), n = off.reduce((a, q) => a + (q.size || 0), 0); useNote.textContent = off.length ? `${off.length} cut${off.length === 1 ? '' : 's'} saved offline · ${mb(n)} on this device` : ''; }
+  let objUrl = null;
   const toggleStar = () => {
     const c = st.cur; if (!c) return;
-    st.starred = isStar(c) ? st.starred.filter((s) => s.id !== c.id) : [{ id: c.id, url: c.url, thumb: c.thumb, artists: c.artists, shows: c.shows, tags: c.tags.slice(0, 30), page: c.page, w: c.w, h: c.h, source: c.source }, ...st.starred].slice(0, 200);
-    store.prefs.set('sakuga.stars', st.starred); star.textContent = isStar(c) ? '★ Starred' : '☆ Star';
+    if (isStar(c) && saved(c)) { status.textContent = 'This cut is saved offline: remove the offline copy first.'; return; }
+    setStars(isStar(c) ? st.starred.filter((q) => q.id !== c.id) : [keep(c), ...st.starred]);
+    star.textContent = isStar(c) ? '★ Starred' : '☆ Star';
     if (st.show === '★') drawGrid();
   };
   const open = (c) => {
     st.cur = c; player.hidden = false;
-    video.src = c.url; video.playbackRate = 1; for (const b of speeds.children) b.classList.toggle('on', b.textContent === '1×');
+    if (objUrl) { URL.revokeObjectURL(objUrl); objUrl = null; }
+    video.src = c.url;
+    if (saved(c)) store.getCut('cut:' + c.id).then((rec) => { if (rec && rec.bytes && st.cur === c) { objUrl = URL.createObjectURL(new Blob([rec.bytes], { type: rec.type || 'video/mp4' })); video.src = objUrl; video.play().catch(() => {}); } }).catch(() => {});
+    offlineLabel();
+    video.playbackRate = 1; for (const b of speeds.children) b.classList.toggle('on', b.textContent === '1×');
     video.play().catch(() => {});
     star.textContent = isStar(c) ? '★ Starred' : '☆ Star';
     info.innerHTML = '';
@@ -106,18 +170,21 @@ export function sakugaPlayer(host, o = {}) {
     for (const b of grid.children) b.classList.toggle('on', b.dataset.id === String(c.id));
   };
   const drawGrid = () => {
-    const list = st.show === '★' ? st.starred : st.list;
+    const list = st.show === '★' ? st.starred : st.show === '⬇' ? st.starred.filter((q) => q.offline) : st.list;
     grid.innerHTML = '';
     for (const c of list) {
       const b = h('button', { class: 'sk-cut' + (st.cur && st.cur.id === c.id ? ' on' : ''), title: c.artists.map(pretty).join(', '), onclick: () => open(c) },
-        c.thumb ? h('img', { src: c.thumb, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : null, h('span', {}, c.artists.length ? pretty(c.artists[0]) : '#' + c.id));
+        c.thumb ? h('img', { src: thumbs.get(c.id) || c.thumb, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : null, h('span', {}, (saved(c) ? '⬇ ' : '') + (c.artists.length ? pretty(c.artists[0]) : '#' + c.id)));
       b.dataset.id = c.id; grid.append(b);
+      // saved cuts show their saved thumbnail (works with no connection)
+      if (saved(c) && !thumbs.has(c.id)) store.getCut('cut:' + c.id).then((rec) => { if (!rec || !rec.thumb) return; const u = URL.createObjectURL(new Blob([rec.thumb])); thumbs.set(c.id, u); const im = b.querySelector('img'); if (im) im.src = u; else b.prepend(h('img', { src: u, alt: '' })); }).catch(() => {});
     }
   };
   let ticket = 0;
   async function run(page) {
     artistChip.innerHTML = '';
     if (st.artist) artistChip.append(h('span', {}, 'Artist: ', h('b', {}, pretty(st.artist))), h('button', { class: 'sk-tag', onclick: () => { st.artist = ''; run(1); } }, '× clear'));
+    if (st.show === '⬇') { more.hidden = true; const n = st.starred.filter((q) => q.offline).length; status.textContent = n ? `${n} cut${n === 1 ? '' : 's'} saved on this device: they play without internet.` : 'Nothing saved yet: open a cut and tap ⬇ Save offline.'; drawGrid(); return; }
     if (st.show === '★') { more.hidden = true; status.textContent = st.starred.length ? `${st.starred.length} starred cut${st.starred.length === 1 ? '' : 's'}` : 'No starred cuts yet: open a cut and tap ☆ Star.'; drawGrid(); return; }
     // tapping an artist switches to "Any show"; picking a show afterwards narrows it again
     const tags = [st.show, st.artist, st.topic, st.text.trim().toLowerCase().replace(/\s+/g, '_')].filter(Boolean).join(' ');
@@ -133,12 +200,15 @@ export function sakugaPlayer(host, o = {}) {
       drawGrid();
     } catch (e) {
       if (my !== ticket) return;
+      if (st.starred.some((q) => q.offline)) { st.show = '⬇'; showRow.redraw(); drawGrid(); status.textContent = 'No connection to Sakugabooru: showing the cuts saved on this device.'; return; }
       status.innerHTML = '';
       status.append('Could not reach Sakugabooru from here (' + (e.message || 'network') + '). In the iPad app it needs an internet connection; in a web browser the site may block the request. ', h('a', { href: `${base}/post?tags=${encodeURIComponent(tags)}`, target: '_blank', rel: 'noopener' }, 'Open this search on Sakugabooru'));
     }
   }
-  root.append(h('div', { class: 'sk-search' }, showRow, topicRow, h('div', { class: 'sk-row' }, input, go), artistChip), player, status, grid, more,
-    h('div', { class: 'lx-note' }, 'Cuts are streamed from sakugabooru.com and stay the property of their studios and animators; nothing is saved in the app. Tap an artist’s name under a cut to see more of their work.'));
+  usage();
+  root.append(h('div', { class: 'sk-search' }, showRow, topicRow, h('div', { class: 'sk-row' }, input, go), artistChip), player, status, grid, more, useNote,
+    h('div', { class: 'lx-note' }, 'Cuts are streamed from sakugabooru.com and stay the property of their studios and animators. ⬇ Save offline keeps a copy on this device for your own study. Tap the video to play or pause, drag across it to scrub frame by frame, and tap an artist’s name to see more of their work.'));
+  if (!navigator.onLine && st.starred.some((q) => q.offline)) st.show = '⬇', showRow.redraw();
   run(1);
-  return () => { cancelAnimationFrame(raf); ticket++; try { video.pause(); video.removeAttribute('src'); video.load(); } catch { /* ignore */ } };
+  return () => { cancelAnimationFrame(raf); ticket++; window.removeEventListener('keydown', onKey); if (objUrl) URL.revokeObjectURL(objUrl); for (const u of thumbs.values()) URL.revokeObjectURL(u); try { video.pause(); video.removeAttribute('src'); video.load(); } catch { /* ignore */ } };
 }
