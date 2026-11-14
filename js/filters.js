@@ -24,7 +24,7 @@ function dt1(f, n, d, v, z) {
 }
 // distance (px) from every pixel to the nearest pixel where inside[i] is true
 function edt(inside, w, hh) {
-  const g = new Float64Array(w * hh), n = Math.max(w, hh);
+  const g = new Float32Array(w * hh), n = Math.max(w, hh); // float32 halves the memory on big layers; distances stay exact
   const f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
   for (let i = 0; i < g.length; i++) g[i] = inside[i] ? 0 : INF;
   for (let x = 0; x < w; x++) { for (let y = 0; y < hh; y++) f[y] = g[y * w + x]; dt1(f, hh, d, v, z); for (let y = 0; y < hh; y++) g[y * w + x] = d[y]; }

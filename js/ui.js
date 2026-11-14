@@ -1311,17 +1311,19 @@ export function openSettings(app) {
     h('div', { class: 'stack' }, h('label', {}, 'Accent colour (selected tools, active layer, buttons)'), accentRow(s, save)),
     switchRow('Brush cursor (Apple Pencil hover)', s.cursor, (v) => { s.cursor = v; save(); }),
     switchRow('Brush cursor while painting', s.cursorPaint, (v) => { s.cursorPaint = v; save(); }),
+    h('div', { class: 'menu-section' }, 'Gestures'),
     switchRow('Gestures (pinch / rotate / pan)', s.gestures, (v) => { s.gestures = v; save(); }),
     switchRow('Quick pinch snaps the canvas to fit the screen', !!s.pinchFit, (v) => { s.pinchFit = v; save(); }),
     field('Snap when pinched down to', { min: 0.1, max: 0.9, step: 0.05, value: s.pinchFitAmount ?? 0.5, fmt: (v) => Math.round(v * 100) + '% of the size (smaller = harder pinch)', onInput: (v) => { s.pinchFitAmount = v; save(); } }),
     field('…and within', { min: 0.15, max: 1, step: 0.05, value: s.pinchFitTime ?? 0.35, fmt: (v) => v.toFixed(2) + ' s', onInput: (v) => { s.pinchFitTime = v; save(); } }),
     switchRow('Rotation snaps to straight angles (0° / 90° / 180°)', s.rotateSnap !== false, (v) => { s.rotateSnap = v; save(); }),
     field('Rotation snap strength', { min: 1, max: 15, step: 1, value: s.rotateSnapDeg ?? 4, fmt: (v) => 'within ' + v + '°', onInput: (v) => { s.rotateSnapDeg = v; save(); } }),
+    switchRow('Two-finger tap = undo, three-finger tap = redo', s.tapUndo !== false, (v) => { s.tapUndo = v; save(); }),
+    field('Undo / redo tap sensitivity', { min: 1, max: 10, step: 1, value: s.tapSensitivity ?? 5, fmt: (v) => (v <= 3 ? 'Low' : v >= 8 ? 'High' : 'Medium') + ` · ${v} (tap within ${150 + v * 40} ms)`, onInput: (v) => { s.tapSensitivity = v; save(); } }),
+    h('p', { class: 'hint' }, 'Low: only quick, still taps undo (fewer accidental undos while zooming). High: slower or slightly sliding taps still count.'),
     switchRow('Hold to keep undoing / redoing (2 or 3 fingers, or the undo buttons)', s.holdRepeat !== false, (v) => { s.holdRepeat = v; save(); }),
-    h('button', { class: 'pill', style: { margin: '6px 6px 6px 0' }, onclick: () => { dlg.close(); backupDialog(app); } }, 'Backup & Restore…'),
-    h('button', { class: 'pill', style: { margin: '6px 0' }, onclick: () => { app.recordPen = true; app.penLog = []; dlg.close(); toast('Recording: draw a few strokes with the Apple Pencil', 4000); } }, 'Record Pencil strokes (for support)…'),
     field('Rapid undo delay', { min: 0.15, max: 1.5, step: 0.05, value: s.rapidUndoDelay ?? 0.35, fmt: (v) => v.toFixed(2) + ' s', onInput: (v) => { s.rapidUndoDelay = v; save(); } }),
-    h('div', { class: 'menu-section' }, 'Apple Pencil'),
+    h('div', { class: 'menu-section' }, 'Pencil'),
     h('div', { class: 'stack' }, h('label', {}, 'Pen pressure from'),
       seg([['auto', app.penHasPressure ? 'Auto (pressure found)' : 'Auto (full strength)'], ['pressure', 'Pencil pressure'], ['tilt', 'Tilt'], ['speed', 'Speed'], ['off', 'Off (full strength)']], s.pressureSource || 'auto', (v) => { s.pressureSource = v; save(); }),
       switchRow('Solid colour — pressure, tilt and speed change the size only (overlapping strokes don’t darken)', s.solidColor !== false, (v) => { s.solidColor = v; save(); }),
@@ -1333,15 +1335,24 @@ export function openSettings(app) {
     field('Ink blobs where strokes start / end (brushes with a “bleed” fade; 0 = clean joins)', { min: 0, max: 1, step: 0.05, value: s.blobAmount ?? 0, fmt: pct, onInput: (v) => { s.blobAmount = v; save(); } }),
     field('Post-correction when lifting the pen (0 = keep strokes exactly as drawn)', { min: 0, max: 1, step: 0.05, value: s.liftAmount ?? 0, fmt: pct, onInput: (v) => { s.liftAmount = v; save(); } }),
     field('QuickShape delay', { min: 250, max: 1500, step: 50, value: s.quickShapeDelay, fmt: (v) => v + ' ms', onInput: (v) => { s.quickShapeDelay = v; save(); } }),
-    h('div', { class: 'menu-section' }, 'Performance'),
+    h('div', { class: 'menu-section' }, 'General'),
     field('Memory budget for layers', { min: 300, max: 4000, step: 50, value: s.memoryMB, fmt: (v) => v + ' MB', onInput: (v) => { s.memoryMB = v; save(); } }),
     h('p', { class: 'hint' }, 'Sets how many layers you can add. M-series iPads start at 2000 MB (≈115 layers at 2048×2048). Drawing speed does not depend on layer count. If the app ever reloads by itself, lower this.'),
     switchRow('Autosave', s.autosave, (v) => { s.autosave = v; save(); }),
     switchRow('Clipping layers: delete paint that goes outside the base layer', s.clipTrim !== false, (v) => { s.clipTrim = v; save(); }),
     switchRow('Make a project palette from inserted pictures', s.picturePalette !== false, (v) => { s.picturePalette = v; save(); }),
+    h('button', { class: 'pill', style: { margin: '6px 6px 6px 0' }, onclick: () => { dlg.close(); backupDialog(app); } }, 'Backup & Restore…'),
+    h('button', { class: 'pill', style: { margin: '6px 0' }, onclick: () => { app.recordPen = true; app.penLog = []; dlg.close(); toast('Recording: draw a few strokes with the Apple Pencil', 4000); } }, 'Record Pencil strokes (for support)…'),
   );
   const V = VERSION, vtxt = V.version === 'dev' ? 'development build' : `Version ${V.version}` + (V.build ? ` (build ${V.build})` : '');
   body.append(h('div', { class: 'app-version' }, h('b', {}, 'Inkwell Studio'), h('span', {}, vtxt), V.commit || V.date ? h('small', {}, [V.date, V.commit].filter(Boolean).join(' · ')) : null));
+  // one tab per section instead of one long list
+  const panes = [], tabsEl = h('div', { class: 'seg set-tabs' });
+  for (const el of [...body.children]) { if (el.classList.contains('menu-section')) { panes.push({ name: el.textContent, el: h('div', { class: 'set-pane' }) }); el.remove(); } else if (panes.length && !el.classList.contains('app-version')) panes[panes.length - 1].el.append(el); }
+  const show = (k) => { panes.forEach((pn, i) => { pn.el.hidden = i !== k; pn.btn.classList.toggle('on', i === k); }); store.prefs.set('settingsTab', k); };
+  panes.forEach((pn, i) => { pn.btn = h('button', { onclick: () => show(i) }, pn.name); tabsEl.append(pn.btn); });
+  body.prepend(tabsEl, ...panes.map((pn) => pn.el)); // the version line stays below, on every tab
+  show(Math.min(panes.length - 1, store.prefs.get('settingsTab', 0)));
   const dlg = dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });
 }
 

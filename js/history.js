@@ -82,6 +82,7 @@ export function pixelCmd(canvas, rect, label, after, beforeImg) {
   let redoImg = null;
   return {
     label, bytes: w * hh * 8,
+    pixel: { canvas, x, y, w, h: hh }, // lets the app repaint only this area after undo / redo
     undo() { redoImg = copyRect(canvas, x, y, w, hh); putRect(canvas, before, x, y); after && after(); },
     redo() { if (redoImg) putRect(canvas, redoImg, x, y); after && after(); },
     dispose() { before.width = before.height = 0; if (redoImg) redoImg.width = redoImg.height = 0; },

@@ -97,3 +97,5 @@ body.classic-ui .pill { background: #4a4a4e; border: 1px solid #1e1e20; min-heig
 body.classic-ui .pill.primary { background: var(--accent); }
 
 @media (max-width: 900px) { body.classic-ui { --c-dock: 240px; } }
+/* four-finger tap (hide interface) also hides the docks */
+body.classic-ui.ui-hidden .float-win[data-key=color], body.classic-ui.ui-hidden .float-win[data-key=layers] { opacity: 0; pointer-events: none; }

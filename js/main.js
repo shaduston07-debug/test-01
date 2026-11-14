@@ -783,7 +783,7 @@ class App {
     const cur = g.ids.map((id) => this.ptrs.get(id)).filter(Boolean);
     if (cur.length < 1) return;
     if (g.repeating) return; // rapid undo / redo in progress: keep the view still
-    for (const c of cur) if (dist(c.sx, c.sy, c.x0, c.y0) > 12) g.moved = true;
+    for (const c of cur) if (dist(c.sx, c.sy, c.x0, c.y0) > this.tapSlack().move) g.moved = true;
     if (!this.settings.gestures) return;
     const s0 = g.start;
     const cx0 = s0.reduce((a, p) => a + p.sx, 0) / s0.length, cy0 = s0.reduce((a, p) => a + p.sy, 0) / s0.length;
@@ -805,15 +805,18 @@ class App {
     this.showHud(Math.round(this.view.zoom * 100) + '%' + (this.view.rot ? ` · ${Math.round(((this.view.rot * 180 / Math.PI) % 360 + 360) % 360)}°` : ''));
     this.requestRender('view');
   }
+  // Undo / redo taps: how long the fingers may rest and how far they may slide and still count
+  // as a tap. Sensitivity 1 (only crisp taps) … 10 (lenient); 5 is the old fixed behaviour.
+  tapSlack() { const k = clamp(this.settings.tapSensitivity ?? 5, 1, 10); return { time: 150 + k * 40, move: 4 + k * 1.6 }; }
   endGesture() {
     const g = this.gesture; this.gesture = null;
     this.requestRender('view');
     if (g.repeat) g.repeat();
     if (g.repeating) return;
     const dt = performance.now() - g.t0;
-    if (!g.moved && dt < 350) {
-      if (g.maxTouches === 2) this.undo();
-      else if (g.maxTouches === 3) this.redo();
+    if (!g.moved && dt < this.tapSlack().time) {
+      if (g.maxTouches === 2) { if (this.settings.tapUndo !== false) this.undo(); }
+      else if (g.maxTouches === 3) { if (this.settings.tapUndo !== false) this.redo(); }
       else if (g.maxTouches >= 4) document.body.classList.toggle('ui-hidden');
     } else if (this.settings.pinchFit && dt < (this.settings.pinchFitTime ?? 0.35) * 1000 && this.view.zoom < g.zoom0 * (this.settings.pinchFitAmount ?? 0.5) && (g.travel || 0) < 160) {
       // quick pinch → fit (only a real pinch: a fast two-finger scroll whose fingers drift
@@ -925,16 +928,39 @@ class App {
     this.flushStroke();
     if (this.engine.active) return;
     if (this.transform) { if (!this.tools.transform.stepBack()) this.tools.transform.cancel(); return; }
-    const c = this.history.undo();
-    if (c) { this.showHud('Undo ' + (c.label || '')); this.changed(); }
+    const c = this.stepHistory(() => this.history.undo());
+    if (c) this.showHud('Undo ' + (c.label || ''));
   }
   redo() {
     const tl = this.tools && this.tools[this.tool];
     if (tl && tl.redoStep && tl.redoStep()) return;
     this.flushStroke();
     if (this.engine.active || this.transform) return;
-    const c = this.history.redo();
-    if (c) { this.showHud('Redo ' + (c.label || '')); this.changed(); }
+    const c = this.stepHistory(() => this.history.redo());
+    if (c) this.showHud('Redo ' + (c.label || ''));
+  }
+  // Runs an undo / redo step. When the step only changes pixels of a layer in the active
+  // group (a stroke, a fill, an erase…), just that area of the cached scene is repainted;
+  // the layers below and above are not re-blended. Anything else rebuilds as before.
+  stepHistory(run) {
+    this.quietContent = true;
+    let c;
+    try { c = run(); } finally { this.quietContent = false; }
+    if (!c) return null;
+    const d = this.doc, px = c.pixel;
+    let fast = false;
+    if (px && d && d.mode !== 'animate' && this.cacheKey && this.fullCache && this.fullDirty !== 'all') {
+      const [gs, ge] = d.activeGroup();
+      const it = d.items.slice(gs, ge).find((q) => q.canvas === px.canvas && q.type === 'raster');
+      if (it && this.group && this.group[0] === gs && this.group[1] === ge) {
+        const pad = 2 + (it.border ? (it.borderWidth || 0) + 2 : 0);
+        this.markDirty({ x: px.x - pad, y: px.y - pad, w: px.w + pad * 2, h: px.h + pad * 2 });
+        this.changed('patched');
+        fast = true;
+      }
+    }
+    if (!fast) this.changed();
+    return c;
   }
   updateUndoButtons() {
     $('#btn-undo').disabled = !this.history.canUndo;
@@ -948,6 +974,8 @@ class App {
   // (only the brush outline moved) or nothing (content changed: caches are rebuilt).
   // Frames that only need 'active' / 'cursor' repaint just the changed part of the screen.
   requestRender(kind) {
+    // an undo / redo step is running: it reports what changed itself (stepHistory)
+    if (this.quietContent && kind == null) kind = 'view';
     if (kind !== 'view' && kind !== 'active' && kind !== 'cursor') this.contentVer++;
     // a partial repaint is only safe for the brush engine's own stroke area (or the cursor);
     // any other 'active' change (3D layer, text, transform, fill…) repaints the whole frame
@@ -1084,7 +1112,7 @@ class App {
     if (this.fullDirty !== 'all') { const d = this.fullDirty || (this.fullDirty = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }); d.x0 = Math.min(d.x0, r.x); d.y0 = Math.min(d.y0, r.y); d.x1 = Math.max(d.x1, r.x + r.w); d.y1 = Math.max(d.y1, r.y + r.h); }
     this.requestRender('view');
   }
-  dropCaches() { clearTimeout(this.fullTimer); this.fullTimer = 0; this.fullDirty = 'all'; for (const k of ['belowCache', 'aboveCache', 'fullCache']) if (this[k]) { this[k].width = this[k].height = 0; this[k] = null; } this.cacheKey = null; }
+  dropCaches() { clearTimeout(this.fullTimer); this.fullTimer = 0; this.fullDirty = 'all'; this._clipMask = null; for (const k of ['belowCache', 'aboveCache', 'fullCache']) if (this[k]) { this[k].width = this[k].height = 0; this[k] = null; } this.cacheKey = null; }
 
   previewFor(canvas) {
     const e = this.engine.previewFor(canvas);
@@ -1298,11 +1326,19 @@ class App {
     const i = d.items.indexOf(layer), bi = i >= 0 ? d.clipBase(i) : -1;
     if (bi < 0) return sel;
     const base = d.items[bi];
+    // a plain layer base with no selection is used as the mask directly (no copy per stroke);
+    // anything else is built once and reused until the base or the selection changes
+    if (base.type !== 'group' && base.canvas && !sel) return base.canvas;
+    const members = base.type === 'group' ? d.items.filter((it) => it.groupId === base.id) : [base];
+    if (!members.length || members.some((it) => !it.canvas && it.type === 'raster')) return sel;
+    const key = base.id + '|' + members.map((it) => (it.canvas ? it.canvas._ver || 0 : 0) + (it.visible ? 'v' : 'h') + it.opacity).join(',') + '|' + (sel ? this.selection.ver : '-') + '|' + d.width + 'x' + d.height;
+    const c = this._clipMask;
+    if (c && c.key === key) return c.canvas;
     let m;
     if (base.type === 'group') m = d.flatten({ bg: false, filter: (it) => it.groupId === base.id });
-    else if (base.canvas) { m = makeCanvas(d.width, d.height); m.getContext('2d').drawImage(base.canvas, 0, 0); }
-    else return sel;
+    else { m = makeCanvas(d.width, d.height); m.getContext('2d').drawImage(base.canvas, 0, 0); }
     if (sel) { const x = m.getContext('2d'); x.globalCompositeOperation = 'destination-in'; x.drawImage(sel, 0, 0); }
+    this._clipMask = { key, canvas: m };
     return m;
   }
 

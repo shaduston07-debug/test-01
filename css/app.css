@@ -892,3 +892,7 @@ body.liquid-ui .pop-arrow { background: rgba(60, 60, 70, 0.5); box-shadow: none;
 .accent-sw { width: 30px; height: 30px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25); }
 .accent-sw.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #fff; }
 .accent-row input[type=color] { width: 34px; height: 34px; padding: 0; border: 0; background: none; border-radius: 50%; }
+
+/* Settings tabs */
+.set-tabs { position: sticky; top: 0; z-index: 2; margin-bottom: 10px; }
+.set-pane { min-height: 420px; }

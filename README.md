@@ -88,7 +88,13 @@ python3 -m http.server 8000      # then open http://localhost:8000
 - 29 built-in brushes in Sketching, Inking (including a CSP-style G-Pen), Painting, Airbrush, and Comic & Tone (halftone, crosshatch, speed lines)
 - **Brush Studio**: edit every parameter with a live Apple Pencil test pad; save copies; built-ins can be edited and reset
 - Smudge and eraser can use any brush
-- **QuickShape**: hold at the end of a stroke to snap to a line, arc or ellipse, then keep dragging to adjust. A finger on the screen snaps angles or makes a perfect circle
+- **QuickShape**: hold at the end of a stroke to snap it to a line, arc, circle / ellipse, rectangle (true right angles, squared when nearly square), triangle, other polygons or a polyline (L, V, Z), then keep dragging to adjust. A finger on the screen snaps angles or makes a perfect circle. The resting cluster and little hook where the pen stops are ignored, overshooting or not quite closing a loop still counts as closed, and S-curves, spirals and scribbles are left as drawn
+- **Colour-mixing brushes** (Painting set: Painterly Mix, Oil Paint, Gouache, Wet Watercolor): the stroke blends with the paint already on the layer, like Clip Studio's *Color mixing*. Brush Studio › Colour mixing has *Amount of paint*, *Density of paint* and *Colour stretch* for any brush
+- **Transform**: Freeform, Uniform, Distort (perspective) and Warp (mesh), magnetic snapping, flips, rotate 45°, fit / fill canvas and more under *More…*
+- **Adjustments** also holds **Liquify** (push, twirl, pinch, expand, reconstruct, smooth), **Outline** (ibis Paint style) and **Colouring stacks** (preset sets of clipped blend-mode colour layers, as layers or baked). Adjustments apply to every layer picked in the Layers panel
+- **Layers**: swipe the active layer for quick actions; with several picked: Group, Merge, **Merge copy** (a merged copy while the originals stay separate), Duplicate…
+- **Gallery tabs**: Illustrate, Animate and Webtoon each list only their own canvases
+- **Look**: Settings › Interface has the interface style (Glass, Liquid Glass, Solid) and the accent colour. Tapping the *Inkwell Studio* logo in the Gallery switches to a classic docked workspace (tool palette left, Colours and Layers docked right, tool options on top) and back
 - Symmetry guides: vertical, horizontal, quadrant, radial
 
 **Brush import**
@@ -208,7 +214,11 @@ PoseManiacs' direct link is a private Clip Studio feature. Poses come in through
 ```
 index.html, css/app.css     UI shell
 js/main.js                  App: view, input & gestures, tools, render loop, autosave
-js/engine.js                Stroke engine (stamping, dynamics, grain, symmetry, smudge, QuickShape)
+js/engine.js                Stroke engine (stamping, dynamics, grain, symmetry, smudge, colour mixing, QuickShape)
+js/liquify.js               Liquify tool (displacement field)
+js/stacks.js                Colouring stacks
+js/filters.js               Outline filter
+css/classic.css             Classic docked layout
 js/brushes.js               Built-in brushes, procedural tips & grains
 js/doc.js                   Document model, compositor, balloons, serialization
 js/tools.js                 Flood fill, selection, transform, adjustments

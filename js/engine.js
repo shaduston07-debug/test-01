@@ -725,72 +725,189 @@ function circle3(a, b, c) {
   const cx = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d, cy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
   return { cx, cy, r: Math.hypot(a.x - cx, a.y - cy) };
 }
+// least-squares circle through a set of points (Kåsa fit)
+function fitCircle(q) {
+  let sx = 0, sy = 0; for (const p of q) { sx += p.x; sy += p.y; }
+  const mx = sx / q.length, my = sy / q.length;
+  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+  for (const p of q) { const u = p.x - mx, v = p.y - my; suu += u * u; svv += v * v; suv += u * v; suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u; }
+  const det = suu * svv - suv * suv; if (Math.abs(det) < 1e-9) return null;
+  const e = 0.5 * (suuu + suvv), f = 0.5 * (svvv + svuu);
+  const uc = (e * svv - f * suv) / det, vc = (f * suu - e * suv) / det;
+  return { cx: mx + uc, cy: my + vc, r: Math.sqrt(uc * uc + vc * vc + (suu + svv) / q.length) };
+}
+// mean distance from the points to a (closed or open) polygon
+function polyErr(q, v, closed) {
+  let e = 0; const n = v.length, m = closed ? n : n - 1;
+  for (const p of q) { let d = Infinity; for (let i = 0; i < m; i++) d = Math.min(d, segDist(p, v[i], v[(i + 1) % n])); e += d; }
+  return e / q.length;
+}
+// What the stroke was meant to be. Order of work:
+//  1. clean the stroke: the pen rests (and often drifts into a little hook) while waiting for
+//     the shape, and closed shapes overshoot or stop short of where they began;
+//  2. open strokes: straight line, circular arc, or a polyline with clear corners;
+//  3. closed strokes: the simplest polygon that fits is compared with the best ellipse and the
+//     better fit wins (a sloppy circle is never turned into a hexagon, a box never into an oval);
+//  4. tidy: rectangles get true right angles, near-level shapes are levelled, near-round ones
+//     become circles.
+// Anything that is none of these (S-curves, spirals, scribbles) is left exactly as drawn.
 export function detectShape(pts, zoom = 1) {
-  if (pts.length < 4) return null;
+  if (pts.length < 4) return (detectShape.why = 1, null);
+  // 1a. drop the resting cluster at the end
+  let raw = pts.map((p) => ({ x: p.x, y: p.y }));
+  const rest = 5 / zoom, endP = raw[raw.length - 1];
+  let cut = raw.length - 1; while (cut > 2 && Math.hypot(raw[cut - 1].x - endP.x, raw[cut - 1].y - endP.y) < rest) cut--;
+  raw = raw.slice(0, cut + 1);
+  if (raw.length < 4) return (detectShape.why = 2, null);
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  for (const p of raw) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
   const diag = Math.hypot(x1 - x0, y1 - y0);
-  if (diag * zoom < 24) return null; // too small to mean a shape
-  const { q, len } = resample(pts, 72);
-  const a = q[0], b = q[q.length - 1], gap = Math.hypot(b.x - a.x, b.y - a.y);
-  const closed = gap < diag * 0.22 && len > diag * 1.5;
+  if (diag * zoom < 18) return (detectShape.why = 3, null); // too small to mean a shape
+  let { q, len } = resample(raw, 120);
+  // 1b. a short hook at either end (the pen sliding as it stops / lands): cut it off
+  const unhook = (arr) => {
+    const n = arr.length, k = Math.max(3, Math.round(n * 0.07));
+    const a = arr[n - 1], m = arr[n - 1 - k], b0 = arr[Math.max(0, n - 1 - 2 * k)];
+    const turn = 180 - angleAt(b0, m, a);
+    return turn > 50 ? arr.slice(0, n - k) : arr;
+  };
+  q = unhook(q); q = unhook(q.slice().reverse()).reverse();
+  if (q.length < 100) ({ q, len } = resample(q, 120));
+  const N = q.length;
+  // length without the hand tremor (tremor adds a lot of path to a short stroke)
+  { let l = 0; const st = 6; for (let i = st; i < N; i += st) l += Math.hypot(q[i].x - q[i - st].x, q[i].y - q[i - st].y); l += Math.hypot(q[N - 1].x - q[N - 1 - ((N - 1) % st)].x, q[N - 1].y - q[N - 1 - ((N - 1) % st)].y); len = l; }
+  let a = q[0], b = q[N - 1];
+  // closed? the ends meet (or cross: overshoot) after going round
+  let gap = Math.hypot(b.x - a.x, b.y - a.y), closed = false, loop = null;
+  if (len > diag * 1.6 && gap < len * 0.14) {
+    // closest approach between the first and the last fifth of the stroke
+    let best = Infinity, bi = 0, bj = N - 1; const k = Math.round(N * 0.2);
+    for (let i = 0; i < k; i++) for (let j = N - k; j < N; j++) { const d = Math.hypot(q[i].x - q[j].x, q[i].y - q[j].y); if (d < best) { best = d; bi = i; bj = j; } }
+    if (best < diag * 0.16 || gap < diag * 0.24) {
+      closed = true;
+      if (best < diag * 0.1 && (bi > 0 || bj < N - 1)) loop = q.slice(bi, bj); // overshoot trimmed
+      else loop = q.slice(0, -1);
+    }
+  }
+  const tolPx = 4 / zoom;
   if (!closed) {
-    // straight line: everything close to the chord
-    let dev = 0; for (const p of q) dev = Math.max(dev, segDist(p, a, b));
-    if (dev < Math.max(gap * 0.045, 3 / zoom)) return { type: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
-    // circular arc: one bend direction, points on a circle through start, middle, end
-    const m = q[q.length >> 1], c = circle3(a, m, b);
-    if (c && c.r < diag * 4) {
-      let rms = 0, sgn = 0, same = 0;
-      for (let i = 0; i < q.length; i++) {
-        rms += ((Math.hypot(q[i].x - c.cx, q[i].y - c.cy) - c.r) / c.r) ** 2;
-        if (i > 0 && i < q.length - 1) { const cr = (q[i].x - q[i - 1].x) * (q[i + 1].y - q[i].y) - (q[i].y - q[i - 1].y) * (q[i + 1].x - q[i].x); if (Math.abs(cr) > 1e-9) { sgn += Math.sign(cr); same++; } }
-      }
-      rms = Math.sqrt(rms / q.length);
-      if (rms < 0.045 && Math.abs(sgn) > same * 0.8) return { type: 'arc', x1: a.x, y1: a.y, x2: b.x, y2: b.y, mx: m.x, my: m.y };
+    // ── straight line vs arc: both are fitted, the simpler one wins unless the arc is clearly better
+    let dev = 0, sum = 0, side = 0;
+    const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+    for (const p of q) { const d = ((p.x - a.x) * dy - (p.y - a.y) * dx) / L; dev = Math.max(dev, Math.abs(d)); sum += d * d; side += d; }
+    const rmsLine = Math.sqrt(sum / N), bow = Math.abs(side / N); // bow: how far it leans to one side on average
+    const straightish = len < gap * 1.12;
+    if (straightish && dev < Math.max(gap * 0.04, tolPx)) return { type: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    // arc: least-squares circle, one bend direction, less than a full turn
+    const c = fitCircle(q);
+    let arcOk = false, rmsArc = Infinity, mid = null;
+    if (c && isFinite(c.r) && c.r < diag * 12) {
+      let e = 0; for (const p of q) e += (Math.hypot(p.x - c.cx, p.y - c.cy) - c.r) ** 2;
+      rmsArc = Math.sqrt(e / N);
+      // it must travel round the centre in one direction (hand tremor barely moves the angle)
+      const st = Math.max(3, Math.round(N / 20)); let pos = 0, neg = 0, prevA = Math.atan2(q[0].y - c.cy, q[0].x - c.cx);
+      for (let i = st; i < N; i += st) { const an = Math.atan2(q[i].y - c.cy, q[i].x - c.cx); let d = an - prevA; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU; if (d > 0) pos += d; else neg -= d; prevA = an; }
+      const oneWay = Math.max(pos, neg) / ((pos + neg) || 1);
+      const sweep = Math.max(pos, neg); // radians
+      arcOk = oneWay > 0.9 && sweep < 5.9 && rmsArc < Math.max(len * 0.022, tolPx * 0.8);
+      if (arcOk) { const m0 = q[N >> 1], ang = Math.atan2(m0.y - c.cy, m0.x - c.cx); mid = { x: c.cx + Math.cos(ang) * c.r, y: c.cy + Math.sin(ang) * c.r }; }
     }
-    // polyline (e.g. an L or a V): a few straight segments with clear corners
-    // (tight tolerance: a smooth S-curve needs many segments to stay this close, so it's rejected)
-    const idx = [0]; rdp(q, 0, q.length - 1, Math.max(diag * 0.025, 2.5 / zoom), idx); idx.push(q.length - 1);
-    if (idx.length >= 3 && idx.length <= 5) {
+    // a nearly straight stroke stays a line unless it clearly bows to one side
+    if (straightish && dev < Math.max(gap * 0.085, tolPx * 1.6) && !(arcOk && bow > gap * 0.02 && rmsArc < rmsLine * 0.5)) return { type: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    // ── polyline with clear corners (checked before the arc: an L is not a curve)
+    let pl = null;
+    for (const f of [0.07, 0.05, 0.035]) {
+      const idx = [0]; rdp(q, 0, N - 1, Math.max(diag * f, tolPx), idx); idx.push(N - 1);
+      if (idx.length < 3 || idx.length > 6) continue;
       const v = idx.map((i) => q[i]);
-      if (v.slice(1, -1).every((p, i) => angleAt(v[i], p, v[i + 2]) < 135)) return { type: 'poly', pts: v, closed: false };
+      const sharp = v.slice(1, -1).every((pt, i) => angleAt(v[i], pt, v[i + 2]) < 140);
+      // every piece must be straight on its own (a curve cut into chords is not)
+      let straight = true;
+      for (let k = 0; k + 1 < idx.length && straight; k++) { const A = q[idx[k]], B = q[idx[k + 1]], sl = Math.hypot(B.x - A.x, B.y - A.y); let d = 0; for (let i = idx[k]; i <= idx[k + 1]; i++) d = Math.max(d, segDist(q[i], A, B)); if (d > Math.max(sl * 0.09, tolPx * 1.4)) straight = false; }
+      if (sharp && straight && polyErr(q, v, false) < Math.max(diag * 0.02, tolPx * 0.7)) { pl = v; break; }
     }
-    return null; // a free curve: keep the stroke as drawn
+    if (pl && !(arcOk && rmsArc < polyErr(q, pl, false) * 0.8)) return { type: 'poly', pts: pl, closed: false };
+    if (arcOk) return { type: 'arc', x1: a.x, y1: a.y, x2: b.x, y2: b.y, mx: mid.x, my: mid.y };
+    return (detectShape.why = 4, null); // a free curve: keep the stroke as drawn
   }
-  // closed: polygon with sharp corners, else an (optionally rotated) ellipse that fits well
-  const loop = q.slice(0, -1);
-  let far = 0; for (let i = 1; i < loop.length; i++) if (Math.hypot(loop[i].x - a.x, loop[i].y - a.y) > Math.hypot(loop[far].x - a.x, loop[far].y - a.y)) far = i;
-  const idx = [0]; rdp(loop.concat([loop[0]]), 0, far, diag * 0.06, idx); idx.push(far); rdp(loop.concat([loop[0]]), far, loop.length, diag * 0.06, idx);
-  let verts = [...new Set(idx.filter((i) => i < loop.length))].sort((m, n) => m - n).map((i) => loop[i]);
-  // the stroke usually starts mid-edge: drop "corners" that are really straight
-  for (let changed = true; changed && verts.length > 3;) {
-    changed = false;
-    for (let i = 0; i < verts.length; i++) { const n = verts.length; if (angleAt(verts[(i + n - 1) % n], verts[i], verts[(i + 1) % n]) > 158) { verts.splice(i, 1); changed = true; break; } }
-  }
-  if (verts.length >= 3 && verts.length <= 6) {
-    const n = verts.length, ang = verts.map((p, i) => angleAt(verts[(i + n - 1) % n], p, verts[(i + 1) % n]));
-    if (ang.every((x) => x < 150)) {
-      if (n === 4 && ang.every((x) => Math.abs(x - 90) < 18)) return { type: 'poly', pts: verts, closed: true, rect: true };
-      return { type: 'poly', pts: verts, closed: true };
-    }
-  }
-  // ellipse from the second moments of the outline, accepted only if the outline really fits
-  let cx = 0, cy = 0; for (const p of loop) { cx += p.x; cy += p.y; } cx /= loop.length; cy /= loop.length;
+  // ── closed ──
+  const M = loop.length;
+  let cx = 0, cy = 0; for (const p of loop) { cx += p.x; cy += p.y; } cx /= M; cy /= M;
+  let meanR = 0; for (const p of loop) meanR += Math.hypot(p.x - cx, p.y - cy); meanR /= M;
+  // it has to go round its centre once (a figure-eight or a scribble does not)
+  { let wind = 0, prevA = Math.atan2(loop[0].y - cy, loop[0].x - cx);
+    for (let i = 1; i <= M; i++) { const p1 = loop[i % M], an = Math.atan2(p1.y - cy, p1.x - cx); let d = an - prevA; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU; wind += d; prevA = an; }
+    if (Math.abs(Math.abs(wind) - TAU) > 0.6) return (detectShape.why = 5, null); }
+  // ellipse from the second moments of the outline
   let sxx = 0, syy = 0, sxy = 0; for (const p of loop) { const dx = p.x - cx, dy = p.y - cy; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
-  sxx /= loop.length; syy /= loop.length; sxy /= loop.length;
+  sxx /= M; syy /= M; sxy /= M;
   const tr = sxx + syy, det = sxx * syy - sxy * sxy, disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
   const l1 = tr / 2 + disc, l2 = Math.max(1e-9, tr / 2 - disc), rot = 0.5 * Math.atan2(2 * sxy, sxx - syy);
   let rx = Math.sqrt(2 * l1), ry = Math.sqrt(2 * l2);
-  let err = 0; const c0 = Math.cos(-rot), s0 = Math.sin(-rot);
-  for (const p of loop) { const dx = p.x - cx, dy = p.y - cy, u = dx * c0 - dy * s0, v = dx * s0 + dy * c0; err += Math.abs(Math.hypot(u / rx, v / ry) - 1); }
-  err /= loop.length;
-  if (err > 0.1) return null;
-  // nearly round → a circle; nearly axis-aligned → no tilt
-  if (Math.abs(rx - ry) < Math.max(rx, ry) * 0.08) rx = ry = (rx + ry) / 2;
-  const deg = ((rot * 180 / Math.PI) % 180 + 180) % 180;
-  const r2 = Math.min(deg, 180 - deg) < 6 || Math.abs(deg - 90) < 6 ? (Math.abs(deg - 90) < 6 ? Math.PI / 2 : 0) : rot;
-  return { type: 'ellipse', cx, cy, rx, ry, rot: r2 };
+  let errE = 0; const c0 = Math.cos(-rot), s0 = Math.sin(-rot);
+  for (const p of loop) { const dx = p.x - cx, dy = p.y - cy, u = dx * c0 - dy * s0, v = dx * s0 + dy * c0; errE += Math.abs(Math.hypot(u / rx, v / ry) - 1) * Math.hypot(dx, dy); }
+  errE /= M * meanR; // ≈ mean distance from the ellipse ÷ mean radius
+  // simplest polygon that fits: corners from coarse to fine
+  const ring = loop.concat([loop[0]]);
+  let far = 0; for (let i = 1; i < M; i++) if (Math.hypot(loop[i].x - loop[0].x, loop[i].y - loop[0].y) > Math.hypot(loop[far].x - loop[0].x, loop[far].y - loop[0].y)) far = i;
+  let poly = null, errP = Infinity;
+  for (const f of [0.1, 0.075, 0.055, 0.04]) {
+    const idx = [0]; rdp(ring, 0, far, diag * f, idx); idx.push(far); rdp(ring, far, M, diag * f, idx);
+    let v = [...new Set(idx.filter((i) => i < M))].sort((m, n) => m - n).map((i) => loop[i]);
+    // the stroke usually starts mid-edge: drop "corners" that are really straight
+    for (let ch = true; ch && v.length > 3;) { ch = false; for (let i = 0; i < v.length; i++) { const n = v.length; if (angleAt(v[(i + n - 1) % n], v[i], v[(i + 1) % n]) > 152) { v.splice(i, 1); ch = true; break; } } }
+    if (v.length < 3 || v.length > 6) continue;
+    const e = polyErr(loop, v, true) / meanR;
+    if (e < 0.05) { poly = v; errP = e; break; }
+    if (e < errP) { poly = v; errP = e; }
+  }
+  // corners must be corners: the outline is straight between them (a circle cut into 6 chords bulges)
+  const usePoly = poly && errP < 0.06 && (errP < errE * 0.75 || errE > 0.09);
+  if (!usePoly) {
+    if (errE > 0.12) return poly && errP < 0.075 ? { type: 'poly', pts: poly, closed: true } : null;
+    if (Math.abs(rx - ry) < Math.max(rx, ry) * 0.1) rx = ry = (rx + ry) / 2; // nearly round → a circle
+    const deg = ((rot * 180 / Math.PI) % 180 + 180) % 180;
+    const r2 = Math.min(deg, 180 - deg) < 7 || Math.abs(deg - 90) < 7 ? (Math.abs(deg - 90) < 7 ? Math.PI / 2 : 0) : rot;
+    return { type: 'ellipse', cx, cy, rx, ry, rot: r2 };
+  }
+  // refine the corners: least-squares line through each side's points, corners where they cross
+  {
+    const n = poly.length, lines = [];
+    const at = poly.map((v) => loop.indexOf(v));
+    for (let i = 0; i < n; i++) {
+      let i0 = at[i], i1 = at[(i + 1) % n]; if (i1 <= i0) i1 += M;
+      const span = i1 - i0, trim = Math.max(1, Math.round(span * 0.15)); // keep clear of the rounded corners
+      let mx = 0, my = 0, cnt = 0; const ptsS = [];
+      for (let k = i0 + trim; k <= i1 - trim; k++) { const p = loop[k % M]; ptsS.push(p); mx += p.x; my += p.y; cnt++; }
+      if (cnt < 2) { lines.push(null); continue; }
+      mx /= cnt; my /= cnt; let uu = 0, vv = 0, uv = 0; for (const p of ptsS) { uu += (p.x - mx) ** 2; vv += (p.y - my) ** 2; uv += (p.x - mx) * (p.y - my); }
+      const th = 0.5 * Math.atan2(2 * uv, uu - vv); lines.push({ x: mx, y: my, dx: Math.cos(th), dy: Math.sin(th) });
+    }
+    if (lines.every(Boolean)) {
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const A = lines[(i + n - 1) % n], B = lines[i], den = A.dx * B.dy - A.dy * B.dx;
+        if (Math.abs(den) < 1e-6) { out.push(poly[i]); continue; }
+        const t = ((B.x - A.x) * B.dy - (B.y - A.y) * B.dx) / den, X = { x: A.x + A.dx * t, y: A.y + A.dy * t };
+        out.push(Math.hypot(X.x - poly[i].x, X.y - poly[i].y) < diag * 0.12 ? X : poly[i]);
+      }
+      poly = out;
+    }
+  }
+  const n = poly.length, ang = poly.map((pt, i) => angleAt(poly[(i + n - 1) % n], pt, poly[(i + 1) % n]));
+  if (n === 4 && ang.every((x) => Math.abs(x - 90) < 20)) {
+    // a true rectangle: the sides' common direction, then the extents along it
+    let sx2 = 0, sy2 = 0;
+    for (let i = 0; i < 4; i++) { const e = { x: poly[(i + 1) % 4].x - poly[i].x, y: poly[(i + 1) % 4].y - poly[i].y }, L = Math.hypot(e.x, e.y), t4 = Math.atan2(e.y, e.x) * 4; sx2 += Math.cos(t4) * L; sy2 += Math.sin(t4) * L; }
+    let th = Math.atan2(sy2, sx2) / 4;
+    const dg = th * 180 / Math.PI, near = Math.round(dg / 90) * 90; if (Math.abs(dg - near) < 6) th = near * Math.PI / 180; // level it
+    const ux = Math.cos(th), uy = Math.sin(th), pc = poly.reduce((s2, q2) => ({ x: s2.x + q2.x / 4, y: s2.y + q2.y / 4 }), { x: 0, y: 0 });
+    let hw = 0, hh = 0; for (const q2 of poly) { hw += Math.abs((q2.x - pc.x) * ux + (q2.y - pc.y) * uy) / 4; hh += Math.abs(-(q2.x - pc.x) * uy + (q2.y - pc.y) * ux) / 4; }
+    if (Math.abs(hw - hh) < Math.max(hw, hh) * 0.07) hw = hh = (hw + hh) / 2; // nearly square → square
+    const R = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => ({ x: pc.x + ux * hw * i - uy * hh * j, y: pc.y + uy * hw * i + ux * hh * j }));
+    return { type: 'poly', pts: R, closed: true, rect: true };
+  }
+  return { type: 'poly', pts: poly, closed: true };
 }
 
 export function shapePoints(sh, p = 1) {
