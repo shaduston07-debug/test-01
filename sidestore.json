@@ -1,0 +1,35 @@
+{
+ "name": "Inkwell",
+ "identifier": "io.github.shaduston07-debug.test-01.inkwell",
+ "subtitle": "Inkwell Studio for iPad",
+ "iconURL": "https://shaduston07-debug.github.io/test-01/icons/icon-512.png",
+ "website": "https://github.com/shaduston07-debug/test-01",
+ "tintColor": "#7b5cff",
+ "apps": [
+  {
+   "name": "Inkwell Studio",
+   "bundleIdentifier": "com.inkwell.studio",
+   "developerName": "Inkwell",
+   "subtitle": "Paint, animate and make webtoons",
+   "iconURL": "https://shaduston07-debug.github.io/test-01/icons/icon-512.png",
+   "tintColor": "#7b5cff",
+   "localizedDescription": "Painting, animation and webtoon app with Inkwell Learning courses.",
+   "versions": [
+    {
+     "version": "1.0.96",
+     "buildVersion": "96",
+     "date": "2026-11-14T00:38:16Z",
+     "localizedDescription": "Build 96 from 3c92ac5",
+     "downloadURL": "https://github.com/shaduston07-debug/test-01/releases/download/latest/InkwellStudio.ipa",
+     "size": 40648760,
+     "minOSVersion": "15.0"
+    }
+   ],
+   "appPermissions": {
+    "entitlements": [],
+    "privacy": {}
+   }
+  }
+ ],
+ "news": []
+}
