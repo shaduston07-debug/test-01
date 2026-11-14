@@ -3,6 +3,7 @@
 // lighting for the colour lessons, real per-pixel grading, real timing curves for animation.
 // Each demo is (host, opts) => cleanup.
 import { h } from '../util.js';
+import { sakugaPlayer } from './sakuga.js';
 
 // ───────── shared helpers ─────────
 function stage(host, W, H, { cls = '' } = {}) {
@@ -1647,6 +1648,7 @@ export const DEMOS = {
   'light-sphere': lightSphere, harmony, 'value-hue': valueVsHue,
   grading: (el) => grading(el), 'grade-match': (el) => grading(el, { match: true }),
   ball: bouncingBall, spacing: spacingChart, arcs, anticipation, overlap, walk: walkCycle, 'ones-twos': onesTwos,
+  'sakuga': sakugaPlayer,
   'fight-hit': fightHit, 'fight-flow': fightFlow, 'fight-snap': fightSnap, 'fight-choreo': fightChoreo,
   'webtoon-scroll': webtoonScroll, 'dialogue-order': dialogueOrder, slicing, pipeline: coloringPipeline,
 };
