@@ -8,6 +8,20 @@ import { Track } from './doc.js';
 
 const CELL = 28;
 
+// does a drawing have any paint? cached per canvas until it changes (history bumps _ver)
+function hasInk(c) {
+  if (!c) return false;
+  const v = c._ver || 0;
+  if (c._inkVer === v && c._ink != null) return c._ink;
+  let ink = false;
+  try {
+    const d = new Uint32Array(c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, c.width, c.height).data.buffer);
+    for (let i = 0; i < d.length; i++) if (d[i] >>> 24) { ink = true; break; } // alpha byte (little-endian RGBA)
+  } catch { ink = true; }
+  c._ink = ink; c._inkVer = v;
+  return ink;
+}
+
 export class Timeline {
   constructor(app) {
     this.app = app;
@@ -262,16 +276,17 @@ export class Timeline {
 
   // ── playback ──
   toggle() { this.playing ? this.stop() : this.play(); }
-  // last frame that has drawings or motion: playback stops / loops there instead of running on
-  // through empty frames up to the timeline length. A track that is one held drawing (a
-  // background or the exercise guide) or a hidden / draft track doesn't stretch it.
+  // The last frame that shows a drawing: playback stops / loops there instead of running on
+  // through empty frames (empty frame slots don't count). A track that is one held drawing
+  // (a background or the exercise guide) or a hidden / draft track doesn't stretch it.
   playEnd() {
     const d = this.doc, L = d.anim.length;
     let end = 0, any = 0;
     for (const t of d.tracks) {
       if (!t.visible) continue;
-      const ce = t.cels.length ? Math.max(...t.cels.map((c) => c.start + c.dur)) : 0;
-      const ke = t.keys && t.keys.length ? Math.max(...t.keys.map((k) => k.f + 1)) : 0;
+      const inked = t.cels.filter((c) => hasInk(c.canvas));
+      const ce = inked.length ? Math.max(...inked.map((c) => c.start + c.dur)) : 0;
+      const ke = inked.length && t.keys && t.keys.length ? Math.max(...t.keys.map((k) => k.f + 1)) : 0;
       any = Math.max(any, ce, ke);
       if (t.draft || (t.cels.length <= 1 && (!t.keys || t.keys.length <= 1))) continue;
       end = Math.max(end, ce, ke);
