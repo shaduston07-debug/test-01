@@ -7,6 +7,7 @@ import { withUndo, touch } from './history.js';
 import { openPopover, closePopover, openColor } from './ui.js';
 import { blendDraw, isCustomBlend } from './blendgl.js';
 
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 // the layers panel's current multi-selection (swiped rows), for other tools
 let pickedRef = null;
 export function pickedLayers(app) { const d = app.doc; return pickedRef ? [...pickedRef].filter((x) => d.items.includes(x)) : []; }
@@ -226,7 +227,7 @@ export function openLayers(app, anchor) {
       row = h('div', { class: 'layer-row group' + (on ? ' on' : '') + (picked.has(it) ? ' picked' : '') }, chev, h('div', { class: 'layer-name' }, h('b', {}, it.name), h('small', {}, `${n} layer${n === 1 ? '' : 's'}${it.opacity < 1 ? ' · ' + pct(it.opacity) : ''}`)), vis);
     } else {
       const tags = [it.locked && '🔒 locked', it.draft && 'draft', it.private && 'private', it.alphaLock && 'α-lock', it.reference && 'reference', it.panelMask && 'panel mask', it.clip && 'clip', it.border && 'border', it.express === 'gray' && 'gray', it.express === 'mono' && 'mono'].filter(Boolean).join(' · ');
-      const sub = it.type === '3d' ? `3D · ${it.scene3d ? it.scene3d.objects.length : 0} object${it.scene3d && it.scene3d.objects.length === 1 ? '' : 's'}` : it.type === 'frames' ? `${it.panels.length} panels` : it.type === 'balloons' ? `${it.balloons.length} balloons` : it.type === 'track' ? `${it.cels.length} drawings · ${it.keys.length} keys` : (tags || (it.opacity < 1 ? pct(it.opacity) : ''));
+      const sub = it.type === '3d' ? `3D · ${it.scene3d ? it.scene3d.objects.length : 0} object${it.scene3d && it.scene3d.objects.length === 1 ? '' : 's'}` : it.type === 'frames' ? plural(it.panels.length, 'panel') : it.type === 'balloons' ? plural(it.balloons.length, 'balloon') : it.type === 'track' ? `${plural(it.cels.length, 'drawing')} · ${plural(it.keys.length, 'key')}` : (tags || (it.opacity < 1 ? pct(it.opacity) : ''));
       const canTint = it.type === 'raster' || it.type === 'track';
       const tintBtn = canTint ? h('button', { class: 'layer-tint' + (it.tint ? ' on' : ''), title: 'Layer colour', style: it.tint ? { background: it.tint } : {}, onclick: (e) => { e.stopPropagation(); d.active = i; render(); openTint(it); } }) : null;
       const blendBtn = h('button', { class: 'layer-blend', title: 'Blend mode & opacity', onclick: (e) => { e.stopPropagation(); d.active = i; render(); openBlend(it); } }, it.type === 'raster' || it.type === 'track' ? blendShort(it.blend) : '');

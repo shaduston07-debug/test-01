@@ -386,7 +386,7 @@ export class Timeline {
     const c = makeCanvas(w, hgt), x = c.getContext('2d');
     x.scale(w / this.doc.width, hgt / this.doc.height);
     if (bg && !this.doc.bgVisible) { x.fillStyle = '#fff'; x.fillRect(0, 0, this.doc.width, this.doc.height); }
-    this.doc.composite(x, { frame: f });
+    this.doc.composite(x, { frame: f, drafts: false }); // draft tracks (exercise guides) stay out of exports
     return c;
   }
 
@@ -405,9 +405,9 @@ export class Timeline {
     this.sizeDialog('Export GIF', 640, async (w, hgt) => {
       toast('Encoding GIF…', 20000);
       await new Promise((r) => setTimeout(r, 30));
-      const a = this.doc.anim, frames = [];
-      for (let f = 0; f < a.length; f++) frames.push(this.renderFrame(f, w, hgt, this.doc.bgVisible).getContext('2d').getImageData(0, 0, w, hgt));
-      if (a.loop === 'pingpong') for (let f = a.length - 2; f > 0; f--) frames.push(frames[f]);
+      const a = this.doc.anim, frames = [], E = this.playEnd(); // up to the last drawn frame
+      for (let f = 0; f < E; f++) frames.push(this.renderFrame(f, w, hgt, this.doc.bgVisible).getContext('2d').getImageData(0, 0, w, hgt));
+      if (a.loop === 'pingpong') for (let f = E - 2; f > 0; f--) frames.push(frames[f]);
       const delay = Math.max(2, Math.round(100 / a.fps)), loop = a.loop !== 'once';
       let bytes;
       try {
@@ -425,7 +425,7 @@ export class Timeline {
     this.sizeDialog('Export PNG frames', this.doc.width, async (w, hgt) => {
       toast('Rendering frames…', 20000);
       const JSZip = await UI.loadZip(), zip = new JSZip();
-      for (let f = 0; f < this.doc.anim.length; f++) zip.file(`frame_${String(f + 1).padStart(4, '0')}.png`, await canvasToBlob(this.renderFrame(f, w, hgt, false)));
+      for (let f = 0, E = this.playEnd(); f < E; f++) zip.file(`frame_${String(f + 1).padStart(4, '0')}.png`, await canvasToBlob(this.renderFrame(f, w, hgt, false)));
       download(await zip.generateAsync({ type: 'blob' }), (this.doc.name || 'animation') + ' frames.zip');
       toast('Frames exported');
     });
@@ -447,12 +447,13 @@ export class Timeline {
       const chunks = [];
       rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       const done = new Promise((r) => (rec.onstop = r));
-      const seq = [];
+      const seq = [], E = this.playEnd(); // up to the last drawn frame
       for (let l = 0; l < loops; l++) {
-        for (let f = 0; f < a.length; f++) seq.push(f);
-        if (a.loop === 'pingpong') for (let f = a.length - 2; f > 0; f--) seq.push(f);
+        for (let f = 0; f < E; f++) seq.push(f);
+        if (a.loop === 'pingpong') for (let f = E - 2; f > 0; f--) seq.push(f);
       }
-      const frames = seq.map((f) => this.renderFrame(f, w, hgt));
+      // each frame is rendered once, however often it repeats
+      const once = new Map(), frames = seq.map((f) => { if (!once.has(f)) once.set(f, this.renderFrame(f, w, hgt)); return once.get(f); });
       toast(`Recording video (${(seq.length / a.fps).toFixed(1)} s)…`, seq.length / a.fps * 1000 + 2000);
       x.drawImage(frames[0], 0, 0);
       rec.start();

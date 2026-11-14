@@ -1,0 +1,99 @@
+/* Classic studio layout (hidden switch: tap the "Inkwell Studio" logo in the Gallery).
+   A desktop paint-program workspace in the manner of Clip Studio Paint: flat grey docked
+   panels, a command bar across the top, the tool palette and brush sliders down the left,
+   tool options under the command bar, Colours and Layers docked on the right.
+   Everything is the same app underneath; tapping the logo again returns to the glass layout. */
+body.classic-ui {
+  --bg: #2b2b2d;
+  --work: #58585c;
+  --glass: #3a3a3d;
+  --glass-strong: #3a3a3d;
+  --glass-edge: #1e1e20;
+  --glass-hi: rgba(255, 255, 255, 0.06);
+  --blur: none;
+  --fill-1: #4a4a4e;
+  --fill-2: #5a5a5f;
+  --line: #242426;
+  --radius: 3px;
+  --c-bar: 38px;        /* command bar height */
+  --c-tools: 46px;      /* tool palette width */
+  --c-sliders: 46px;    /* brush size / opacity column */
+  --c-dock: 292px;      /* right dock width */
+  --c-opts: 44px;       /* tool options strip height */
+  font-size: 13px;
+}
+body.classic-ui .glass, body.classic-ui #topbar .tb-left, body.classic-ui #topbar .tb-right, body.classic-ui #sidebar, body.classic-ui #ctxbar, body.classic-ui #popover,
+body.classic-ui .float-win, body.classic-ui .side-sheet, body.classic-ui .blend-pop, body.classic-ui .modal, body.classic-ui #timeline, body.classic-ui #hud, body.classic-ui #toast,
+body.classic-ui #slider-bubble, body.classic-ui .mode-card, body.classic-ui .app-tabs {
+  background: var(--glass); background-image: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  border: 1px solid var(--glass-edge); border-radius: 3px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+body.classic-ui .ico, body.classic-ui .pill, body.classic-ui .cb-btn, body.classic-ui .small-btn, body.classic-ui .icon-btn, body.classic-ui .seg, body.classic-ui .seg button,
+body.classic-ui .sb-btn, body.classic-ui .sb-mod, body.classic-ui .layer-row, body.classic-ui .gal-thumb, body.classic-ui .gal-card, body.classic-ui .text-in, body.classic-ui .preset,
+body.classic-ui .menu-item, body.classic-ui .tb-text, body.classic-ui .vslider, body.classic-ui .vslider .knob, body.classic-ui .quick-act, body.classic-ui .app-tab, body.classic-ui .badge { border-radius: 3px; }
+body.classic-ui .ico.active { color: #fff; background: var(--accent); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
+body.classic-ui .cb-btn.on, body.classic-ui .seg button.on { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+body.classic-ui .pop-arrow { display: none; }
+body.classic-ui #popover { animation: none; }
+
+/* ── studio: command bar ── */
+body.classic-ui #topbar { top: var(--safe-t); left: 0; right: 0; height: var(--c-bar); background: #2f2f32; border-bottom: 1px solid #1c1c1e; pointer-events: auto; gap: 0; }
+body.classic-ui .tb-title { text-align: left; padding-left: 96px; color: var(--muted); font-size: 12px; }
+body.classic-ui #btn-gallery { position: fixed; top: var(--safe-t); left: var(--safe-l); height: var(--c-bar); padding: 0 12px; font-size: 13px; z-index: 3; }
+body.classic-ui #btn-gallery::before { content: "‹ "; opacity: 0.6; }
+/* ── tool palette (left): painting tools first, then the rest ── */
+body.classic-ui #topbar .tb-right, body.classic-ui #topbar .tb-left {
+  position: fixed; left: var(--safe-l); width: var(--c-tools); flex-direction: column; padding: 4px 0; gap: 2px; border-radius: 0; border-width: 0 1px 0 0; box-shadow: none; background: #37373a;
+}
+body.classic-ui #topbar .tb-right { top: calc(var(--c-bar) + var(--safe-t)); height: 214px; border-bottom: 1px solid #242426; }
+body.classic-ui #topbar .tb-left { top: calc(var(--c-bar) + var(--safe-t) + 214px); bottom: 0; overflow-y: auto; scrollbar-width: none; }
+body.classic-ui .tb-left > span.mode-only { flex-direction: column; gap: 2px; }
+body.classic-ui .tb-sep { width: 26px; height: 1px; margin: 3px 0; }
+body.classic-ui .ico { width: 38px; height: 36px; }
+body.classic-ui .ico svg { width: 21px; height: 21px; }
+body.classic-ui #btn-color { margin: 4px 0 2px; border-radius: 4px; width: 32px; height: 32px; }
+body.classic-ui #btn-color span { border-radius: 2px; }
+/* ── brush size / opacity column ── */
+body.classic-ui #sidebar { top: calc(var(--c-bar) + var(--safe-t)); bottom: 0; transform: none; left: calc(var(--c-tools) + var(--safe-l)); right: auto; width: var(--c-sliders);
+  border-radius: 0; border-width: 0 1px 0 0; box-shadow: none; padding: 10px 0; background: #333336; justify-content: flex-start; }
+body.classic-ui.right-handed #sidebar { left: calc(var(--c-tools) + var(--safe-l)); right: auto; }
+body.classic-ui .vslider { width: 26px; height: 150px; }
+/* ── tool options strip ── */
+body.classic-ui #ctxbar { top: calc(var(--c-bar) + var(--safe-t)); bottom: auto; left: calc(var(--c-tools) + var(--c-sliders) + var(--safe-l)); right: var(--c-dock); transform: none; max-width: none;
+  height: var(--c-opts); border-radius: 0; border-width: 0 0 1px 0; box-shadow: none; padding: 4px 8px; background: #343437; }
+body.classic-ui.mode-animate #ctxbar { bottom: auto; }
+body.classic-ui .cb-btn { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
+/* ── right dock: Colours above, Layers below ── */
+body.classic-ui .float-win[data-key=color], body.classic-ui .float-win[data-key=layers] {
+  left: auto !important; right: var(--safe-r) !important; width: var(--c-dock) !important; max-width: none; border-radius: 0; border-width: 0 0 1px 1px; box-shadow: none; z-index: 6 !important;
+}
+body.classic-ui .float-win[data-key=color] { top: calc(var(--c-bar) + var(--safe-t)) !important; height: calc(52% - var(--c-bar)); max-height: none !important; }
+body.classic-ui .float-win[data-key=layers] { top: 52% !important; bottom: 0; height: auto; max-height: none !important; }
+body.classic-ui.mode-animate .float-win[data-key=layers] { bottom: 200px; }
+body.classic-ui .float-win[data-key=color] .pop-body, body.classic-ui .float-win[data-key=layers] .pop-body { max-height: none; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+body.classic-ui .float-win[data-key=color] .float-head, body.classic-ui .float-win[data-key=layers] .float-head { cursor: default; padding: 5px 8px; background: #2f2f32; border-bottom: 1px solid #1c1c1e; }
+body.classic-ui .float-win[data-key=color] .float-close, body.classic-ui .float-win[data-key=layers] .float-close, body.classic-ui .float-win[data-key] .float-grip { display: none; }
+body.classic-ui .float-head h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+body.classic-ui .layer-row { margin: 0; border-bottom: 1px solid #2a2a2c; border-radius: 0; }
+body.classic-ui .layer-row.on { background: var(--accent); box-shadow: none; }
+/* ── timeline ── */
+body.classic-ui #timeline { left: calc(var(--c-tools) + var(--c-sliders) + var(--safe-l)); right: 0; bottom: 0; border-radius: 0; border-width: 1px 0 0 0; box-shadow: none; }
+body.classic-ui #hud { top: calc(var(--c-bar) + var(--c-opts) + 10px); }
+
+/* ── gallery ── */
+body.classic-ui #gallery, body.classic-ui #learning { background: #333336; }
+body.classic-ui .gal-head { background: #2b2b2d; margin: calc(-18px - var(--safe-t)) calc(-28px - var(--safe-r)) 16px calc(-28px - var(--safe-l)); padding: calc(8px + var(--safe-t)) 16px 8px; border-bottom: 1px solid #1c1c1e; }
+body.classic-ui .brand { font-size: 17px; gap: 8px; }
+body.classic-ui .brand .logo { width: 22px; height: 22px; }
+body.classic-ui .gal-modes { gap: 0; margin-bottom: 16px; border-bottom: 1px solid #1c1c1e; grid-template-columns: repeat(3, max-content); }
+body.classic-ui .mode-card { padding: 8px 18px 8px 10px; grid-template-columns: 22px 1fr; column-gap: 8px; border-width: 1px 1px 0 1px; box-shadow: none; background: #2f2f32; }
+body.classic-ui .mode-card.on { background: #47474b; box-shadow: inset 0 2px 0 var(--accent); border-color: #1e1e20; }
+body.classic-ui .mode-card small { display: none; }
+body.classic-ui .mode-card b { font-size: 13px; }
+body.classic-ui .mode-card .mc-count { position: static; grid-column: 2; font-size: 11px; }
+body.classic-ui .mc-ico { width: 22px; height: 22px; border-radius: 3px; }
+body.classic-ui .gal-thumb { box-shadow: 0 0 0 1px #1c1c1e; }
+body.classic-ui .pill { background: #4a4a4e; border: 1px solid #1e1e20; min-height: 30px; padding: 0 12px; font-size: 12.5px; }
+body.classic-ui .pill.primary { background: var(--accent); }
+
+@media (max-width: 900px) { body.classic-ui { --c-dock: 240px; } }

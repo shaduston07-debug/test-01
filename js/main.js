@@ -138,8 +138,27 @@ class App {
     // undo history may use about a third of the memory budget (≈700 MB on an 8 GB iPad)
     if (this.history) this.history.maxBytes = Math.max(260e6, (this.settings.memoryMB || 1000) * 1e6 * 0.35);
     document.body.classList.toggle('right-handed', !!this.settings.rightHanded);
-    document.body.classList.toggle('solid-ui', !!this.settings.solidUI);
+    // interface style: 'glass' (default), 'liquid' (clear liquid glass) or 'solid' (no transparency)
+    const st = this.settings.uiStyle || (this.settings.solidUI ? 'solid' : 'glass');
+    document.body.classList.toggle('solid-ui', st === 'solid');
+    document.body.classList.toggle('liquid-ui', st === 'liquid');
+    document.body.classList.toggle('classic-ui', !!this.settings.classicUI);
+    // accent: the colour of selected tools, the active layer and primary buttons
+    const ac = /^#[0-9a-f]{6}$/i.test(this.settings.accent || '') ? this.settings.accent : '#2f7dff';
+    const [r, g, b] = hexToRgb(ac), lite = [r, g, b].map((v) => Math.round(v + (255 - v) * 0.38));
+    const rs = document.documentElement.style;
+    rs.setProperty('--accent', ac); rs.setProperty('--accent-rgb', `${r}, ${g}, ${b}`);
+    rs.setProperty('--accent-2', rgbToHex(...lite)); rs.setProperty('--accent-2-rgb', lite.join(', '));
+    rs.setProperty('--on-accent', r * 0.299 + g * 0.587 + b * 0.114 > 170 ? '#111' : '#fff');
     store.prefs.set('settings', this.settings);
+  }
+
+  toggleClassic() {
+    this.settings.classicUI = !this.settings.classicUI;
+    this.applySettings();
+    UI.dockClassic(this);
+    if (this.doc) { this.fitView(); this.requestRender('view'); }
+    toast(this.settings.classicUI ? 'Classic studio layout' : 'Inkwell layout', 1400);
   }
 
   buildChrome() {
@@ -193,6 +212,9 @@ class App {
     $('#gal-folder').onclick = () => UI.createFolderFlow(this);
     $('#gal-settings').onclick = () => UI.openSettings(this);
     for (const c of $$('.mode-card')) c.onclick = () => UI.setGalTab(this, c.dataset.mode);
+    // hidden switch: the logo toggles the classic docked layout
+    const brand = $('#gallery .brand');
+    if (brand) brand.onclick = () => this.toggleClassic();
     this.updateColorChip();
   }
 
@@ -237,6 +259,7 @@ class App {
     this.history.clear();
     this.transform = null;
     $('#gallery').hidden = true; $('#learning').hidden = true; $('#studio').hidden = false;
+    setTimeout(() => UI.dockClassic(this), 0); // classic layout: Colours + Layers docked
     document.body.classList.remove('mode-paint', 'mode-animate', 'mode-webtoon');
     document.body.classList.add('mode-' + doc.mode);
     $('#doc-title').textContent = doc.name;
@@ -245,6 +268,9 @@ class App {
     if (this.tool === 'panel' && doc.mode !== 'webtoon') this.tool = 'brush';
     if (['balloon', '3d'].includes(this.tool) && doc.mode === 'animate') this.tool = 'brush';
     if (this.tool === 'move' && doc.mode !== 'animate') this.tool = 'brush';
+    // tools that act as soon as they are entered (the 3D tool adds a 3D layer, Transform lifts
+    // the layer's pixels) must not carry over from the previous canvas into a newly opened one
+    if (['3d', 'transform', 'liquify'].includes(this.tool)) { const o = this.tools[this.tool]; if (o) o.entered = false; this.tool = 'brush'; }
     this.setTool(this.tool);
     this.timeline.mount(doc.mode === 'animate');
     this.tlapse.attach(doc);
@@ -441,15 +467,18 @@ class App {
 
   fitView(o = {}) {
     if (!this.doc) return;
-    const d = this.doc, top = 70, bottom = d.mode === 'animate' ? 210 : 20, side = 70;
+    // the classic layout docks panels around the canvas: fit into what is left
+    const cl = !!this.settings.classicUI, wide = this.vw > 900;
+    const d = this.doc, top = cl ? 96 : 70, bottom = d.mode === 'animate' ? 210 : 20, side = 70;
+    const sideL = cl ? 104 : side, sideR = cl ? (wide ? 304 : 252) : side;
     // webtoon: fit the width but stay at the part of the strip being worked on
     const keepY = o.keepPlace && d.mode === 'webtoon' && this.view ? this.screenToDoc(this.vw / 2, (o.at && o.at.y) || this.vh / 2).y : null;
-    const aw = this.vw - side * 2, ah = this.vh - top - bottom;
+    const aw = Math.max(120, this.vw - sideL - sideR), ah = this.vh - top - bottom;
     let z;
     if (d.mode === 'webtoon') z = Math.min(aw / d.width, 1.2);
     else z = Math.min(aw / d.width, ah / d.height);
     this.view = { x: 0, y: 0, zoom: z, rot: 0, flip: this.view.flip || 1 };
-    const cx = this.vw / 2, cy = d.mode === 'webtoon' ? top + (d.width * z * 0.0) : top + ah / 2;
+    const cx = sideL + aw / 2, cy = d.mode === 'webtoon' ? top + (d.width * z * 0.0) : top + ah / 2;
     if (d.mode === 'webtoon' && keepY != null) this.setViewAt({ x: d.width / 2, y: clamp(keepY, 0, d.height) }, { x: cx, y: (o.at && o.at.y) || this.vh / 2 });
     else if (d.mode === 'webtoon') this.setViewAt({ x: d.width / 2, y: 0 }, { x: cx, y: top + 10 });
     else this.setViewAt({ x: d.width / 2, y: d.height / 2 }, { x: cx, y: cy });
@@ -1096,7 +1125,7 @@ class App {
     const ctx = this.ctx, d = this.doc, v = this.view, dpr = this.dpr;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#2a2a2e'; ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.fillStyle = this.settings.classicUI ? '#58585c' : '#2a2a2e'; ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     const m = this.viewMatrix();
     ctx.setTransform(dpr * m.a, dpr * m.b, dpr * m.c, dpr * m.d, dpr * m.e, dpr * m.f);
     // paper + cheap shadow (shadowBlur on a big rect is very slow in Safari)
@@ -1303,13 +1332,13 @@ class App {
         // perspective guide with Snap on: the stroke follows the nearest guide direction
         // (a finger on the screen while drawing = free stroke)
         const g = d.persp;
-        this.pSnap = kind !== 'smudge' && g && g.snap && g.visible && app.touchesDown() === 0 ? perspSnapper(app, g, p) : null;
+        this.pSnap = kind !== 'smudge' && !app.engine.mix && g && g.snap && g.visible && app.touchesDown() === 0 ? perspSnapper(app, g, p) : null;
         app.engine.add(p);
         if (!this.pSnap) this.armQuickShape(p);
       },
       armQuickShape(p) {
         clearTimeout(this.qs);
-        if (!app.settings.quickShape || kind === 'smudge') return;
+        if (!app.settings.quickShape || kind === 'smudge' || app.engine.mix) return;
         this.qs = setTimeout(() => this.snap(), app.settings.quickShapeDelay);
       },
       move(p) {

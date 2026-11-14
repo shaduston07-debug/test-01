@@ -94,6 +94,7 @@ function makeFloat(key, title, width, headBox, bodyEl, onClose, rect) {
   const close = h('button', { class: 'float-close', title: 'Close', onclick: () => closeFloat(key) }, '×');
   const bar = h('div', { class: 'float-head' }, h('span', { class: 'float-grip' }), h('h3', {}, title), headBox, close);
   const win = h('div', { class: 'float-win' }, bar, bodyEl);
+  win.dataset.key = key;
   win.style.width = Math.min(width, innerWidth - 16) + 'px';
   const place = (x, y) => {
     const w = win.offsetWidth || width, hh = win.offsetHeight || 200;
@@ -108,6 +109,7 @@ function makeFloat(key, title, width, headBox, bodyEl, onClose, rect) {
   let st = null;
   bar.addEventListener('pointerdown', (e) => {
     if (e.target.closest('button, input, select')) return;
+    if (document.body.classList.contains('classic-ui') && (key === 'layers' || key === 'color')) return; // docked
     e.preventDefault(); bar.setPointerCapture(e.pointerId);
     st = { x: e.clientX, y: e.clientY, l: win.offsetLeft, t: win.offsetTop };
     bringToFront(win);
@@ -125,6 +127,19 @@ export function closeFloat(key) {
   const f = floats.get(key); if (!f) return;
   floats.delete(key); f.el.remove(); f.onClose && f.onClose();
 }
+// Classic layout: Colours and Layers sit docked on the right (they are the floating windows,
+// placed by css/classic.css). Leaving the layout closes the docked copies again.
+export function dockClassic(app) {
+  const on = document.body.classList.contains('classic-ui');
+  if (!on) { if (dockClassic.made) { closeFloat('layers'); closeFloat('color'); dockClassic.made = false; } return; }
+  if (!app.doc || $('#studio').hidden) return;
+  const pin = () => { const b = document.querySelector('#popover [title^="Float"]'); if (b) b.click(); else closePopover(); };
+  if (!floats.has('color')) { closePopover(); openColor(app, $('#btn-color')); pin(); }
+  if (floats.has('layers')) closeFloat('layers'); // rebuilt for the canvas that is open now
+  closePopover(); openLayers(app, $('#btn-layers')); pin();
+  dockClassic.made = true;
+}
+export const floatOpen = (key) => floats.has(key);
 // open a panel directly as a floating window (e.g. the Reference companion)
 export function openFloating(key, title, { width = 320, head = [], body, onClose }) {
   if (floats.has(key)) return;
@@ -836,6 +851,7 @@ export function openBrushStudio(app, base, asNew = false) {
     section('Grain', h('div', { class: 'field' }, h('label', {}, 'Texture'), h('span'), grainSel), num('grainScale', 'Scale', 0.2, 5, 0.05), num('grainDepth', 'Depth', 0, 1, 0.01)),
     section('Dynamics (Apple Pencil)', num('sizePressure', 'Pressure → size', 0, 1, 0.01), num('minSize', 'Minimum size', 0, 1, 0.01), num('opacityPressure', 'Pressure → opacity', 0, 1, 0.01), num('flowPressure', 'Pressure → flow', 0, 1, 0.01), num('tiltSize', 'Tilt → size (shading)', 0, 4, 0.05), num('tiltOpacity', 'Tilt → opacity', 0, 1, 0.01),
       num('speedSize', 'Speed → thinner', 0, 1, 0.01), num('speedOpacity', 'Speed → lighter', 0, 1, 0.01), sw('taperAlways', 'Taper also with Apple Pencil')),
+    section('Colour mixing (painterly)', sw('mixOn', 'Mix with the paint on the layer'), num('mixPaint', 'Amount of paint', 0, 1, 0.01), num('mixDensity', 'Density of paint', 0, 1, 0.01), num('mixStretch', 'Colour stretch', 0, 1, 0.01)),
     section('Properties', h('div', { class: 'field' }, h('label', {}, 'Name'), h('span'), name), h('div', { class: 'field' }, h('label', {}, 'Category'), h('span'), catIn), num('flow', 'Flow (build-up)', 0.01, 1, 0.01), num('opacity', 'Default opacity', 0.01, 1, 0.01), num('maxSize', 'Max size (px)', 2, 1000, 1, (v) => Math.round(v)), num('size', 'Default size (px)', 1, 1000, 1, (v) => Math.round(v)), num('smudgeStrength', 'Smudge strength', 0, 1, 0.01)),
   );
   // drawing pad
@@ -1268,13 +1284,31 @@ export function sharePenLog(blob) {
     actions: [{ label: 'Close' }, { label: 'Share recording', primary: true, onClick: () => download(blob, 'inkwell-pencil-recording.json') }] });
 }
 
+// accent colour: presets plus any custom colour
+const ACCENTS = ['#2f7dff', '#0a84ff', '#5e5ce6', '#bf5af2', '#ff375f', '#ff453a', '#ff9f0a', '#ffd60a', '#30d158', '#40c8e0', '#8e8e93', '#f5f5f7'];
+function accentRow(s, save) {
+  const row = h('div', { class: 'accent-row' });
+  const draw = () => {
+    row.innerHTML = '';
+    const cur = (s.accent || '#2f7dff').toLowerCase();
+    for (const c of ACCENTS) row.append(h('button', { class: 'accent-sw' + (c === cur ? ' on' : ''), style: { background: c }, title: c, onclick: () => { s.accent = c; save(); draw(); } }));
+    const pick = h('input', { type: 'color', value: cur, title: 'Custom colour' });
+    pick.oninput = () => { s.accent = pick.value; save(); };
+    pick.onchange = () => draw();
+    row.append(pick);
+  };
+  draw();
+  return row;
+}
 export function openSettings(app) {
   const s = app.settings;
   const save = () => app.applySettings();
   const body = h('div', {},
     h('div', { class: 'menu-section' }, 'Interface'),
     switchRow('Right-hand sidebar', s.rightHanded, (v) => { s.rightHanded = v; save(); }),
-    switchRow('Reduce transparency (solid panels)', s.solidUI, (v) => { s.solidUI = v; save(); }),
+    h('div', { class: 'stack' }, h('label', {}, 'Interface style'),
+      seg([['glass', 'Glass'], ['liquid', 'Liquid Glass'], ['solid', 'Solid']], s.uiStyle || (s.solidUI ? 'solid' : 'glass'), (v) => { s.uiStyle = v; s.solidUI = v === 'solid'; save(); })),
+    h('div', { class: 'stack' }, h('label', {}, 'Accent colour (selected tools, active layer, buttons)'), accentRow(s, save)),
     switchRow('Brush cursor (Apple Pencil hover)', s.cursor, (v) => { s.cursor = v; save(); }),
     switchRow('Brush cursor while painting', s.cursorPaint, (v) => { s.cursorPaint = v; save(); }),
     switchRow('Gestures (pinch / rotate / pan)', s.gestures, (v) => { s.gestures = v; save(); }),
@@ -1749,7 +1783,9 @@ export function transformTool(app) {
       app.updateCtxBar(); app.requestRender();
     },
     handles() {
-      const T = app.transform, q = T.corners(), sc = q.map((p) => this.scr(p));
+      const T = app.transform;
+      if (this.mode === 'warp' && !T.warp) T.toWarp(); // warp mode always has its mesh
+      const q = T.corners(), sc = q.map((p) => this.scr(p));
       const sides = [0, 1, 2, 3].map((i) => this.scr(mid(q[i], q[(i + 1) % 4])));
       const top = sides[0], cen = this.scr(T.center);
       const L = Math.hypot(top.x - cen.x, top.y - cen.y) || 1;
@@ -1933,7 +1969,7 @@ export function transformTool(app) {
           cbBtn('Actual size', () => this.act((T2) => { const q = T2.corners(), b = T2.bbox, e1 = sub(q[1], q[0]), e2 = sub(q[3], q[0]); const kx = b.w / (Math.hypot(e1.x, e1.y) || 1), ky = b.h / (Math.hypot(e2.x, e2.y) || 1); T2.affine(axisScale(T2.center, e1, e2, kx, ky)); })),
           cbBtn('Straighten', () => this.act((T2) => { const q = T2.corners(), a = Math.atan2(q[1].y - q[0].y, q[1].x - q[0].x) * 180 / Math.PI, C = T2.center; T2.affine(new DOMMatrix().translate(C.x, C.y).rotate(-a).translate(-C.x, -C.y)); })),
           cbBtn('Undo step', () => { if (!this.stepBack()) toast('Nothing to undo in this transform'); }),
-          cbBtn('Flatten warp', () => this.act((T2) => { if (T2.warp) { const q = T2.corners().map((p) => ({ ...p })); T2.warp = null; T2.q = q; } else toast('No warp to remove'); })),
+          cbBtn('Flatten warp', () => { this.act((T2) => { if (T2.warp) { const q = T2.corners().map((p) => ({ ...p })); T2.warp = null; T2.q = q; } else toast('No warp to remove'); }); if (this.mode === 'warp') this.setMode('distort'); }),
         ));
       openPopover(anchor, { title: 'Transform options', body, width: 330, key: 'tf-more' });
       return T;
@@ -1951,7 +1987,7 @@ export function transformTool(app) {
         cbBtn('Rotate 45°', () => this.rotateBy(45)),
         cbBtn('Fit to canvas', () => this.fit(false)),
         cbBtn(app.transform && !app.transform.smooth ? 'Nearest' : 'Bilinear', () => this.act((T) => { T.smooth = !T.smooth; app.updateCtxBar(); }), !!(app.transform && app.transform.smooth)),
-        cbBtn('Reset', () => this.act((T) => T.reset())),
+        cbBtn('Reset', () => this.act((T) => { T.reset(); if (this.mode === 'warp') { T.toWarp(); T.update(); } })),
         moreBtn,
         cbSep(), cbBtn('Cancel', () => t.cancel()), cbBtn('Done', done, false, 'primary'),
       ];

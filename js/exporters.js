@@ -180,7 +180,7 @@ export function layerCanvases(doc) {
 export function frameSource(app, maxSide = 1920) {
   const d = app.doc, k = Math.min(1, maxSide / Math.max(d.width, d.height));
   const w = Math.max(2, Math.round(d.width * k)), h = Math.max(2, Math.round(d.height * k));
-  if (d.mode === 'animate') return { w, h, count: d.anim.length, fps: d.anim.fps, render: (i) => app.timeline.renderFrame(i, w, h) };
+  if (d.mode === 'animate') return { w, h, count: app.timeline.playEnd(), fps: d.anim.fps, render: (i) => app.timeline.renderFrame(i, w, h) };
   const layers = layerCanvases(d).filter((l) => l.visible);
   return {
     w, h, count: layers.length, fps: 4,

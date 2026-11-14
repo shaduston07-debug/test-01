@@ -347,7 +347,7 @@ async function openChallenge(c, l, ch, level = 0) {
 async function setupGuides(ex) {
   const d = ex.doc, W = d.width, H = d.height;
   if (d.mode === 'animate') {
-    const g = new Track({ name: 'Guide (help)', opacity: 0.9 }); g.locked = true;
+    const g = new Track({ name: 'Guide (help)', opacity: 0.9, draft: true, locked: true });
     d.addCel(g, 0, d.anim.length);
     d.tracks.unshift(g);
     ex.under = g.cels[0].canvas; ex.guideItem = g;

@@ -8,7 +8,7 @@ export const BRUSH_DEFAULTS = {
   angleJitter: 0, size: 18, maxSize: 200, minSize: 0, opacity: 1, flow: 1, spacing: 0.08, streamline: 0.3,
   sizePressure: 0.8, opacityPressure: 0, flowPressure: 0, sizeJitter: 0, scatter: 0, count: 1,
   tiltSize: 0, tiltOpacity: 0, taper: 0.25, grain: null, grainImage: null, grainScale: 1, grainDepth: 0.7,
-  hueJitter: 0, smudgeStrength: 0.7, category: 'Inking',
+  hueJitter: 0, smudgeStrength: 0.7, mixOn: false, mixPaint: 0.5, mixDensity: 0.9, mixStretch: 0.6, category: 'Inking',
   // speed dynamics (ibis Paint style): faster strokes get thinner / lighter
   speedSize: 0, speedOpacity: 0, taperAlways: false,
 };
@@ -39,6 +39,11 @@ export const DEFAULT_BRUSHES = [
   B({ id: 'blender', name: 'Soft Blender', category: 'Painting', hardness: 0.35, size: 60, maxSize: 400, sizePressure: 0.4, flowPressure: 0.25, smudgeStrength: 0.65, spacing: 0.08 }),
   B({ id: 'blender-blur', name: 'Blur Blender', category: 'Painting', hardness: 0.2, size: 80, maxSize: 500, sizePressure: 0.3, flowPressure: 0.25, smudgeMode: 'blur', spacing: 0.1 }),
   B({ id: 'blender-finger', name: 'Finger Smudge', category: 'Painting', hardness: 0.6, size: 40, maxSize: 300, sizePressure: 0.5, flowPressure: 0.25, smudgeStrength: 0.88, spacing: 0.06 }),
+  // Colour mixing (painterly): the stroke blends with the paint already on the layer
+  B({ id: 'mix-painterly', name: 'Painterly Mix', category: 'Painting', hardness: 0.55, size: 56, maxSize: 400, sizePressure: 0.35, flowPressure: 0.3, spacing: 0.07, mixOn: true, mixPaint: 0.42, mixDensity: 0.9, mixStretch: 0.7 }),
+  B({ id: 'mix-oil', name: 'Oil Paint (mixing)', category: 'Painting', hardness: 0.78, roundness: 0.55, rotation: 20, size: 64, maxSize: 400, sizePressure: 0.3, flowPressure: 0.3, spacing: 0.06, mixOn: true, mixPaint: 0.6, mixDensity: 1, mixStretch: 0.55 }),
+  B({ id: 'mix-gouache', name: 'Gouache (mixing)', category: 'Painting', hardness: 0.85, size: 44, maxSize: 300, sizePressure: 0.4, flowPressure: 0.2, spacing: 0.06, mixOn: true, mixPaint: 0.75, mixDensity: 1, mixStretch: 0.3 }),
+  B({ id: 'mix-wet', name: 'Wet Watercolor (mixing)', category: 'Painting', hardness: 0.25, size: 80, maxSize: 500, sizePressure: 0.35, flowPressure: 0.3, spacing: 0.08, mixOn: true, mixPaint: 0.3, mixDensity: 0.5, mixStretch: 0.85 }),
   // Airbrush
   B({ id: 'soft-air', name: 'Soft Airbrush', category: 'Airbrush', hardness: 0, size: 160, maxSize: 800, sizePressure: 0.2, flowPressure: 0.8, flow: 0.08, spacing: 0.05, streamline: 0.1, taper: 0 }),
   B({ id: 'med-air', name: 'Medium Airbrush', category: 'Airbrush', hardness: 0.5, size: 80, maxSize: 600, sizePressure: 0.2, flowPressure: 0.8, flow: 0.12, spacing: 0.05, taper: 0 }),

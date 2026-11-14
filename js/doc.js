@@ -230,6 +230,8 @@ export class Track {
     this.clip = !!o.clip;
     this.reference = !!o.reference;
     this.private = !!o.private;
+    this.draft = !!o.draft;     // shown while working, left out of exports (exercise guides)
+    this.locked = !!o.locked;
     this.cels = [];   // {id, start, dur, canvas}
     this.keys = o.keys || [];   // {f, x, y, s, r, o, ease}
   }
@@ -612,7 +614,7 @@ export class Doc {
       out.layers.push(o);
     }
     for (const t of this.tracks) {
-      const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, private: t.private, tint: t.tint || null, keys: t.keys, cels: [] };
+      const o = { id: t.id, name: t.name, visible: t.visible, opacity: t.opacity, blend: t.blend, alphaLock: t.alphaLock, clip: t.clip, private: t.private, draft: t.draft, locked: t.locked, tint: t.tint || null, keys: t.keys, cels: [] };
       for (const c of t.cels) o.cels.push({ start: c.start, dur: c.dur, png: blobFor(c.canvas) });
       out.tracks.push(o);
     }
@@ -638,6 +640,7 @@ export class Doc {
     }
     for (const to of o.tracks || []) {
       const t = new Track(to);
+      if (t.name === 'Guide (help)' && to.draft == null) t.draft = t.locked = true; // guides saved before tracks had the flag
       for (const co of to.cels) {
         const cel = d.addCel(t, co.start, co.dur);
         if (co.png) {

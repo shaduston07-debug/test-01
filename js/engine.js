@@ -2,7 +2,7 @@
 // Paint/erase stamps go into a per-stroke buffer that is composited onto the layer with
 // the stroke opacity (so overlapping stamps never exceed it, like Procreate's "glaze").
 // Smudge works directly on the layer.
-import { makeCanvas, emptyRect, growRect, clampRect, clamp } from './util.js';
+import { makeCanvas, emptyRect, growRect, clampRect, clamp, hexToRgb } from './util.js';
 import { snapshot, getBackup, pixelCmd } from './history.js';
 import { getTintedTip, getTipMask, getGrain, isInkBrush, steadyInk } from './brushes.js';
 
@@ -34,6 +34,15 @@ export class StrokeEngine {
     if (this.classic && o.solidColor) o = { ...o, solidColor: false };
     this.target = target; this.brush = brush; this.o = o;
     this.kind = o.kind || 'paint';
+    // Colour-mixing brushes (Clip Studio's "Color mixing"): they paint through the smudge engine,
+    // loading the brush colour into the paint the tip carries, so strokes blend with what is
+    // already on the layer like wet paint.
+    this.mix = null;
+    if (this.kind === 'paint' && brush.mixOn) {
+      const [mr, mg, mb] = hexToRgb(o.color || '#000000');
+      this.mix = { r: mr, g: mg, b: mb, paint: clamp(brush.mixPaint ?? 0.5, 0, 1), density: clamp(brush.mixDensity ?? 0.9, 0, 1), stretch: clamp(brush.mixStretch ?? 0.6, 0, 1) };
+      this.kind = 'smudge';
+    }
     const W = target.canvas.width, H = target.canvas.height;
     this.W = W; this.H = H;
     this.ensure(W, H);
@@ -458,12 +467,14 @@ export class StrokeEngine {
         else { const f = 1 - keep; dst[o] = dst[o] * keep + px[0] * f; dst[o + 1] = dst[o + 1] * keep + px[1] * f; dst[o + 2] = dst[o + 2] * keep + px[2] * f; dst[o + 3] = dst[o + 3] * keep + px[3] * f; }
       }
     };
-    if (!st.init) { sampleInto(buf, null); st.init = true; st.last = { x, y }; if (!blur) return; }
-    const d = st.last ? Math.hypot(x - st.last.x, y - st.last.y) : size * 0.1;
+    const mix = this.mix;
+    let first = false;
+    if (!st.init) { sampleInto(buf, null); st.init = true; st.last = { x, y }; first = true; if (!blur && !mix) return; }
+    const d = first ? size * 0.35 : st.last ? Math.hypot(x - st.last.x, y - st.last.y) : size * 0.1; // a mixing brush's tap leaves a dab
     st.last = { x, y };
     const step = clamp(d / Math.max(1, size), 0.02, 1);
     const p = this.smP ?? 1;
-    const strength = clamp(this.brush.smudgeStrength ?? 0.7, 0, 1);
+    const strength = mix ? mix.stretch : clamp(this.brush.smudgeStrength ?? 0.7, 0, 1);
     // per brush-width of travel: ~45% at light pressure, ~85–95% when pressing firmly
     const perDiam = clamp(alpha * this.opacity, 0, 1) * (0.5 + 0.5 * p) * (blur ? 1.1 : 1.15);
     const a = 1 - Math.pow(1 - clamp(perDiam, 0, 0.98), step);
@@ -490,6 +501,20 @@ export class StrokeEngine {
           const g00 = grid[(iy * k + ix) * 4 + c], g10 = grid[(iy * k + ix + 1) * 4 + c], g01 = grid[((iy + 1) * k + ix) * 4 + c], g11 = grid[((iy + 1) * k + ix + 1) * 4 + c];
           src[o + c] = (g00 * (1 - tx) + g10 * tx) * (1 - ty) + (g01 * (1 - tx) + g11 * tx) * ty;
         }
+      }
+    }
+    if (mix) {
+      // the paint on the tip: carried colour mixed with the brush colour (Amount of paint), its
+      // opacity pulled towards full (Density of paint). On bare canvas it is the brush colour.
+      src = st.mixBuf || (st.mixBuf = new Float32Array(N * N * 4));
+      const pa = mix.paint, de = mix.density, R = mix.r, G = mix.g, B = mix.b;
+      for (let o = 0, n = N * N * 4; o < n; o += 4) {
+        const ca = buf[o + 3];
+        let cr = R, cg = G, cb = B;
+        if (ca > 0.001) { const k = 1 / ca; cr = buf[o] * k; cg = buf[o + 1] * k; cb = buf[o + 2] * k; cr += (R - cr) * pa; cg += (G - cg) * pa; cb += (B - cb) * pa; }
+        // where the canvas is empty the paint amount also sets how much colour goes down
+        const sa = ca + (1 - ca) * de;
+        src[o] = cr * sa; src[o + 1] = cg * sa; src[o + 2] = cb * sa; src[o + 3] = sa;
       }
     }
     // mix: canvas × (1 − w) + source × w, w = a × tip   (alpha lock: keep the canvas opacity)
