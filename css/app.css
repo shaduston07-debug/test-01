@@ -938,3 +938,11 @@ body.zooming #gallery, body.zooming #gallery * { -webkit-backdrop-filter: none !
 .float-win[data-key=cuts] .pop-body { max-height: calc(86vh - 56px); }
 .float-win[data-key=cuts] { max-height: 86vh; }
 .cut-float { padding: 4px 2px 8px; }
+
+/* 3D Assets: Sketchfab tab */
+.asset-token { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0 2px; } .asset-token:empty { display: none; }
+.asset-card small { display: block; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px 6px; }
+.asset-card.anim::after { content: '▶'; position: absolute; top: 6px; right: 8px; font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000; }
+.asset-card { position: relative; }
+.asset-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; align-self: center; }
+.asset-resbox { display: inline-flex; align-items: center; gap: 8px; }

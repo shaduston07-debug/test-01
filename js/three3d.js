@@ -1355,7 +1355,12 @@ export function tool3d(app) {
         toast('Looking inside ' + f.name + '…', 6000);
         const found = await extractEmbeddedModel(new Uint8Array(await f.arrayBuffer()));
         if (!found) {
-          toast("No standard 3D data inside this Clip Studio file (its format is closed). Get the model as FBX / OBJ / glTF / VRM — most CSP Assets creators also publish those — or pose it in CSP and import a render as an image.", 8000);
+          // Clip Studio's own 3D formats are closed: offer the same model from an open source instead
+          const guess = f.name.replace(/\.[^.]+$/, '').replace(/[_\-]+/g, ' ').replace(/\b(ver|v)\s*\d+(\.\d+)*\b/ig, '').trim();
+          dialog({ title: 'Clip Studio 3D file', body: h('div', {},
+            h('p', {}, `“${f.name}” is in Clip Studio’s own 3D format, which only Clip Studio can open (there is no standard 3D data inside it).`),
+            h('p', {}, 'What works instead: many CSP Assets creators also share their models as FBX, OBJ, glTF or VRM (check the asset’s page or the creator’s BOOTH / website), and Sketchfab has a large free library of downloadable models.')),
+            actions: [{ label: 'Close' }, { label: 'Download from a link…', onClick: () => this.assetMenu() }, { label: `Search Sketchfab for “${guess.slice(0, 24)}”`, primary: true, onClick: () => this.assetMenu(guess) }] });
           return;
         }
         ext = found.ext; blob = new Blob([found.bytes]); note = ` (${found.ext.toUpperCase()} found inside ${f.name})`;
@@ -1414,8 +1419,9 @@ export function tool3d(app) {
       try { await this.addObject(o, 'Add ' + rec.name); }
       catch (err) { console.error(err); toast('Could not add that model: ' + err.message, 4500); }
     },
-    assetMenu() {
+    assetMenu(query) {
       AS.openAssetBrowser({
+        query: typeof query === 'string' ? query : undefined,
         onModel: (rec) => this.addAssetModel(rec),
         onMaterial: (rec) => { if (!this.sel) return false; this.setMaterial(rec); return true; },
       });
