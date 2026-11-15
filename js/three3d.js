@@ -579,6 +579,27 @@ function importBundledCsp() {
 let bundledModels = null;
 function importBundledModels() {
   return (bundledModels ||= (async () => {
+    // models shipped with the app (vendor/lookalikes: manifest + .glb + thumbnails), added once
+    if (!store.prefs.get('lookalikesDone', false)) {
+      try {
+        const base = new URL('../vendor/lookalikes/', import.meta.url), r = await fetch(new URL('manifest.json', base));
+        if (r.ok) {
+          const man = await r.json(), have = new Set((await store.listAssets()).map((a) => a.id));
+          let n = 0;
+          for (const m of man) {
+            if (have.has('sf:model:' + m.uid)) continue;
+            const g = await fetch(new URL(m.file, base)); if (!g.ok) continue;
+            const bytes = await g.arrayBuffer();
+            let thumb = null; try { const t = await fetch(new URL(m.thumb, base)); if (t.ok) thumb = await t.arrayBuffer(); } catch { /* none */ }
+            await store.putAsset({ id: 'sf:model:' + m.uid, kind: 'model', src: 'Sketchfab', name: m.name, author: m.author, license: m.license, page: m.page,
+              ext: 'glb', bytes, thumb, added: Date.now() + n, size: bytes.byteLength, like: m.like || null });
+            n++;
+          }
+          store.prefs.set('lookalikesDone', true);
+          if (n) toast(`Added ${n} models to 3D Assets › Downloaded`, 3500);
+        }
+      } catch (e) { console.warn('built-in models', e); }
+    }
     if (store.prefs.get('modelsBundledDone', false)) return;
     let blob = null;
     try { const r = await fetch(new URL('../vendor/models-bundled.zip', import.meta.url)); if (r.ok) blob = await r.blob(); } catch { /* not in this build */ }
