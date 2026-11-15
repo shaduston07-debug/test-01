@@ -560,7 +560,22 @@ export async function importCspFiles(files, progress) {
   }
   return { poses, bodies };
 }
+// a pose pack built into this copy of the app (vendor/csp-bundled.zip, only in personal builds)
+// is imported once, the first time the library is opened
+let bundledCsp = null;
+function importBundledCsp() {
+  return (bundledCsp ||= (async () => {
+    if (store.prefs.get('cspBundledDone', false)) return;
+    let blob = null;
+    try { const r = await fetch(new URL('../vendor/csp-bundled.zip', import.meta.url)); if (r.ok) blob = await r.blob(); } catch { /* not in this build */ }
+    if (!blob || blob.size < 100) return;
+    toast('Adding your Clip Studio poses…', 20000);
+    try { const r = await importCspFiles([new File([blob], 'csp-bundled.zip')]); store.prefs.set('cspBundledDone', true); toast(`Added ${r.poses} Clip Studio poses${r.bodies ? ` and ${r.bodies} body type${r.bodies === 1 ? '' : 's'}` : ''}`, 3500); }
+    catch (e) { console.warn('bundled poses', e); }
+  })());
+}
 async function importedCsp(kind) {
+  await importBundledCsp();
   return (await store.listAssets()).filter((a) => a.kind === kind).sort((a, b) => (a.set || '').localeCompare(b.set || '') || (a.added - b.added) || a.name.localeCompare(b.name));
 }
 

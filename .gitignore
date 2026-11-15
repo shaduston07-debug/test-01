@@ -8,3 +8,4 @@ ios/DerivedData/
 downloads/
 .claude/
 __pycache__/
+vendor/csp-bundled.zip
