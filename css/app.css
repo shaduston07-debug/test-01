@@ -946,3 +946,17 @@ body.zooming #gallery, body.zooming #gallery * { -webkit-backdrop-filter: none !
 .asset-card { position: relative; }
 .asset-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; align-self: center; }
 .asset-resbox { display: inline-flex; align-items: center; gap: 8px; }
+/* Clip Studio pose library: folder tree + poses, like Clip Studio's Material panel */
+.csp-lib { display: flex; gap: 10px; min-height: 0; max-height: 62vh; }
+.csp-tree { flex: 0 0 210px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding-right: 4px; border-right: 1px solid var(--fill-1); }
+.csp-main { flex: 1; min-width: 0; overflow-y: auto; }
+.csp-node { display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 8px; border-radius: 8px; text-align: left; font-size: 13px; }
+.csp-node.on { background: var(--accent); color: var(--on-accent); }
+.csp-node .csp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csp-node .csp-count { opacity: 0.6; font-size: 12px; }
+.csp-add { opacity: 0.75; }
+.csp-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.6; margin: 10px 0 2px 8px; }
+.csp-search { width: 100%; margin: 0 0 6px; padding: 8px 10px; border-radius: 10px; border: 0; background: var(--fill-1); color: inherit; font-size: 14px; }
+.csp-head { margin: 6px 2px; }
+@media (max-width: 640px) { .csp-lib { flex-direction: column; max-height: none; } .csp-tree { flex: none; max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--fill-1); } }
+.csp-node .csp-name small { display: block; font-size: 11px; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; }

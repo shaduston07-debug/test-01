@@ -1319,51 +1319,110 @@ export function tool3d(app) {
         return r.poses + r.bodies;
       } catch (e) { console.error(e); toast('Could not read that: ' + e.message, 5000); return 0; }
     },
+    // the Clip Studio pose library, laid out like Clip Studio's Material panel: a folder tree
+    // (All poses · your folders · Download › one folder per downloaded set) beside the poses
     async cspPoseMenu() {
       const e = this.poseTarget(); if (!e || e.rig !== 'human') { toast('Select a figure first'); return; }
       const list = await importedCsp('csppose');
-      const b = this.snapshot(), urls = [];
-      const body = h('div', { class: 'lib3d' });
-      if (!list.length) body.append(h('p', {}, 'No Clip Studio poses yet. Import your Clip Studio Material folder as a .zip (or single .pose files): every pose in it is added here, with its thumbnail.'),
-        h('p', { class: 'hint' }, 'On a PC the folder is %APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioCommon\\Material (right-click › Send to › Compressed folder). Downloaded 3D models stay encrypted by Clip Studio, but poses and body types are read exactly.'));
-      const sets = new Map();
-      for (const r of list) { const k = r.set || 'Poses'; if (!sets.has(k)) sets.set(k, []); sets.get(k).push(r); }
-      let cur = null, curRec = null, mirror = !!store.prefs.get('cspMirror', false);
+      const snap = this.snapshot(), urls = [], thumbs = new Map();
+      const thumbUrl = (r) => { if (!r.thumb) return null; if (!thumbs.has(r.id)) { const u = URL.createObjectURL(store.toBlob(r.thumb)); urls.push(u); thumbs.set(r.id, u); } return thumbs.get(r.id); };
+      let mirror = !!store.prefs.get('cspMirror', false), curRec = null, query = '';
+      let where = store.prefs.get('cspFolder', 'all');
+      const myFolders = () => [...new Set([...store.prefs.get('cspFolders', []), ...list.map((r) => r.folder).filter(Boolean)])];
+      const setOf = (r) => r.set || 'Poses';
+      const inFolder = (r, f) => f === 'all' || (f.startsWith('my:') ? r.folder === f.slice(3) : !r.folder && 'dl:' + setOf(r) === f);
+      // a short English gloss for Japanese pack names (Clip Studio Assets packs are often Japanese)
+      const GLOSS = [['バトル', 'Battle'], ['キック', 'Kick'], ['パンチ', 'Punch'], ['回避', 'Dodge'], ['防御', 'Block'], ['構え', 'Stance'], ['能力', 'Ability'], ['ビースト', 'Beast'], ['美少女', 'Girl'], ['後ろ手', 'Hands behind'], ['振り返る', 'Looking back'], ['アクション', 'Action'], ['座り', 'Sitting'], ['立ち', 'Standing'], ['歩き', 'Walking'], ['走り', 'Running'], ['ジャンプ', 'Jump'], ['手', 'Hands'], ['剣', 'Sword'], ['武器', 'Weapon'], ['日常', 'Everyday'], ['かわいい', 'Cute'], ['格闘', 'Fighting'], ['アイドル', 'Idol'], ['ダンス', 'Dance'], ['寝', 'Lying'], ['男性', 'Male'], ['女性', 'Female']];
+      const gloss = (t) => { if (!/[\u3040-\u30ff\u4e00-\u9fff]/.test(t)) return ''; const w = GLOSS.filter(([j]) => t.includes(j)).map(([, en]) => en); const n = t.match(/(\d+)\s*種/); return w.length ? w.join(' · ') + (n ? ` (${n[1]})` : '') : ''; };
+      const label = (r) => (r.set && r.name.startsWith(r.set + ' · ') ? 'Pose ' + r.name.slice(r.set.length + 3) : r.name);
       const put = (r) => {
         try { const ps = M.retargetCSP(r.data, e.fig); e.data.pose = mirror ? M.mirrorStored(ps) : ps; syncObject(e); this.redraw(this.previewScale()); return true; }
         catch (err) { console.error(err); toast('Could not apply that pose: ' + err.message, 4000); return false; }
       };
-      if (list.length) {
-        const search = h('input', { type: 'search', placeholder: 'Search poses', class: 'p3d-search', style: 'width:100%;margin:2px 0 6px;padding:8px 10px;border-radius:10px;border:0;background:var(--fill-1);color:inherit;font-size:14px' });
-        search.oninput = () => {
-          const q = search.value.trim().toLowerCase();
-          body.querySelectorAll('[data-set]').forEach((secEl) => {
-            let any = false;
-            secEl.querySelectorAll('.lib3d-item').forEach((it) => { const show = !q || it.dataset.k.includes(q); it.hidden = !show; any ||= show; });
-            secEl.hidden = !any;
-          });
-        };
-        body.append(search, switchRow('Mirror (flip left ↔ right)', mirror, (v) => { mirror = v; store.prefs.set('cspMirror', v); if (curRec) put(curRec); }));
-      }
-      for (const [set, rs] of sets) {
-        const grid = h('div', { class: 'lib3d-grid' });
-        body.append(h('div', { 'data-set': set }, h('div', { class: 'menu-section' }, `${set} (${rs.length})`), grid));
-        for (const r of rs) {
-          let img = null;
-          if (r.thumb) { const u = URL.createObjectURL(store.toBlob(r.thumb)); urls.push(u); img = h('img', { src: u, alt: '' }); }
-          const bt = h('button', { class: 'lib3d-item my-model', 'data-k': (r.name + ' ' + (r.set || '')).toLowerCase(), onclick: () => {
-            if (!put(r)) return;
-            curRec = r; if (cur) cur.classList.remove('on'); bt.classList.add('on'); cur = bt;
-          } }, img, h('span', {}, r.set && r.name.startsWith(r.set + ' · ') ? 'Pose ' + r.name.slice(r.set.length + 3) : r.name));
-          let tm; bt.addEventListener('pointerdown', () => { tm = setTimeout(async () => { tm = null; await store.deleteAsset(r.id); bt.remove(); toast('Removed ' + r.name); }, 700); });
-          bt.addEventListener('pointerup', () => clearTimeout(tm)); bt.addEventListener('pointerleave', () => clearTimeout(tm));
-          grid.append(bt);
+      const save = (r) => store.putAsset(r);
+      const side = h('div', { class: 'csp-tree' }), main = h('div', { class: 'csp-main' }), grid = h('div', { class: 'lib3d-grid' });
+      const head = h('div', { class: 'csp-head' });
+      const search = h('input', { type: 'search', placeholder: 'Search all poses', class: 'csp-search' });
+      search.oninput = () => { query = search.value.trim().toLowerCase(); drawGrid(); };
+      main.append(search, switchRow('Mirror (flip left ↔ right)', mirror, (v) => { mirror = v; store.prefs.set('cspMirror', v); if (curRec) put(curRec); }), head, grid);
+      const choose = (f) => { where = f; store.prefs.set('cspFolder', f); search.value = ''; query = ''; drawTree(); drawGrid(); };
+      const holdable = (el, fn) => { let t; el.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; el.dataset.held = '1'; fn(); }, 600); }); const stop = () => clearTimeout(t); el.addEventListener('pointerup', stop); el.addEventListener('pointerleave', stop); el.addEventListener('pointercancel', stop); };
+      const node = (f, text, n, depth = 0, hold) => {
+        const bt = h('button', { class: 'csp-node' + (where === f ? ' on' : ''), style: `padding-left:${10 + depth * 14}px`, onclick: () => { if (bt.dataset.held) { delete bt.dataset.held; return; } choose(f); } },
+          h('span', { class: 'csp-ico' }, f === 'all' ? '▦' : '📁'), h('span', { class: 'csp-name', title: text }, text, gloss(text) ? h('small', {}, gloss(text)) : null), h('span', { class: 'csp-count' }, String(n)));
+        if (hold) holdable(bt, hold);
+        return bt;
+      };
+      const drawTree = () => {
+        side.replaceChildren(node('all', 'All poses', list.length));
+        const mine = myFolders();
+        side.append(h('div', { class: 'csp-group' }, 'My folders'));
+        for (const name of mine) side.append(node('my:' + name, name, list.filter((r) => r.folder === name).length, 1, () => folderMenu(name)));
+        side.append(h('button', { class: 'csp-node csp-add', style: 'padding-left:24px', onclick: () => newFolder() }, '＋ New folder'));
+        const sets = [...new Set(list.filter((r) => !r.folder).map(setOf))];
+        if (sets.length) {
+          side.append(h('div', { class: 'csp-group' }, 'Download'));
+          for (const st of sets) side.append(node('dl:' + st, st, list.filter((r) => !r.folder && setOf(r) === st).length, 1));
         }
-      }
-      if (list.length) body.append(h('p', { class: 'hint' }, 'Tap a pose to put it on the figure; hold one to delete it. Save a favourite with Poses… › Save current pose.'));
+      };
+      const drawGrid = () => {
+        const rs = query ? list.filter((r) => (r.name + ' ' + (r.set || '') + ' ' + gloss(r.set || '') + ' ' + (r.folder || '')).toLowerCase().includes(query)) : list.filter((r) => inFolder(r, where));
+        const title = query ? `Search “${query}”` : where === 'all' ? 'All poses' : where.slice(3);
+        head.replaceChildren(h('b', {}, title), h('span', { class: 'hint' }, `${gloss(title) ? ' · ' + gloss(title) : ''} · ${rs.length} pose${rs.length === 1 ? '' : 's'}`));
+        grid.replaceChildren(...rs.map((r) => {
+          const u = thumbUrl(r);
+          const bt = h('button', { class: 'lib3d-item my-model' + (curRec === r ? ' on' : ''), onclick: () => {
+            if (bt.dataset.held) { delete bt.dataset.held; return; }
+            if (!put(r)) return; curRec = r; grid.querySelectorAll('.on').forEach((x) => x.classList.remove('on')); bt.classList.add('on');
+          } }, u ? h('img', { src: u, alt: '' }) : null, h('span', {}, where === 'all' || query || r.folder ? r.name : label(r)));
+          holdable(bt, () => poseMenu(r));
+          return bt;
+        }));
+        if (!rs.length) grid.append(h('p', { class: 'hint' }, query ? 'No pose matches.' : where.startsWith('my:') ? 'Empty folder. Hold a pose anywhere and choose “Move to folder…”.' : 'Nothing here.'));
+      };
+      const newFolder = async (then) => {
+        const name = (await promptDialog('New folder', 'My poses') || '').trim(); if (!name) return null;
+        store.prefs.set('cspFolders', [...new Set([...store.prefs.get('cspFolders', []), name])]);
+        if (then) await then(name); drawTree(); return name;
+      };
+      const moveTo = async (r, name) => { r.folder = name || null; await save(r); drawTree(); drawGrid(); toast(name ? `Moved to “${name}”` : `Back in “${setOf(r)}”`); };
+      const poseMenu = (r) => {
+        const mine = myFolders().filter((f) => f !== r.folder);
+        const d = dialog({ title: r.name, body: h('div', { class: 'stack' },
+          h('div', { class: 'menu-section' }, 'Move to folder'),
+          h('div', { class: 'p3d-chips' }, ...mine.map((f) => h('button', { onclick: () => { d.close(); moveTo(r, f); } }, '📁 ' + f)),
+            r.folder ? h('button', { onclick: () => { d.close(); moveTo(r, null); } }, '↩ Back to ' + setOf(r)) : null,
+            h('button', { onclick: async () => { d.close(); await newFolder((n) => moveTo(r, n)); } }, '＋ New folder…'))),
+          actions: [
+            { label: 'Rename…', onClick: async () => { const n = (await promptDialog('Rename pose', r.name) || '').trim(); if (n) { r.name = n; await save(r); drawGrid(); } } },
+            { label: 'Delete', danger: true, onClick: async () => { await store.deleteAsset(r.id); list.splice(list.indexOf(r), 1); drawTree(); drawGrid(); toast('Removed ' + r.name); } },
+            { label: 'Cancel', primary: true }] });
+      };
+      const folderMenu = (name) => {
+        dialog({ title: '📁 ' + name, body: h('p', { class: 'hint' }, 'Deleting a folder keeps its poses: they go back to their Download folders.'), actions: [
+          { label: 'Rename…', onClick: async () => {
+            const n = (await promptDialog('Rename folder', name) || '').trim(); if (!n || n === name) return;
+            store.prefs.set('cspFolders', [...new Set(store.prefs.get('cspFolders', []).map((f) => (f === name ? n : f)))]);
+            for (const r of list.filter((x) => x.folder === name)) { r.folder = n; await save(r); }
+            if (where === 'my:' + name) where = 'my:' + n; drawTree(); drawGrid();
+          } },
+          { label: 'Delete folder', danger: true, onClick: async () => {
+            store.prefs.set('cspFolders', store.prefs.get('cspFolders', []).filter((f) => f !== name));
+            for (const r of list.filter((x) => x.folder === name)) { r.folder = null; await save(r); }
+            if (where === 'my:' + name) where = 'all'; drawTree(); drawGrid();
+          } },
+          { label: 'Cancel', primary: true }] });
+      };
+      // a folder that no longer exists (deleted, or a fresh library) falls back to All poses
+      const valid = where === 'all' || (where.startsWith('my:') && myFolders().includes(where.slice(3))) || (where.startsWith('dl:') && list.some((r) => !r.folder && 'dl:' + setOf(r) === where));
+      if (!valid) where = 'all';
+      const body = h('div', {});
+      if (!list.length) body.append(h('p', {}, 'No Clip Studio poses yet. Import your Clip Studio Material folder as a .zip (or single .pose files): every pose in it is added here with its thumbnail, one folder per set, like Clip Studio’s Material panel.'),
+        h('p', { class: 'hint' }, 'On a PC the folder is %APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioCommon\\Material (right-click › Send to › Compressed folder). Downloaded 3D models stay encrypted by Clip Studio, but poses and body types are read exactly.'));
+      else { drawTree(); drawGrid(); body.append(h('div', { class: 'csp-lib' }, side, main), h('p', { class: 'hint' }, 'Tap a pose to put it on the figure. Hold a pose to move, rename or delete it; hold one of your folders to rename or delete it.')); }
       dialog({ title: `Clip Studio poses (${list.length})`, wide: true, body, actions: [
         { label: 'Import…', onClick: async () => { if (await this.importCsp()) this.cspPoseMenu(); } },
-        { label: 'Done', primary: true }], onClose: () => { urls.forEach((u) => URL.revokeObjectURL(u)); this.commit('Clip Studio pose', b); this.redraw(1); } });
+        { label: 'Done', primary: true }], onClose: () => { urls.forEach((u) => URL.revokeObjectURL(u)); this.commit('Clip Studio pose', snap); this.redraw(1); } });
     },
     async importBVH(e) {
       const [f] = await pickFile('.bvh,text/plain');
