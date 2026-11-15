@@ -79,6 +79,23 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
+			<string>com.inkwell.import.clip</string>
+			<key>UTTypeDescription</key>
+			<string>Clip Studio Paint canvas</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>clip</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
 			<string>com.inkwell.import.sut</string>
 			<key>UTTypeDescription</key>
 			<string>Clip Studio Paint brush</string>
@@ -276,6 +293,7 @@
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
+				<string>com.inkwell.import.clip</string>
 				<string>com.inkwell.import.sut</string>
 				<string>com.inkwell.import.brush</string>
 				<string>com.inkwell.import.brushset</string>

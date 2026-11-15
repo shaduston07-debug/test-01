@@ -39,7 +39,7 @@ const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', ri
   body: sex === 'male' ? { sex: 'male', height: 1.75, heads: 7.5, build: 0.55, muscle: 0.65, fat: 0.42 } : { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, muscle: 0.45, fat: 0.45 } });
 // built-in library models (generated, no download)
 export const LIBRARY = [
-  ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['mannequin-male', 'Mannequin'], ['mannequin-female', 'Mannequin (female)'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour']]],
+  ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['mannequin-male', 'Mannequin'], ['mannequin-female', 'Mannequin (female)'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour'], ['planarhead', 'Planar head (study)']]],
   ['Creatures', [['dragon', 'Dragon'], ['werewolf', 'Werewolf'], ['orc', 'Orc brute'], ['demon', 'Winged demon'], ['ghoul', 'Ghoul'], ['xeno', 'Alien'], ['spider', 'Giant spider'], ['golem', 'Stone golem'], ['kraken', 'Kraken']]],
   ['Weapons', Object.entries(WD.WEAPONS).map(([k, w]) => ['w:' + k, w.label])],
   ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
@@ -49,7 +49,7 @@ const SHAPES = [['cube', 'Cube'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder']
 // camera presets (PoseManiacs-style dynamic angles): [label, direction, lens, distance ×, aim up]
 const CAM_ANGLES = [['Front', [0, 0.05, 1], 35], ['Three-quarter', [0.7, 0.12, 1], 35], ['Side', [1, 0.05, 0], 35], ['Back', [-0.4, 0.1, -1], 35],
   ['High angle', [0.45, 1.3, 1], 40], ['Low angle', [0.4, -0.55, 1], 45, 0.85, 0.3], ['Dramatic', [0.8, -0.35, 0.9], 70, 0.55, 0.25], ['Top down', [0.01, 1, 0.02], 40, 1.2]];
-const procObject = (gen, x = 0) => ({ id: uid(), kind: 'proc', gen, name: LIBRARY.flatMap((c) => c[1]).find((i) => i[0] === gen)?.[1] || gen, pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: { car: '#3d6fd6', sports: '#e8b21a', moto: '#c72c2c' }[gen] || (C.CREATURES.includes(gen) && C.creatureDef(gen).color) || '#cfcac2' });
+const procObject = (gen, x = 0) => ({ id: uid(), kind: 'proc', gen, name: LIBRARY.flatMap((c) => c[1]).find((i) => i[0] === gen)?.[1] || gen, pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: { car: '#3d6fd6', sports: '#e8b21a', moto: '#c72c2c', planarhead: '#bdbdbd' }[gen] || (C.CREATURES.includes(gen) && C.creatureDef(gen).color) || '#cfcac2' });
 
 export function create3DLayer(doc) {
   const l = new Layer(doc.width, doc.height, { type: '3d', name: '3D' });
@@ -258,7 +258,7 @@ async function buildObject(layer, rt, o) {
     const g = o.gen;
     const make = { car: () => M.buildCar('sedan', o.color), sports: () => M.buildCar('sports', o.color), moto: () => M.buildMotorcycle(o.color),
       castle: () => M.buildCastle(), street: () => M.buildCity('street'), district: () => M.buildCity('district') }[g];
-    const built = g === 'dragon' ? M.buildDragon(o.color) : make ? await M.propOr(g, make, o.color) : null;
+    const built = g === 'dragon' ? M.buildDragon(o.color) : g === 'planarhead' ? M.buildPlanarHead(o.color) : make ? await M.propOr(g, make, o.color) : null;
     if (!built) return;
     node = built.root;
     if (g === 'dragon') { joints = built.joints; figMat = built.mat; rig = 'dragon'; fig = built; }
@@ -1082,7 +1082,7 @@ export function tool3d(app) {
       const btn = (label, fn) => h('button', { class: 'lib3d-item', onclick: pick(fn) }, label);
       const body = h('div', { class: 'lib3d' },
         h('div', { class: 'menu-section' }, 'Import'),
-        grid(btn('Open a file… (.blend, .glb, .gltf, .fbx, .obj, .vrm, .zip)', () => this.importModel()), btn('Free models & materials (Poly Haven)…', () => this.assetMenu())));
+        grid(btn('Open a file… (.blend, .glb, .gltf, .fbx, .obj, .vrm, .zip, Clip Studio .clip)', () => this.importModel()), btn('Free models & materials (Poly Haven)…', () => this.assetMenu())));
       for (const [cat, items] of LIBRARY) body.append(h('div', { class: 'menu-section' }, cat), grid(...items.map(([gen, label]) => btn(label, () => this.addLibrary(gen)))));
       body.append(h('div', { class: 'menu-section' }, 'Shapes'), grid(...SHAPES.map(([k, l]) => btn(l, () => this.addShape(k, l)))));
       // your saved models first (like Clip Studio's material library)
@@ -1338,10 +1338,11 @@ export function tool3d(app) {
       ] });
     },
     async importModel() {
-      const picked = await pickFile('.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.zip,.blend,.vrm,.fbx,.obj,.cs3c,.cs3o,.cs3s,.cmo,.csmf,.c2fc', true);
+      const picked = await pickFile('.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.zip,.blend,.vrm,.fbx,.obj,.clip,.cs3c,.cs3o,.cs3s,.cmo,.csmf,.c2fc', true);
       if (!picked.length) return;
       // Blender's own .blend, or an export: .glb, .gltf with its .bin / textures, a .zip of the folder
       let f = picked[0];
+      if (/\.clip$/i.test(f.name)) return this.importClip(f);
       if (picked.length > 1 || /\.(gltf|zip)$/i.test(f.name)) {
         try {
           const r = await AS.modelFromFiles(picked);
@@ -1371,6 +1372,58 @@ export function tool3d(app) {
       toast('Loading ' + f.name + '…', 6000);
       try { await this.addObject({ id: uid(), kind: 'model', modelId: id, name: f.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Import model'); toast('Model added' + note + ' — use Move / Rotate / Scale', 4000); }
       catch (e) { console.error(e); L.models.delete(id); toast('Could not read that model: ' + e.message, 4500); }
+    },
+    // Clip Studio .clip: rebuild its 3D layer from what the file keeps readable. The models, pose
+    // and body shape are encrypted by Clip Studio, so each object is matched to Inkwell's own
+    // models by type and name, the camera is copied exactly, and the Clip Studio render goes on
+    // a reference layer above to match the look and pose against.
+    async importClip(f) {
+      toast('Reading ' + f.name + '…', 6000);
+      let info;
+      try { const CF = await import('./clipfile.js'); info = await CF.readClip(new Uint8Array(await f.arrayBuffer())); this._CF = CF; }
+      catch (e) { console.error(e); toast('Could not read that .clip: ' + e.message, 6000); return; }
+      const sc = info.scenes[0];
+      if (!sc) { toast('That .clip has no 3D layer', 4000); return; }
+      const L = this.layer(), s = L.scene3d, b = this.snapshot(), added = [], missing = [];
+      let nFig = 0, nSmall = 0;
+      for (const ob of sc.objects) {
+        if (ob.type === 'light' || ob.type === 'other') continue;
+        const gen = this._CF.matchBuiltin(ob.name);
+        let o = null;
+        if (ob.type === 'figure' || gen === 'figure-male') {
+          o = figureObject(nFig * 0.7, gen === 'figure-male' ? 'male' : 'female'); nFig++;
+        } else if (gen === 'mannequin-male' || gen === 'mannequin-female') {
+          const sex = gen.endsWith('female') ? 'female' : 'male';
+          o = { id: uid(), kind: 'mannequin', sex, pos: [-0.8 - nSmall * 0.5, 0, 0], quat: [0, 0, 0, 1], scale: sex === 'female' ? 0.95 : 1, pose: {}, color: '#e2e1dd' }; nSmall++;
+        } else if (gen === 'planarhead') {
+          o = procObject('planarhead', -1 - nSmall * 0.6); o.pos[1] = 0.88; o.scale = 1.2; nSmall++;
+        } else { missing.push(ob); continue; }
+        o.name = ob.name || o.name;
+        added.push(o);
+      }
+      if (sc.camera) s.camera = { pos: sc.camera.pos, target: sc.camera.target, fov: sc.camera.fov };
+      s.objects.push(...added);
+      const rt = await runtimeFor(L);
+      for (const o of added) { try { await buildObject(L, rt, o); } catch (e) { console.warn(o.name, e); } }
+      attachAll(rt); syncAll(rt);
+      if (added[0]) this.sel = added[0].id;
+      this.commit('Import from Clip Studio', b); this.redraw(1); app.updateCtxBar(); this.panelRefresh && this.panelRefresh();
+      // the picture as Clip Studio rendered it, to line the pose and body up against
+      if (info.preview) {
+        try {
+          const img = await createImageBitmap(info.preview), d = app.doc;
+          const ref = new Layer(d.width, d.height, { name: 'Clip Studio render (' + f.name.replace(/\.clip$/i, '') + ')', opacity: 0.45, reference: true });
+          const k = Math.min(d.width / img.width, d.height / img.height), w = img.width * k, hh = img.height * k;
+          ref.canvas.getContext('2d').drawImage(img, (d.width - w) / 2, (d.height - hh) / 2, w, hh);
+          insertLayer(app, ref, Math.min(d.items.indexOf(L) + 1, d.items.length));
+        } catch (e) { console.warn('preview', e); }
+      }
+      const names = added.map((o) => o.name).join(', ');
+      dialog({ title: 'Imported from Clip Studio', body: h('div', {},
+        h('p', {}, added.length ? `Rebuilt with Inkwell’s models: ${names}. The camera matches Clip Studio’s.` : 'No object in that 3D layer has an Inkwell match.'),
+        h('p', {}, 'Clip Studio encrypts the 3D data in its files, so the exact mesh, pose and body shape can’t be read. The Clip Studio render is on a see-through reference layer above: match the pose with Pose mode and the shape with Body presets… (Curvy, Heroic…) and the proportion sliders, then hide or delete that layer.'),
+        missing.length ? h('p', {}, 'Not built in: ' + missing.map((m) => '“' + m.name + '”').join(', ') + '. Search Sketchfab for a free downloadable version, or import the creator’s FBX / OBJ / VRM if they share one.') : null),
+        actions: [{ label: 'OK', primary: !missing.length }, ...missing.slice(0, 2).map((m) => ({ label: `Search “${m.name.slice(0, 20)}”`, primary: true, onClick: () => this.assetMenu(m.name) }))] });
     },
     // save the selected model as it is now (body shape, proportions, outfit, colour, material,
     // pose, size) to reuse in any document

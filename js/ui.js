@@ -2413,7 +2413,7 @@ export function newDocDialog(app, mode = 'paint') {
 }
 
 export async function importAny(app) {
-  const files = await pickFile('.inkwell,.json,image/*,.sut,.brush,.brushset,.abr,' + Pal.PALETTE_ACCEPT + ',.inkwellbackup', true);
+  const files = await pickFile('.inkwell,.json,image/*,.sut,.brush,.brushset,.abr,' + Pal.PALETTE_ACCEPT + ',.inkwellbackup,.clip', true);
   if (files.length) await handleFiles(app, files);
 }
 
@@ -2450,6 +2450,21 @@ export async function handleFiles(app, files) {
         doc.folder = app.currentFolder || null;
         await app.openDoc(doc); app.dirtySave = true; await app.saveNow();
       } catch (e) { toast('Not a valid project: ' + e.message); }
+    } else if (/\.clip$/i.test(f.name)) {
+      // Clip Studio canvas: a new canvas of the same size, with its 3D layer rebuilt in Inkwell
+      try {
+        const CF = await import('./clipfile.js');
+        const info = await CF.readClip(new Uint8Array(await f.arrayBuffer()));
+        if (!info.scenes.length) { toast(`${f.name}: no 3D layer in it (only Clip Studio 3D layers are imported)`, 4500); continue; }
+        const k = Math.min(1, Math.sqrt(16e6 / ((info.width || 1600) * (info.height || 1200))));
+        const doc = Doc.create({ name: f.name.replace(/\.[^.]+$/, ''), mode: 'paint', width: Math.round((info.width || 1600) * k), height: Math.round((info.height || 1200) * k) });
+        doc.folder = app.currentFolder || null;
+        await app.openDoc(doc);
+        const T3 = await import('./three3d.js');
+        await T3.add3DLayer(app);
+        await app.tools['3d'].importClip(f);
+        app.dirtySave = true; await app.saveNow();
+      } catch (e) { console.error(e); toast(`${f.name}: ${e.message || e}`, 5000); }
     } else if (f.type.startsWith('image/')) {
       const img = await createImageBitmap(f);
       let w = img.width, hh = img.height;

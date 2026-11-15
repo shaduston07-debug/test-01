@@ -680,6 +680,65 @@ export async function propOr(name, make, color) {
   }
 }
 
+// ───────── planar head (study model of the planes of the head) ─────────
+// An original low-poly head: a sculpted sphere kept coarse and flat-shaded so the big planes
+// (forehead, temples, cheeks, jaw, chin) read as facets, plus a wedge nose, brow ridge, ears,
+// a neck and a round stand. About life size: the stand sits on the floor.
+export function buildPlanarHead(color = '#bdbdbd') {
+  const mat = new T.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.05, flatShading: true });
+  const sst = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const facet = (g) => { const n = g.index ? g.toNonIndexed() : g; n.computeVertexNormals(); return n; };
+  const parts = [];
+  // skull + face: unit sphere → head (x across, y up, z forward)
+  const head = new T.SphereGeometry(1, 16, 14);
+  const P = head.attributes.position, sg = (v, k) => Math.sign(v) * Math.abs(v) ** k;
+  for (let i = 0; i < P.count; i++) {
+    let x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+    x = sg(x, 0.8); z = sg(z, 0.8);                    // boxier skull
+    if (y > 0) y = y ** 0.9;
+    const low = sst(-0.05, -1, y);                     // 0 at the cranium → 1 at the chin
+    x *= 1 - 0.4 * low;                                // jaw narrows to the chin
+    if (z < 0) z *= 1 - 0.55 * low;                    // back of the jaw tucks in to the neck
+    if (z > 0.7) z = 0.7 + (z - 0.7) * 0.4;            // flat face plane
+    if (z > 0.3) {
+      const ax = Math.abs(x);
+      const eye = Math.hypot((ax - 0.36) / 0.2, (y - 0.03) / 0.12);
+      if (eye < 1) z -= 0.11 * (1 - eye * eye);          // eye sockets
+      if (ax > 0.45 && y < 0.05 && y > -0.5) x *= 0.95;   // cheek planes
+      if (y < -0.2 && y > -0.62 && ax > 0.25) z -= 0.05 * sst(0.25, 0.5, ax); // mouth barrel
+    }
+    if (y > 0.3 && Math.abs(x) > 0.6) x *= 0.95;       // temples
+    if (y < -0.82) y = -0.82 + (y + 0.82) * 0.35;      // squared chin
+    P.setXYZ(i, x * 0.076, y * 0.12, z * 0.1);
+  }
+  parts.push(facet(head));
+  // brow ridge
+  parts.push(facet(tf(new T.BoxGeometry(0.1, 0.014, 0.014, 2, 1, 1), { p: [0, 0.023, 0.08] })));
+  // nose: a wedge from the brow down to the tip
+  const nose = new T.BufferGeometry();
+  const nv = [[0, 0.016, 0.083], [0, -0.04, 0.106], [-0.017, -0.046, 0.083], [0.017, -0.046, 0.083], [-0.007, 0.01, 0.079], [0.007, 0.01, 0.079], [0, -0.05, 0.096]];
+  const nf = [[0, 1, 5], [0, 4, 1], [4, 2, 1], [5, 1, 3], [1, 2, 6], [1, 6, 3]];
+  nose.setAttribute('position', new T.BufferAttribute(new Float32Array(nf.flat().flatMap((k) => nv[k])), 3));
+  parts.push(facet(nose));
+  // lips and chin
+  parts.push(facet(tf(new T.BoxGeometry(0.042, 0.011, 0.012), { p: [0, -0.064, 0.079], r: [-12, 0, 0] })));
+  parts.push(facet(tf(new T.BoxGeometry(0.038, 0.01, 0.012), { p: [0, -0.077, 0.077], r: [14, 0, 0] })));
+  parts.push(facet(tf(new T.BoxGeometry(0.04, 0.02, 0.014), { p: [0, -0.098, 0.073] })));
+  // ears
+  for (const s of [-1, 1]) parts.push(facet(tf(new T.CylinderGeometry(0.02, 0.015, 0.012, 6), { p: [s * 0.075, -0.004, -0.012], r: [0, 0, 90], s: [1, 1, 1.5] })));
+  // neck (7-sided) and trapezius stump
+  parts.push(facet(tf(new T.CylinderGeometry(0.043, 0.052, 0.1, 7), { p: [0, -0.13, -0.02], r: [-8, 0, 0] })));
+  // stand: square plinth and a round base
+  parts.push(facet(tf(new T.CylinderGeometry(0.065, 0.065, 0.02, 4), { p: [0, -0.185, -0.02], r: [0, 45, 0] })));
+  parts.push(tf(new T.CylinderGeometry(0.085, 0.09, 0.05, 32), { p: [0, -0.22, -0.02] }));
+  const g = merge(parts.map((x) => { if (!x.attributes.uv) x.setAttribute('uv', new T.BufferAttribute(new Float32Array(x.attributes.position.count * 2), 2)); return x; }));
+  g.translate(0, 0.245, 0); // base on the floor
+  // merge() re-indexes but keeps the per-face normals, so the planes stay flat
+  const m = new T.Mesh(g, mat); m.castShadow = true;
+  const root = new T.Group(); root.add(m);
+  return { root, joints: null, mat };
+}
+
 // ───────── buildings ─────────
 // seeded random so a scene rebuilds identically after reloading
 function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
