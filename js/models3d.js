@@ -1045,6 +1045,122 @@ export function retargetBVH(bvh, frameIndex, fig) {
   }
   return pose;
 }
+// Retarget a Clip Studio pose (world bone positions in cm + rotations, from clipfile.js) onto a
+// drawing figure. Every joint gets a full orientation, not just a direction:
+//   torso / head: bone direction + the bone's own left-right axis (Clip Studio's local Y)
+//   pelvis: up to the spine + hip to hip;  hands: to the middle knuckle + index-to-pinky
+//   feet: to the toes + up the shin;  upper arms / thighs: the bend plane of the elbow / knee
+//   forearms, shins, fingers, toes, collarbones: the bone direction, twisting with the parent
+// Returns a stored pose (local rotations relative to the bind, like retargetBVH).
+export function retargetCSP(src, fig) {
+  const V = (a) => new T.Vector3(a[0], a[1], a[2]);
+  const S = (n) => (src[n] ? V(src[n].p) : null);
+  const axisY = (n) => { const q = src[n].q; return new T.Vector3(0, 1, 0).applyQuaternion(new T.Quaternion(q[1], q[2], q[3], q[0])); };
+  const W = fig.world, R = (n) => W[n] && W[n].clone();
+  const frame = (dir, side) => {
+    const y = dir.clone().normalize(), x = side.clone().sub(y.clone().multiplyScalar(side.dot(y)));
+    if (x.lengthSq() < 1e-8) return null;
+    x.normalize(); const z = new T.Vector3().crossVectors(x, y);
+    return new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(x, y, z));
+  };
+  const fromFrames = (restDir, restSide, dir, side) => { const a = frame(restDir, restSide), b = frame(dir, side); return a && b ? b.multiply(a.invert()) : null; };
+  const aim = (pw, restDir, dir) => new T.Quaternion().setFromUnitVectors(restDir.clone().applyQuaternion(pw).normalize(), dir.clone().normalize()).multiply(pw);
+  const sub = (a, b) => (a && b ? a.clone().sub(b) : null);
+  const X = new T.Vector3(1, 0, 0), UP = new T.Vector3(0, 1, 0);
+  const side = (s) => (s === 'L' ? 'left' : 'right');
+  const worldRot = {}, pose = {};
+  const parentOf = (n) => (fig.joints[n].parent && fig.joints[n].parent.name) || null;
+  const set = (n, w) => { const par = parentOf(n), pw = (par && worldRot[par]) || new T.Quaternion(); worldRot[n] = w; pose[n] = pw.clone().invert().multiply(w).toArray(); };
+  const pw = (n) => { const par = parentOf(n); return (par && worldRot[par]) || new T.Quaternion(); };
+  // torso
+  const torso = [['pelvis', null], ['spine', 'spine1'], ['chest', 'spine2'], ['neck', 'neck'], ['head', 'head']];
+  const torsoNext = { spine1: 'spine2', spine2: 'neck', neck: 'head', head: 'head_end' };
+  for (const [n, c] of torso) {
+    if (!fig.joints[n]) continue;
+    let w = null;
+    if (n === 'pelvis') {
+      w = fromFrames(sub(R('spine'), R('pelvis')), sub(R('hipL'), R('hipR')), sub(S('spine1'), S('hips')), sub(S('leftupleg'), S('rightupleg')));
+    } else if (src[c]) {
+      const nx = n === 'head' ? null : { spine: 'chest', chest: 'neck', neck: 'head' }[n];
+      const restDir = nx ? sub(R(nx), R(n)) : UP.clone();
+      const dir = sub(S(torsoNext[c]) || S(c).clone().add(UP), S(c));
+      w = fromFrames(restDir, X, dir, axisY(c));
+    }
+    if (w) set(n, w); else worldRot[n] = pw(n);
+  }
+  // arms and legs
+  for (const s of ['L', 'R']) {
+    const sd = side(s);
+    const limb = (n, restA, restB, a, b) => { if (!fig.joints[n]) return; const d = sub(S(b), S(a)); if (!d || d.lengthSq() < 1e-6) { worldRot[n] = pw(n); return; } set(n, aim(pw(n), sub(R(restB), R(restA)), d)); };
+    // collarbone
+    limb('clav' + s, 'clav' + s, 'shoulder' + s, sd + 'shoulder', sd + 'arm');
+    // upper arm / thigh: direction plus the plane the elbow / knee bends in
+    const bendLimb = (n, child, grand, a, b, c, restBend, fallback) => {
+      if (!fig.joints[n]) return;
+      const dir = sub(S(b), S(a)), low = sub(S(c), S(b));
+      if (!dir) { worldRot[n] = pw(n); return; }
+      const rest = sub(R(child), R(n));
+      const perp = low ? low.clone().sub(dir.clone().normalize().multiplyScalar(low.dot(dir.clone().normalize()))) : null;
+      const bent = perp && low && perp.length() / low.length() > 0.17;
+      const w = bent ? fromFrames(rest, restBend, dir, perp) : fallback ? fallback(dir) : null;
+      set(n, w || aim(pw(n), rest, dir));
+    };
+    const toeFwd = sub(S(sd + 'toebase'), S(sd + 'foot'));
+    bendLimb('shoulder' + s, 'elbow' + s, 'hand' + s, sd + 'arm', sd + 'forearm', sd + 'hand', new T.Vector3(0, 0, 1));
+    limb('elbow' + s, 'elbow' + s, 'hand' + s, sd + 'forearm', sd + 'hand');
+    bendLimb('hip' + s, 'knee' + s, 'foot' + s, sd + 'upleg', sd + 'leg', sd + 'foot', new T.Vector3(0, 0, -1),
+      (dir) => (toeFwd ? fromFrames(sub(R('knee' + s), R('hip' + s)), new T.Vector3(0, 0, -1), dir, toeFwd.clone().negate()) : null));
+    limb('knee' + s, 'knee' + s, 'foot' + s, sd + 'leg', sd + 'foot');
+    // hand: to the middle knuckle, across index → pinky
+    if (fig.joints['hand' + s]) {
+      const w = fromFrames(sub(R('middle' + s + '1'), R('hand' + s)), sub(R('index' + s + '1'), R('pinky' + s + '1')),
+        sub(S(sd + 'handmiddle1'), S(sd + 'hand')), sub(S(sd + 'handindex1'), S(sd + 'handpinky1')));
+      if (w) set('hand' + s, w); else worldRot['hand' + s] = pw('hand' + s);
+    }
+    // foot: to the toes, up the shin
+    if (fig.joints['foot' + s]) {
+      const w = fromFrames(sub(R('toe' + s), R('foot' + s)), sub(R('knee' + s), R('foot' + s)), toeFwd, sub(S(sd + 'leg'), S(sd + 'foot')));
+      if (w) set('foot' + s, w); else worldRot['foot' + s] = pw('foot' + s);
+    }
+    if (fig.joints['toe' + s]) {
+      const d = sub(S(sd + 'toebase_end'), S(sd + 'toebase'));
+      if (d) set('toe' + s, aim(pw('toe' + s), sub(R('toe' + s), R('foot' + s)), d)); else worldRot['toe' + s] = pw('toe' + s);
+    }
+    // fingers: Clip Studio has 4 points per finger (3 bones + the tip)
+    for (const f of FINGERS) for (let k = 1; k <= 3; k++) {
+      const n = f + s + k; if (!fig.joints[n]) continue;
+      const d = sub(S(sd + 'hand' + f + (k + 1)), S(sd + 'hand' + f + k));
+      const restNext = k < 3 ? R(f + s + (k + 1)) : null;
+      const restDir = restNext ? sub(restNext, R(n)) : sub(R(n), R(f + s + (k - 1)));
+      if (d && restDir) set(n, aim(pw(n), restDir, d)); else worldRot[n] = pw(n);
+    }
+  }
+  // height: the hips at the same height relative to the leg length
+  const legS = S('leftupleg') && S('leftleg') && S('leftfoot') ? S('leftupleg').distanceTo(S('leftleg')) + S('leftleg').distanceTo(S('leftfoot')) : 0;
+  const legO = W.hipL && W.kneeL && W.footL ? W.hipL.distanceTo(W.kneeL) + W.kneeL.distanceTo(W.footL) : 0;
+  if (legS && legO) {
+    const k = legO / legS, hp = S('hips');
+    pose.$root = [0, (hp.y * k - W.pelvis.y) / fig.H, 0];
+  }
+  return pose;
+}
+// Clip Studio drawing-figure body type → the figure's body settings (its sliders run −1…1
+// around the base body; part values are [length, width, depth])
+export function bodyFromCSP(b, cur = {}) {
+  const sex = b.dessindoll_kind_index === 0 ? 'male' : 'female';
+  const part = (v, l = 0.5, w = 1) => (v ? [+(1 + (v[1] ?? v[0]) * w).toFixed(3), +(1 + v[0] * l).toFixed(3)] : [1, 1]);
+  const uni = (v) => (v ? [+(1 + v[0] * 0.5).toFixed(3), +(1 + v[0] * 0.5).toFixed(3)] : [1, 1]);
+  const width = (v) => (v ? [+(1 + v[0]).toFixed(3), 1] : [1, 1]);
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  return {
+    ...cur, sex,
+    height: +((sex === 'male' ? 1.5 : 1.4) + clamp01(b.tall ?? 0.5) * 0.6).toFixed(3),
+    muscle: +clamp01(0.5 + 0.5 * ((b.shape_muscle || 0) - (b.shape_child || 0))).toFixed(3),
+    fat: +clamp01(0.5 + 0.5 * ((b.shape_fat || 0) - (b.shape_thin || 0))).toFixed(3),
+    parts: { head: uni(b.head), neck: part(b.neck), shoulders: width(b.shoulder), chest: part(b.body), waist: part(b.body), hips: width(b.hips),
+      upperArms: part(b.arm), forearms: part(b.arm), hands: uni(b.hand), thighs: part(b.leg), calves: part(b.leg), feet: part(b.foot) },
+  };
+}
 // Export the figure's current pose as BVH (Mixamo-style names, centimetres) — Clip Studio,
 // Blender and most 3D apps can load it.
 const BVH_NAME = { pelvis: 'Hips', spine: 'Spine', chest: 'Spine2', neck: 'Neck', head: 'Head', clav: 'Shoulder', shoulder: 'Arm', elbow: 'ForeArm', hand: 'Hand', hip: 'UpLeg', knee: 'Leg', foot: 'Foot', toe: 'ToeBase' };

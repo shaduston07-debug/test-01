@@ -544,6 +544,26 @@ function renderNow(layer, doc, rt, scale = 1, live = false) {
 }
 
 // ───────── tool ─────────
+// Clip Studio poses / body types kept in the asset store (raw Clip Studio data, so a pose is
+// fitted to whichever figure it is put on)
+export async function importCspFiles(files, progress) {
+  const CF = await import('./clipfile.js');
+  const items = await CF.readCspMaterials(files, progress);
+  let poses = 0, bodies = 0;
+  const have = new Set((await store.listAssets()).filter((a) => a.kind === 'csppose' || a.kind === 'cspbody').map((a) => a.sig));
+  for (const it of items) {
+    const sig = it.kind + ':' + JSON.stringify(it.data).length + ':' + it.name;
+    if (have.has(sig)) continue;
+    have.add(sig);
+    await store.putAsset({ id: 'csp:' + uid(), kind: it.kind === 'pose' ? 'csppose' : 'cspbody', name: it.name, set: it.set, data: it.data, thumb: it.thumb ? await store.toBytes(it.thumb) : null, sig, added: Date.now() });
+    if (it.kind === 'pose') poses++; else bodies++;
+  }
+  return { poses, bodies };
+}
+async function importedCsp(kind) {
+  return (await store.listAssets()).filter((a) => a.kind === kind).sort((a, b) => (a.set || '').localeCompare(b.set || '') || (a.added - b.added) || a.name.localeCompare(b.name));
+}
+
 export function tool3d(app) {
   const t = {
     // 'object' works like Clip Studio's Object tool: tap to select a model (tap again on a body part
@@ -891,7 +911,7 @@ export function tool3d(app) {
           switchRow('Guide lines (face & body centre, eye line)', b.guides !== false, (v) => { const m = e.fig && e.fig.mesh; this.edit('Guide lines', () => { b.guides = v; if (m && m.userData.setGuides) m.userData.setGuides(v); }); })));
       }
       if (e.joints) {
-        out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), btn('Reset pose', () => this.resetPose())),
+        out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), human && btn('Clip Studio poses…', () => this.cspPoseMenu()), btn('Reset pose', () => this.resetPose())),
           human && switchRow('IK (drag a hand / foot to move the limb)', this.ik, (v) => { this.ik = v; app.updateCtxBar(); }),
           h('p', { class: 'hint' }, this.joint ? `${this.jointLabel(this.joint)}: drag the rings to turn it. Tap it again to go back to the whole model.` : 'Tap a body part of the selected model to turn that joint with the rings.')));
       }
@@ -968,6 +988,12 @@ export function tool3d(app) {
       const apply = (p) => this.edit('Body preset', () => { const b = o.body; Object.assign(b, { muscle: 0.5, fat: 0.5 }, JSON.parse(JSON.stringify(p))); if (!p.parts) delete b.parts; b.build = b.muscle; }, true);
       const body = h('div', {}, h('div', { class: 'menu-section' }, 'Body types'),
         h('div', { class: 'p3d-chips' }, ...BUILTIN.map(([n, p]) => h('button', { onclick: () => { apply(p); dlg.close(); } }, n))));
+      importedCsp('cspbody').then((list) => {
+        const sec = h('div', {}, h('div', { class: 'menu-section' }, 'From Clip Studio'));
+        const chips = h('div', { class: 'p3d-chips' }, ...list.map((r) => h('button', { onclick: () => { this.edit('Clip Studio body type', () => { Object.assign(o.body, M.bodyFromCSP(r.data, o.body)); o.body.build = o.body.muscle; }, true); dlg.close(); toast('Body type “' + r.name + '” applied'); } }, r.name)),
+          h('button', { onclick: async () => { dlg.close(); await this.importCsp(); this.bodyPresets(o); } }, '＋ Import .bodyproportion / Material zip…'));
+        sec.append(chips); body.insertBefore(sec, body.children[2] || null);
+      });
       if (mine.length) body.append(h('div', { class: 'menu-section' }, 'Saved'), h('div', { class: 'p3d-chips' }, ...mine.map((m, i) => {
         const bt = h('button', { onclick: () => { apply(m.body); dlg.close(); } }, m.name);
         let t; bt.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; mine.splice(i, 1); store.prefs.set('bodyPresets', mine); dlg.close(); toast('Removed ' + m.name); }, 700); });
@@ -1280,6 +1306,49 @@ export function tool3d(app) {
         { label: 'Export pose (.bvh)', onClick: async () => { const { download } = await import('./util.js'); download(new Blob([M.exportBVH(e.fig, e.data.pose || {})], { type: 'text/plain' }), (e.data.name || 'pose').replace(/[^\w -]+/g, '') + '.bvh'); } },
         { label: 'Import BVH…', primary: true, onClick: () => this.importBVH(e) },
       ] });
+    },
+    // Clip Studio poses: the pose materials of a Material folder zip (or loose .pose files),
+    // fitted joint by joint onto the selected figure
+    async importCsp() {
+      const files = await pickFile('.zip,.pose,.bodyproportion', true);
+      if (!files.length) return 0;
+      toast('Reading Clip Studio materials…', 60000);
+      try {
+        const r = await importCspFiles(files, (n, total) => { if (n % 10 === 0 || n === total) toast(`Reading Clip Studio materials… ${n} / ${total}`, 60000); });
+        toast(r.poses || r.bodies ? `Imported ${r.poses} pose${r.poses === 1 ? '' : 's'}${r.bodies ? ` and ${r.bodies} body type${r.bodies === 1 ? '' : 's'}` : ''}` : 'No Clip Studio poses or body types found in that file', 4500);
+        return r.poses + r.bodies;
+      } catch (e) { console.error(e); toast('Could not read that: ' + e.message, 5000); return 0; }
+    },
+    async cspPoseMenu() {
+      const e = this.poseTarget(); if (!e || e.rig !== 'human') { toast('Select a figure first'); return; }
+      const list = await importedCsp('csppose');
+      const b = this.snapshot(), urls = [];
+      const body = h('div', { class: 'lib3d' });
+      if (!list.length) body.append(h('p', {}, 'No Clip Studio poses yet. Import your Clip Studio Material folder as a .zip (or single .pose files): every pose in it is added here, with its thumbnail.'),
+        h('p', { class: 'hint' }, 'On a PC the folder is %APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioCommon\\Material (right-click › Send to › Compressed folder). Downloaded 3D models stay encrypted by Clip Studio, but poses and body types are read exactly.'));
+      const sets = new Map();
+      for (const r of list) { const k = r.set || 'Poses'; if (!sets.has(k)) sets.set(k, []); sets.get(k).push(r); }
+      let cur = null;
+      for (const [set, rs] of sets) {
+        body.append(h('div', { class: 'menu-section' }, set));
+        const grid = h('div', { class: 'lib3d-grid' });
+        for (const r of rs) {
+          let img = null;
+          if (r.thumb) { const u = URL.createObjectURL(store.toBlob(r.thumb)); urls.push(u); img = h('img', { src: u, alt: '' }); }
+          const bt = h('button', { class: 'lib3d-item my-model', onclick: () => {
+            try { e.data.pose = M.retargetCSP(r.data, e.fig); syncObject(e); this.redraw(this.previewScale()); } catch (err) { console.error(err); toast('Could not apply that pose: ' + err.message, 4000); return; }
+            if (cur) cur.classList.remove('on'); bt.classList.add('on'); cur = bt;
+          } }, img, h('span', {}, r.set && r.name.startsWith(r.set + ' · ') ? 'Pose ' + r.name.slice(r.set.length + 3) : r.name));
+          let tm; bt.addEventListener('pointerdown', () => { tm = setTimeout(async () => { tm = null; await store.deleteAsset(r.id); bt.remove(); toast('Removed ' + r.name); }, 700); });
+          bt.addEventListener('pointerup', () => clearTimeout(tm)); bt.addEventListener('pointerleave', () => clearTimeout(tm));
+          grid.append(bt);
+        }
+        body.append(grid);
+      }
+      if (list.length) body.append(h('p', { class: 'hint' }, 'Tap a pose to put it on the figure; hold one to delete it. Save a favourite with Poses… › Save current pose.'));
+      dialog({ title: `Clip Studio poses (${list.length})`, wide: true, body, actions: [
+        { label: 'Import…', onClick: async () => { if (await this.importCsp()) this.cspPoseMenu(); } },
+        { label: 'Done', primary: true }], onClose: () => { urls.forEach((u) => URL.revokeObjectURL(u)); this.commit('Clip Studio pose', b); this.redraw(1); } });
     },
     async importBVH(e) {
       const [f] = await pickFile('.bvh,text/plain');

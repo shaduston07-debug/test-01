@@ -2413,7 +2413,7 @@ export function newDocDialog(app, mode = 'paint') {
 }
 
 export async function importAny(app) {
-  const files = await pickFile('.inkwell,.json,image/*,.sut,.brush,.brushset,.abr,' + Pal.PALETTE_ACCEPT + ',.inkwellbackup,.clip', true);
+  const files = await pickFile('.inkwell,.json,image/*,.sut,.brush,.brushset,.abr,' + Pal.PALETTE_ACCEPT + ',.inkwellbackup,.clip,.pose,.bodyproportion', true);
   if (files.length) await handleFiles(app, files);
 }
 
@@ -2434,6 +2434,12 @@ export async function handleFiles(app, files) {
   for (const f of files.filter((f) => ext(f) === 'inkwellbackup')) {
     if (!(await confirmDialog(`Restore “${f.name}”? Canvases, brushes and settings in it are added back (nothing is deleted).`, 'Restore'))) continue;
     try { const r = await Backup.importBackup(f); toast(`Restored ${r.canvases} canvas${r.canvases === 1 ? '' : 'es'}`, 3000); if (!app.doc) renderGallery(app); } catch (e) { toast('Couldn’t restore: ' + (e.message || e), 4000); }
+  }
+  // Clip Studio poses / body types: into the 3D figure's Clip Studio pose library
+  const cspFiles = files.filter((f) => /\.(pose|bodyproportion)$/i.test(f.name));
+  if (cspFiles.length) {
+    try { const T3 = await import('./three3d.js'); const r = await T3.importCspFiles(cspFiles); toast(`Added ${r.poses} Clip Studio pose${r.poses === 1 ? '' : 's'}${r.bodies ? ` and ${r.bodies} body type${r.bodies === 1 ? '' : 's'}` : ''} — 3D figure › Pose › Clip Studio poses…`, 4500); }
+    catch (e) { toast('Couldn’t read: ' + (e.message || e), 4000); }
   }
   const brushFiles = files.filter((f) => /\.(sut|brush|brushset|abr)$/i.test(f.name));
   if (brushFiles.length) {
