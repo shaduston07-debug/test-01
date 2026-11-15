@@ -92,6 +92,15 @@ export async function importVideoAsAnimation(app) {
   if (d.mode !== 'animate') { toast('Open an Animate canvas to import a whole video'); return; }
   const [f] = await pickFile('video/*');
   if (!f) return;
+  return importVideoBlob(app, f, f.name.replace(/\.[^.]+$/, ''));
+}
+// Imports a video (File / Blob) into the open Animate canvas as drawings on a new track.
+// opts.reference: a reference track (locked, see-through, left out of exports and the
+// time-lapse) placed at the bottom, with an empty track above it to draw on.
+export async function importVideoBlob(app, f, name, opts = {}) {
+  const d = app.doc;
+  if (!d || d.mode !== 'animate') { toast('Open an Animate canvas first'); return; }
+  const ref = !!opts.reference;
   let v;
   try { v = await loadVideo(f); } catch (e) { toast(e.message); return; }
   const fps = d.anim.fps, dur = v.duration || 0;
@@ -107,12 +116,12 @@ export async function importVideoAsAnimation(app) {
       field('Start', { min: 0, max: dur, step: 0.1, value: 0, fmt: (x) => x.toFixed(1) + ' s', onInput: (x) => { start = x; upd(); } }),
       field('End', { min: 0, max: dur, step: 0.1, value: end, fmt: (x) => x.toFixed(1) + ' s', onInput: (x) => { end = x; upd(); } }),
       field('Keep every Nth frame', { min: 1, max: 6, step: 1, value: 1, fmt: (x) => (x === 1 ? 'every frame' : `1 of ${x} (held ${x}×)`), onInput: (x) => { every = x; upd(); } }),
-      switchRow('Private (hidden from the time-lapse)', false, (x) => (priv = x)), info),
-    actions: [{ label: 'Cancel' }, { label: 'Import', primary: true, onClick: async () => {
+      ref ? h('p', { class: 'hint' }, 'It becomes a locked, see-through reference track at the bottom (never exported), with an empty track above it to draw on. Step through it with the frame buttons and draw your keys over it.') : switchRow('Private (hidden from the time-lapse)', false, (x) => (priv = x)), info),
+    actions: [{ label: 'Cancel' }, { label: ref ? 'Add reference' : 'Import', primary: true, onClick: async () => {
       const n = count();
       if (n > free) { toast(`That needs ${n} drawings but there is room for ${free}. Shorten the clip or keep fewer frames.`, 4500); return false; }
-      toast('Importing video…', 60000);
-      const t = new Track({ name: f.name.replace(/\.[^.]+$/, '').slice(0, 24) || 'Video', private: priv });
+      toast(ref ? 'Adding the reference…' : 'Importing video…', 60000);
+      const t = new Track(ref ? { name: ('Ref · ' + (name || 'cut')).slice(0, 28), opacity: 0.45, draft: true, locked: true, private: true } : { name: (name || 'Video').slice(0, 24), private: priv });
       const s = Math.min(d.width / v.videoWidth, d.height / v.videoHeight);
       const w = v.videoWidth * s, hh = v.videoHeight * s;
       for (let i = 0; i < n; i++) {
@@ -121,10 +130,18 @@ export async function importVideoAsAnimation(app) {
         cel.canvas.getContext('2d').drawImage(v, (d.width - w) / 2, (d.height - hh) / 2, w, hh);
       }
       d.anim.length = Math.max(d.anim.length, d.playhead + n * every);
-      insertLayer(app, t);
+      if (ref) {
+        // reference at the bottom, a fresh drawing track above it, selected
+        insertLayer(app, t, 0);
+        // a brand-new canvas's empty "Track 1" becomes the drawing track; otherwise add one
+        const blank = d.tracks.length === 2 && d.tracks[1].name === 'Track 1' && !d.tracks[1].keys.length && d.tracks[1].cels.length <= 1;
+        if (blank) { d.tracks[1].name = 'Over ' + (name || 'cut').slice(0, 20); d.active = 1; }
+        else { const draw = new Track({ name: 'Over ' + (name || 'cut').slice(0, 20) }); d.addCel(draw, d.playhead, 1); insertLayer(app, draw, 1); }
+      } else insertLayer(app, t);
       app.timeline.refresh();
       URL.revokeObjectURL(v.src);
-      toast(`Imported ${n} drawings`);
+      toast(ref ? `Reference added: ${n} frames` : `Imported ${n} drawings`);
+      opts.done && opts.done(n);
     } }],
   });
 }

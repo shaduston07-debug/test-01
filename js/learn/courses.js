@@ -787,6 +787,85 @@ export const COURSES = [
     ],
     capstone: { title: 'Capstone: a 4-second fight cut', text: 'Plan and animate a fight cut of about 96 frames between two of your own characters: an opening exchange, a dodge and counter, and a finishing blow, with fluid full-body motion throughout. Break down one real cut from Jujutsu Kaisen, Hitori no Shita or Super Cube first and borrow its rhythm (its frame counts), not its drawings.', ideas: ['Your protagonist versus a rival, each with a different fighting style', 'A small fast character against a big slow one', 'A sword against bare hands'], studio: studioAnim('Capstone — fight cut', 96) },
   },
+  // ───────────────────────── ANIMATION 4 ─────────────────────────
+  {
+    id: 'anim4', track: 'animation', title: 'Animation 4: Master Studies', color: '#ffb020',
+    blurb: 'Learn from real cuts: Yutaka Nakamura, Super Cube and Jujutsu Kaisen seasons 2 and 3, studied frame by frame and redrawn on top as reference.',
+    outcome: 'You can load a professional cut as a reference track, take it apart (keys, holds, smears, effects), copy its timing and then re-animate the idea in your own drawing.',
+    lessons: [
+      {
+        id: 'over', title: 'Drawing over a cut: the master study', min: 10,
+        body: [
+          '<p>Painters copy old masters; animators <b>re-animate</b> cuts they love. A master study is not tracing for a finished picture: it is a way to feel, frame by frame, the decisions the animator made. Every cut in this course can be dropped into an Animate canvas as a <b>reference track</b>.</p>',
+          { demo: 'sakuga', caption: 'Pick any cut, then tap ✎ Use as reference.' },
+          '<ol><li><b>✎ Use as reference</b> under a cut makes a new Animate canvas (or adds to the open one): the cut becomes a locked, see-through track at the bottom, never exported, with an empty track above it.</li><li><b>Pass 1 — keys only.</b> Step frame by frame. On the drawing track, draw only the key poses as quick stick figures with a line of action, on the frames where they happen. Write the hold length next to each (6, 2, 1, 4…).</li><li><b>Pass 2 — the timing.</b> Hide the reference (tap its eye) and play your keys. Does it still feel like the cut? If not, your holds are wrong, not your drawings.</li><li><b>Pass 3 — your version.</b> New track, reference hidden: re-animate the same action with your own character, keeping only the timing.</li></ol>',
+          '<p>Inside a canvas, the same library is at <b>Actions › Add › Cut library</b> (and Window › Cut library in the classic layout). Save cuts with <b>⬇ Save offline</b> first and the whole study works without internet.</p>',
+        ],
+        keys: ['Use as reference → a locked, see-through track that is never exported.', 'Pass 1 keys + hold counts, pass 2 timing check, pass 3 your own version.', 'Copy the timing and decisions, not the drawings.'],
+        quiz: [
+          { q: 'What is the point of the second pass (reference hidden, keys only)?', a: ['To check the timing alone carries the feel of the cut', 'To colour the drawings', 'To make the file smaller'], c: 0, why: 'If the keys with the right holds feel right, the cut\'s energy is in the timing — that is what you are learning.' },
+        ],
+        challenge: { title: 'Your first master study', text: 'Pick a 1–2 second cut from the library and do the three passes.', steps: ['Open the cut and tap ✎ Use as reference (or in a canvas: Actions › Add › Cut library).', 'Pass 1: stick-figure keys with hold counts on the drawing track.', 'Pass 2: hide the reference and play.', 'Pass 3: re-animate it with your own character on a new track.'], studio: studioAnim('Master study', 48) },
+        sources: [S.sakuga, S.sakugaBlog, S.williams],
+      },
+      {
+        id: 'nakamura', title: 'Yutaka Nakamura: timing, smears and debris', min: 14,
+        body: [
+          '<p>Yutaka Nakamura is one of the most studied action animators in anime: his fights in films and series for Studio Bones made "Nakamura-style" timing and effects a reference point for a generation of animators. The cuts below are his, as tagged on Sakugabooru.</p>',
+          { demo: 'sakuga-nakamura', caption: 'Yutaka Nakamura on Sakugabooru. Tap a cut, then step through it.' },
+          '<p><b>What to look for, frame by frame:</b></p><ul><li><b>Extreme timing contrast.</b> Long, readable holds, then movements that happen in one or two drawings. Count the frames of the fast part: you will often find a single drawing covering the whole move.</li><li><b>Smears and multiples.</b> A fist or a leg drawn stretched, or several times at once, on the frame of the fastest motion.</li><li><b>Graphic effects.</b> Dust, rocks and debris as flat, sharp-edged shapes with hard shadows, tumbling on their own arcs and timing, often lingering after the hit.</li><li><b>Impact as design.</b> Flashes, inverted frames and shock shapes held just long enough to read.</li><li><b>The camera hits too.</b> Shakes and sudden reframes land on the impact, not before it.</li></ul>',
+          '<p><b>Study tip:</b> pick one hit. Write the hold count of every drawing from the wind-up to the end of the debris. Then note which drawings are character, which are smear, which are effect. You will see how few drawings the hit itself uses compared with the effects around it.</p>',
+        ],
+        keys: ['Long readable holds, one-drawing moves.', 'Smears and multiples on the fastest frame.', 'Debris and dust as hard graphic shapes on their own timing.'],
+        quiz: [
+          { q: 'Debris after a hit should move…', a: ['On its own arcs and timing, lingering after the hit', 'Exactly with the character', 'Only in straight lines'], c: 0, why: 'Effects follow their own physics; they keep tumbling and settle after the character has stopped.' },
+          { q: 'In a typical fast strike, how many drawings carry the actual travel?', a: ['Often just one or two', 'At least twelve', 'Always eight'], c: 0, why: 'The wind-up and the result are held; the movement itself is a smear or a jump between them.' },
+        ],
+        challenge: { title: 'Nakamura study', text: 'Re-animate one hit from a Yutaka Nakamura cut, then add your own debris.', steps: ['Use the cut as reference. Keys + hold counts only.', 'Mark the smear frame and the impact frame.', 'Hide the reference: re-animate the hit with a mannequin.', 'Add 5–8 debris shapes with hard shadows that keep tumbling after the hit.'], studio: studioAnim('Master study — Yutaka Nakamura', 48) },
+        sources: [S.sakuga, S.sakugaBlog],
+      },
+      {
+        id: 'supercube', title: 'Super Cube: fluid full-body motion', min: 12,
+        body: [
+          '<p>Super Cube is a Chinese animated series (donghua) whose fights are full of continuous, flowing full-body movement. It is a good place to study how a whole body moves through space, not just how a fist moves.</p>',
+          { demo: 'sakuga-supercube', caption: 'Super Cube on Sakugabooru. If nothing shows, try the show\'s other spellings in the search box.' },
+          '<p><b>What to look for:</b></p><ul><li><b>The hips lead.</b> Track the pelvis through a cut: it moves first and on the smoothest arc; the head and hands follow.</li><li><b>Continuous action.</b> One move flows into the next without a full stop: the follow-through of a kick becomes the wind-up of a spin.</li><li><b>Cloth and hair</b> trailing the body by a few frames, showing the path it just took.</li><li><b>Big camera moves</b> following the body, so the character stays readable while the background flies past.</li></ul>',
+          '<p><b>Study tip:</b> with the cut as reference, draw only one dot per frame on the hips and one on the head. Connect them. Two clean arcs, the head\'s lagging behind the hips: that is the flow.</p>',
+        ],
+        keys: ['Track the hips: they lead on the smoothest arc.', 'Each move\'s follow-through is the next move\'s wind-up.', 'Cloth shows the path the body took.'],
+        quiz: [{ q: 'In a flowing combo, the follow-through of one move…', a: ['Becomes the anticipation of the next', 'Always stops completely first', 'Is skipped'], c: 0, why: 'Chaining moves through each other is what makes action read as continuous.' }],
+        challenge: { title: 'Path study', text: 'On a Super Cube cut, plot the hips and head every frame, then re-animate a mannequin on those paths.', steps: ['Use the cut as reference.', 'One dot per frame for the hips (orange) and head (blue).', 'Connect the dots: two arcs.', 'Hide the reference; animate a mannequin whose hips and head follow your arcs.'], studio: studioAnim('Master study — Super Cube', 48) },
+        sources: [S.sakuga, S.williams],
+      },
+      {
+        id: 'jjk2', title: 'Jujutsu Kaisen season 2: hand-to-hand and camera', min: 12,
+        body: [
+          '<p>Jujutsu Kaisen\'s second season (MAPPA, 2023: the Hidden Inventory and Shibuya Incident arcs) is packed with close-quarters fights, many of them by well-known action animators, credited per cut on Sakugabooru.</p>',
+          { demo: 'sakuga-jjk', caption: 'Jujutsu Kaisen fight cuts. Tap the season or arc tag under a cut to narrow the list, and the animator\'s name to see more of their work.' },
+          '<p><b>What to look for:</b></p><ul><li><b>Readable wind-ups</b> even in very fast exchanges: count the frames of each anticipation.</li><li><b>Contact and reaction:</b> the body that is hit reacts a beat after the impact; the head snaps first.</li><li><b>Camera on the hit:</b> pushes, shakes and fast pans that start exactly on the impact frame.</li><li><b>Close-quarters staging:</b> silhouettes kept clear even when the characters are touching.</li></ul>',
+          '<p><b>Study tip:</b> pick one exchange (attack + answer). Draw both characters\' keys on two separate tracks over the reference, then compare where each character\'s held poses fall: they rarely hold at the same time.</p>',
+        ],
+        keys: ['Count every anticipation, even in fast exchanges.', 'The hit body reacts a beat late, head first.', 'The camera moves on the impact frame.'],
+        quiz: [{ q: 'Two characters exchange blows. Their held poses usually…', a: ['Alternate: one holds while the other moves', 'Always happen together', 'Never happen'], c: 0, why: 'Alternating holds keeps the exchange readable: the eye goes to whoever is moving.' }],
+        challenge: { title: 'Two-track exchange study', text: 'Re-animate a Jujutsu Kaisen season 2 exchange with two mannequins on two tracks.', steps: ['Use the cut as reference.', 'Track A: keys of the attacker. Track B: keys of the defender. Hold counts for both.', 'Hide the reference and play: does the rhythm survive?', 'Add a 3-frame camera shake on the impact.'], studio: studioAnim('Master study — JJK S2 exchange', 72) },
+        sources: [S.sakuga, S.sakugaBlog],
+      },
+      {
+        id: 'jjk3', title: 'Jujutsu Kaisen season 3: escalation and effects', min: 12,
+        body: [
+          '<p>The third season (the Culling Game) continues the series with bigger powers and larger set-piece fights. Use its cuts to study how action <b>escalates</b>: how the animators make each exchange feel bigger than the last without losing clarity.</p>',
+          { demo: 'sakuga-jjk', caption: 'Narrow to season 3 by tapping its tag under a cut (or type it in the search box).' },
+          '<p><b>What to look for:</b></p><ul><li><b>Escalation:</b> longer anticipations, bigger smears, longer hit-stops and more effects as a fight builds. Compare an early exchange with the finishing blow.</li><li><b>Effects with weight:</b> energy, fire or debris that have their own timing, slower to fade than the strike that caused them.</li><li><b>Pauses:</b> the quiet frames before the biggest move are what make it land.</li></ul>',
+          '<p><b>Study tip:</b> take two cuts from the same fight, an early one and the climax. Write their timing side by side (anticipation / travel / hold). The difference is the escalation, in numbers.</p>',
+        ],
+        keys: ['Escalate with longer wind-ups and holds, not just more effects.', 'Effects fade slower than the strike.', 'A quiet beat before the biggest move.'],
+        quiz: [{ q: 'The finishing blow of a fight usually has…', a: ['A longer anticipation and a longer hit-stop than earlier hits', 'The same timing as every other hit', 'No anticipation at all'], c: 0, why: 'Escalation shows in the timing: more build-up, a longer hold on impact.' }],
+        challenge: { title: 'Escalation study', text: 'Compare an early hit and the finishing blow of one season 3 fight, then animate your own three-hit escalation.', steps: ['Use both cuts as references (two reference tracks).', 'Write anticipation / travel / hold for each.', 'Animate three hits of your own, each bigger in timing than the last.', 'Effects only on the last one.'], studio: studioAnim('Master study — JJK S3 escalation', 96) },
+        sources: [S.sakuga, S.sakugaBlog, S.williams],
+      },
+    ],
+    capstone: { title: 'Capstone: a fight in your own style', text: 'Animate a 4–6 second fight between your own characters that borrows one lesson from each study: Nakamura\'s timing contrast and debris, Super Cube\'s continuous flow, and Jujutsu Kaisen\'s readable exchanges and escalation. Keep your study tracks as references, hidden, in the same file.', ideas: ['A rematch where the loser of the first fight has learnt something', 'A chase that turns into a fight', 'A duel that escalates in three exchanges'], studio: studioAnim('Capstone — master fight', 144) },
+  },
 
   // ════════════════════════ WEBTOON 1 ════════════════════════
   {

@@ -60,7 +60,11 @@ const pretty = (t) => t.replace(/_/g, ' ');
 export function sakugaPlayer(host, o = {}) {
   const base = o.base || SAKUGA;
   const st = { show: store.prefs.get('sakuga.show', SHOWS[0][0]), topic: '', artist: '', text: '', page: 1, list: [], cur: null, fps: 24, starred: store.prefs.get('sakuga.stars', []) };
-  if (o.show) st.show = o.show;
+  // presets (lessons open the player on a show, an artist or a tag)
+  if (o.show != null) st.show = o.show;
+  if (o.artist) { st.artist = o.artist; if (o.show == null) st.show = ''; }
+  if (o.topic) st.topic = o.topic;
+  if (o.text) st.text = o.text;
   const root = h('div', { class: 'sk' });
   host.append(root);
   // ── search ──
@@ -93,6 +97,7 @@ export function sakugaPlayer(host, o = {}) {
   for (const v of [24, 30, 12]) fpsSel.append(h('button', { class: v === 24 ? 'on' : '', title: 'Frame rate used for stepping and the counter', onclick: (e) => { st.fps = v; for (const b of fpsSel.children) b.classList.toggle('on', b === e.currentTarget); tick(); } }, v + ' fps'));
   const star = h('button', { class: 'lx-btn ghost', onclick: () => toggleStar() }, '☆ Star');
   const offBtn = h('button', { class: 'lx-btn ghost', onclick: () => toggleOffline() }, '⬇ Save offline');
+  const refBtn = h('button', { class: 'lx-btn', title: 'Draw over this cut in an Animate canvas', onclick: () => useAsReference() }, '✎ Use as reference');
   const fullBtn = h('button', { class: 'lx-btn ghost', title: 'Full screen', onclick: () => { player.classList.toggle('sk-full'); fullBtn.textContent = player.classList.contains('sk-full') ? '✕ Close' : '⛶ Full screen'; } }, '⛶ Full screen');
   // like a native player: tap = play / pause, drag sideways = scrub frame by frame
   let drag = null;
@@ -103,7 +108,7 @@ export function sakugaPlayer(host, o = {}) {
   const onKey = (e) => { if (player.hidden || !root.isConnected || /INPUT|TEXTAREA/.test(e.target.tagName)) return; if (e.key === ' ') { e.preventDefault(); video.paused ? video.play().catch(() => {}) : video.pause(); } else if (e.key === ',' || e.key === 'ArrowLeft') stepBy(-1); else if (e.key === '.' || e.key === 'ArrowRight') stepBy(1); };
   window.addEventListener('keydown', onKey);
   const controls = h('div', { class: 'lx-controls' }, playBtn,
-    h('button', { class: 'lx-btn ghost', onclick: () => stepBy(-1) }, '◀ frame'), h('button', { class: 'lx-btn ghost', onclick: () => stepBy(1) }, 'frame ▶'), counter, speeds, fpsSel, star, offBtn, fullBtn);
+    h('button', { class: 'lx-btn ghost', onclick: () => stepBy(-1) }, '◀ frame'), h('button', { class: 'lx-btn ghost', onclick: () => stepBy(1) }, 'frame ▶'), counter, speeds, fpsSel, star, offBtn, refBtn, fullBtn);
   const player = h('div', { class: 'sk-player', hidden: true }, video, scrub, controls, info);
   const tick = () => {
     const f = Math.floor(video.currentTime * st.fps + 0.001) + 1, tot = video.duration ? Math.round(video.duration * st.fps) : 0;
@@ -120,6 +125,38 @@ export function sakugaPlayer(host, o = {}) {
   const setStars = (list) => { st.starred = list.slice(0, 400); store.prefs.set('sakuga.stars', st.starred); };
   const thumbs = new Map(); // object URLs of saved thumbnails
   const offlineLabel = () => { const c = st.cur; offBtn.textContent = c && saved(c) ? '✓ Offline · remove' : '⬇ Save offline'; };
+  // ── use the cut as a reference in an Animate canvas ──
+  async function cutBlob(c) {
+    if (saved(c)) { const rec = await store.getCut('cut:' + c.id).catch(() => null); if (rec && rec.bytes) return new Blob([rec.bytes], { type: rec.type || 'video/mp4' }); }
+    return new Blob([await getBytes(c.url)], { type: mime(c.url) });
+  }
+  async function useAsReference() {
+    const c = st.cur, A = window.inkwell; if (!c || !A || refBtn.dataset.busy) return;
+    const name = (c.artists[0] ? pretty(c.artists[0]) : c.shows[0] ? pretty(c.shows[0]) : 'cut') + ' #' + c.id;
+    const go = async (intoOpen) => {
+      refBtn.dataset.busy = '1'; refBtn.textContent = 'Loading…';
+      try {
+        video.pause();
+        const blob = await cutBlob(c);
+        if (!intoOpen) {
+          const { Doc } = await import('../doc.js');
+          const k = Math.min(1, 1920 / (c.w || 1920)), W = Math.round((c.w || 1920) * k) || 1920, H = Math.round((c.h || 1080) * k) || 1080;
+          const d = Doc.create({ name: 'Study · ' + name, mode: 'animate', width: W - (W % 2), height: H - (H % 2) });
+          d.anim.fps = st.fps;
+          o.onLeave && o.onLeave();
+          await A.openDoc(d);
+        }
+        const Media = await import('../media.js');
+        await Media.importVideoBlob(A, blob, name, { reference: true });
+      } catch (e) { status.textContent = 'Could not load this cut (' + (e.message || 'network') + '). Save it offline first, or check the connection.'; }
+      delete refBtn.dataset.busy; refBtn.textContent = '✎ Use as reference';
+    };
+    const open = A.doc && A.doc.mode === 'animate' && !document.querySelector('#studio').hidden;
+    if (!open) return go(false);
+    const { dialog } = await import('../util.js');
+    dialog({ title: 'Use as reference', body: h('p', {}, `Add “${name}” as a reference track to “${A.doc.name}”, or start a new animation canvas sized to the cut?`), actions: [
+      { label: 'Cancel' }, { label: 'New canvas', onClick: () => { go(false); } }, { label: 'Add to this canvas', primary: true, onClick: () => { go(true); } }] });
+  }
   async function toggleOffline() {
     const c = st.cur; if (!c || offBtn.dataset.busy) return;
     if (saved(c)) {

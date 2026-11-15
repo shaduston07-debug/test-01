@@ -1649,6 +1649,9 @@ export const DEMOS = {
   grading: (el) => grading(el), 'grade-match': (el) => grading(el, { match: true }),
   ball: bouncingBall, spacing: spacingChart, arcs, anticipation, overlap, walk: walkCycle, 'ones-twos': onesTwos,
   'sakuga': sakugaPlayer,
+  'sakuga-nakamura': (el) => sakugaPlayer(el, { artist: 'yutaka_nakamura' }),
+  'sakuga-supercube': (el) => sakugaPlayer(el, { show: 'super_cube' }),
+  'sakuga-jjk': (el) => sakugaPlayer(el, { show: 'jujutsu_kaisen', topic: 'fighting' }),
   'fight-hit': fightHit, 'fight-flow': fightFlow, 'fight-snap': fightSnap, 'fight-choreo': fightChoreo,
   'webtoon-scroll': webtoonScroll, 'dialogue-order': dialogueOrder, slicing, pipeline: coloringPipeline,
 };

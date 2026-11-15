@@ -129,6 +129,7 @@ function menus() {
       ['Colour wheel & Layers', () => UI.dockClassic(app, true)],
       ['Brush library…', (e, b) => UI.openBrushLibrary(app, b)],
       ['Reference', () => app.reference && app.reference.toggle()],
+      anim ? ['Cut library (draw over a cut)', () => UI.openCutLibrary(app)] : null,
       anim ? ['Timeline', () => { const t = $('#timeline .tl-collapse, #timeline [title*="ollapse"]'); if (t) t.click(); }] : null,
       '-',
       ['Hide interface', () => document.body.classList.toggle('ui-hidden'), '4 fingers'],

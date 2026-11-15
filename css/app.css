@@ -934,3 +934,7 @@ body.liquid-ui .pop-arrow { background: rgba(60, 60, 70, 0.5); box-shadow: none;
 #gallery { will-change: transform; }
 /* during the logo zoom: no live blur (expensive at 40× zoom); the zoom stays smooth */
 body.zooming #gallery, body.zooming #gallery * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+
+.float-win[data-key=cuts] .pop-body { max-height: calc(86vh - 56px); }
+.float-win[data-key=cuts] { max-height: 86vh; }
+.cut-float { padding: 4px 2px 8px; }

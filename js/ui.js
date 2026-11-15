@@ -147,6 +147,15 @@ export function openFloating(key, title, { width = 320, head = [], body, onClose
   makeFloat(key, title, width, headBox, body, onClose, { left: innerWidth - width - 90, top: 80 });
 }
 export const isFloating = (key) => floats.has(key);
+// the Cut library in a floating window, over the canvas (to pick a cut to draw over)
+export async function openCutLibrary(app, opts = {}) {
+  if (floats.has('cuts')) { closeFloat('cuts'); }
+  const { sakugaPlayer } = await import('./learn/sakuga.js');
+  const body = h('div', { class: 'cut-float' });
+  let stop = null;
+  openFloating('cuts', 'Cut library', { width: Math.min(640, innerWidth - 40), body, onClose: () => { stop && stop(); } });
+  stop = sakugaPlayer(body, { ...opts, onLeave: () => closeFloat('cuts') });
+}
 export function closeAllFloats() { for (const k of [...floats.keys()]) closeFloat(k); }
 export function closePopover() {
   if (!pop) return;
@@ -948,6 +957,7 @@ export function openActions(app, anchor) {
       menuItem('image', 'Insert a private photo', () => Media.insertPhoto(app, true), 'not in time-lapse'),
       menuItem('video', 'Insert a video frame', () => Media.insertVideoFrame(app)),
       d.mode === 'animate' && menuItem('video', 'Import video as animation', () => Media.importVideoAsAnimation(app)),
+      d.mode === 'animate' && menuItem('play', 'Cut library (draw over a cut)', () => { closePopover(); openCutLibrary(app); }, 'reference'),
       d.mode !== 'animate' && menuItem('cube', 'Add 3D layer (model / figure)', () => app.add3DLayer()),
       menuItem('brushImport', 'Import brushes', () => importBrushesFlow(app), '.sut · .brush'),
       menuItem('brushImport', 'Import ibis Paint brush', () => Ibis.importIbisQR(app), 'QR code'),
