@@ -1328,22 +1328,37 @@ export function tool3d(app) {
         h('p', { class: 'hint' }, 'On a PC the folder is %APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioCommon\\Material (right-click › Send to › Compressed folder). Downloaded 3D models stay encrypted by Clip Studio, but poses and body types are read exactly.'));
       const sets = new Map();
       for (const r of list) { const k = r.set || 'Poses'; if (!sets.has(k)) sets.set(k, []); sets.get(k).push(r); }
-      let cur = null;
+      let cur = null, curRec = null, mirror = !!store.prefs.get('cspMirror', false);
+      const put = (r) => {
+        try { const ps = M.retargetCSP(r.data, e.fig); e.data.pose = mirror ? M.mirrorStored(ps) : ps; syncObject(e); this.redraw(this.previewScale()); return true; }
+        catch (err) { console.error(err); toast('Could not apply that pose: ' + err.message, 4000); return false; }
+      };
+      if (list.length) {
+        const search = h('input', { type: 'search', placeholder: 'Search poses', class: 'p3d-search', style: 'width:100%;margin:2px 0 6px;padding:8px 10px;border-radius:10px;border:0;background:var(--fill-1);color:inherit;font-size:14px' });
+        search.oninput = () => {
+          const q = search.value.trim().toLowerCase();
+          body.querySelectorAll('[data-set]').forEach((secEl) => {
+            let any = false;
+            secEl.querySelectorAll('.lib3d-item').forEach((it) => { const show = !q || it.dataset.k.includes(q); it.hidden = !show; any ||= show; });
+            secEl.hidden = !any;
+          });
+        };
+        body.append(search, switchRow('Mirror (flip left ↔ right)', mirror, (v) => { mirror = v; store.prefs.set('cspMirror', v); if (curRec) put(curRec); }));
+      }
       for (const [set, rs] of sets) {
-        body.append(h('div', { class: 'menu-section' }, set));
         const grid = h('div', { class: 'lib3d-grid' });
+        body.append(h('div', { 'data-set': set }, h('div', { class: 'menu-section' }, `${set} (${rs.length})`), grid));
         for (const r of rs) {
           let img = null;
           if (r.thumb) { const u = URL.createObjectURL(store.toBlob(r.thumb)); urls.push(u); img = h('img', { src: u, alt: '' }); }
-          const bt = h('button', { class: 'lib3d-item my-model', onclick: () => {
-            try { e.data.pose = M.retargetCSP(r.data, e.fig); syncObject(e); this.redraw(this.previewScale()); } catch (err) { console.error(err); toast('Could not apply that pose: ' + err.message, 4000); return; }
-            if (cur) cur.classList.remove('on'); bt.classList.add('on'); cur = bt;
+          const bt = h('button', { class: 'lib3d-item my-model', 'data-k': (r.name + ' ' + (r.set || '')).toLowerCase(), onclick: () => {
+            if (!put(r)) return;
+            curRec = r; if (cur) cur.classList.remove('on'); bt.classList.add('on'); cur = bt;
           } }, img, h('span', {}, r.set && r.name.startsWith(r.set + ' · ') ? 'Pose ' + r.name.slice(r.set.length + 3) : r.name));
           let tm; bt.addEventListener('pointerdown', () => { tm = setTimeout(async () => { tm = null; await store.deleteAsset(r.id); bt.remove(); toast('Removed ' + r.name); }, 700); });
           bt.addEventListener('pointerup', () => clearTimeout(tm)); bt.addEventListener('pointerleave', () => clearTimeout(tm));
           grid.append(bt);
         }
-        body.append(grid);
       }
       if (list.length) body.append(h('p', { class: 'hint' }, 'Tap a pose to put it on the figure; hold one to delete it. Save a favourite with Poses… › Save current pose.'));
       dialog({ title: `Clip Studio poses (${list.length})`, wide: true, body, actions: [
