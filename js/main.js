@@ -19,6 +19,7 @@ import { Timelapse } from './timelapse.js';
 import { Reference } from './reference.js';
 import * as Learn from './learn/learn.js';
 import * as AutoBackup from './autobackup.js';
+import * as Classic from './classic.js';
 import { drawGuide as drawPerspGuide, snapper as perspSnapper, perspTool } from './perspective.js';
 
 // Apple M-series iPads (M1–M4) report 8+ cores and have 8–16 GB of RAM: give layers a
@@ -147,6 +148,7 @@ class App {
     document.body.classList.toggle('solid-ui', st === 'solid');
     document.body.classList.toggle('liquid-ui', st === 'liquid');
     document.body.classList.toggle('classic-ui', !!this.settings.classicUI);
+    Classic.syncClassic(this);
     // accent: the colour of selected tools, the active layer and primary buttons
     const ac = /^#[0-9a-f]{6}$/i.test(this.settings.accent || '') ? this.settings.accent : '#2f7dff';
     const [r, g, b] = hexToRgb(ac), lite = [r, g, b].map((v) => Math.round(v + (255 - v) * 0.38));
@@ -199,24 +201,31 @@ class App {
     };
     if (!logo || !gal || gal.hidden || !gal.animate || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) { apply(); return; }
     this.switching = true;
+    document.body.classList.add('zooming');
     const origin = () => { const r = logo.getBoundingClientRect(), g = gal.getBoundingClientRect(); return `${r.left + r.width / 2 - g.left + gal.scrollLeft}px ${r.top + r.height / 2 - g.top + gal.scrollTop}px`; };
-    const veil = h('div', { class: 'logo-veil' }); document.body.append(veil);
-    const big = 46;
+    const veil = $('#logo-veil') || document.body.appendChild(h('div', { id: 'logo-veil', class: 'logo-veil' }));
+    const BIG = 40;
+    // exponential zoom (constant perceived speed, moving from the very first frame), sampled
+    // densely so the browser interpolates linearly between samples
+    const zoom = (from, to, n = 14) => Array.from({ length: n + 1 }, (_, i) => ({ transform: `scale(${(from * Math.pow(to / from, i / n)).toFixed(4)})` }));
+    const play = (el, frames, ms, easing = 'linear') => el.animate(frames, { duration: ms, easing, fill: 'forwards' });
     gal.style.transformOrigin = origin();
-    // entering: zoom in → switch → zoom out with a snap. leaving: the reverse (a short pull
-    // back first, then the dive, then the old layout settles).
-    const inK = to ? [{ transform: 'scale(1)' }, { transform: `scale(${big})` }] : [{ transform: 'scale(1)' }, { transform: 'scale(0.94)', offset: 0.28 }, { transform: `scale(${big})` }];
-    const a1 = gal.animate(inK, { duration: to ? 520 : 600, easing: 'cubic-bezier(0.7, 0, 0.84, 0)', fill: 'forwards' });
-    veil.animate([{ opacity: 0 }, { opacity: 0, offset: 0.55 }, { opacity: 1 }], { duration: to ? 520 : 600, fill: 'forwards' });
+    // in: entering dives straight in; leaving first gives a tiny squeeze (the reverse of the snap)
+    const inFrames = to ? zoom(1, BIG) : [{ transform: 'scale(1)' }, { transform: 'scale(0.95)', offset: 0.14 }, ...zoom(0.95, BIG).slice(1).map((f, i, a) => ({ ...f, offset: 0.14 + 0.86 * (i + 1) / a.length }))];
+    const tIn = to ? 260 : 300;
+    const a1 = play(gal, inFrames, tIn, to ? 'cubic-bezier(0.3, 0, 0.8, 0.6)' : 'linear');
+    play(veil, [{ opacity: 0 }, { opacity: 0.25, offset: 0.35 }, { opacity: 1 }], tIn, 'cubic-bezier(0.4, 0, 1, 1)');
     a1.onfinish = () => {
       apply();
       gal.style.transformOrigin = origin();
-      const outK = to
-        ? [{ transform: `scale(${big})` }, { transform: 'scale(0.9)', offset: 0.62, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' }, { transform: 'scale(1.035)', offset: 0.8 }, { transform: 'scale(0.992)', offset: 0.91 }, { transform: 'scale(1)' }]
-        : [{ transform: `scale(${big})` }, { transform: 'scale(1)' }];
-      const a2 = gal.animate(outK, { duration: to ? 640 : 460, easing: to ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' });
-      veil.animate([{ opacity: 1 }, { opacity: 0, offset: 0.4 }, { opacity: 0 }], { duration: 400, fill: 'forwards' });
-      a2.onfinish = () => { a1.cancel(); a2.cancel(); gal.style.transformOrigin = ''; veil.remove(); this.switching = false; };
+      // out: entering pulls back past its size and snaps into place; leaving settles plainly
+      const outFrames = to
+        ? [...zoom(BIG, 0.93, 12).map((f, i) => ({ ...f, offset: 0.7 * i / 12 })), { transform: 'scale(1.03)', offset: 0.84 }, { transform: 'scale(0.995)', offset: 0.93 }, { transform: 'scale(1)' }]
+        : zoom(BIG, 1, 14);
+      const tOut = to ? 420 : 280;
+      const a2 = play(gal, outFrames, tOut, to ? 'linear' : 'cubic-bezier(0.2, 0.6, 0.35, 1)');
+      play(veil, [{ opacity: 1 }, { opacity: 0, offset: 0.45 }, { opacity: 0 }], tOut, 'linear');
+      a2.onfinish = () => { a1.cancel(); a2.cancel(); gal.style.transformOrigin = ''; veil.getAnimations().forEach((x) => x.cancel()); document.body.classList.remove('zooming'); this.switching = false; };
     };
   }
 
@@ -274,6 +283,10 @@ class App {
     // hidden switch: the logo toggles the classic docked layout
     const brand = $('#gallery .brand');
     if (brand) brand.onclick = () => this.toggleClassic();
+    // the colour veil exists (invisible) from the start: nothing has to be created or painted
+    // for the first time when the logo is tapped
+    if (!$('#logo-veil')) document.body.append(h('div', { id: 'logo-veil', class: 'logo-veil' }));
+    if (brand) brand.addEventListener('pointerdown', () => { const g = $('#gallery'), r = brand.querySelector('.logo').getBoundingClientRect(), gr = g.getBoundingClientRect(); g.style.transformOrigin = `${r.left + r.width / 2 - gr.left + g.scrollLeft}px ${r.top + r.height / 2 - gr.top + g.scrollTop}px`; });
     this.updateColorChip();
   }
 
@@ -319,7 +332,7 @@ class App {
     this.history.clear();
     this.transform = null;
     $('#gallery').hidden = true; $('#learning').hidden = true; $('#studio').hidden = false;
-    setTimeout(() => UI.dockClassic(this), 0); // classic layout: Colours + Layers docked
+    setTimeout(() => { UI.dockClassic(this); Classic.syncClassic(this); }, 0); // classic layout: Colours + Layers docked
     document.body.classList.remove('mode-paint', 'mode-animate', 'mode-webtoon');
     document.body.classList.add('mode-' + doc.mode);
     $('#doc-title').textContent = doc.name;
@@ -529,8 +542,8 @@ class App {
     if (!this.doc) return;
     // the classic layout docks panels around the canvas: fit into what is left
     const cl = !!this.settings.classicUI, wide = this.vw > 900;
-    const d = this.doc, top = cl ? 96 : 70, bottom = d.mode === 'animate' ? 210 : 20, side = 70;
-    const sideL = cl ? 104 : side, sideR = cl ? (wide ? 304 : 252) : side;
+    const d = this.doc, top = cl ? 124 : 70, bottom = (d.mode === 'animate' ? 210 : 20) + (cl ? 34 : 0), side = 70;
+    const sideL = cl ? (wide ? 300 : 268) : side, sideR = cl ? (wide ? 304 : 252) : side;
     // webtoon: fit the width but stay at the part of the strip being worked on
     const keepY = o.keepPlace && d.mode === 'webtoon' && this.view ? this.screenToDoc(this.vw / 2, (o.at && o.at.y) || this.vh / 2).y : null;
     const aw = Math.max(120, this.vw - sideL - sideR), ah = this.vh - top - bottom;
