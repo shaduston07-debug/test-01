@@ -162,6 +162,17 @@ export function cacName(u8) {
   return name || null;
 }
 
+// where the material came from: its Clip Studio Assets id and the creator's account id
+export function cacSource(u8) {
+  const f = [], dec = new TextDecoder();
+  let p = 0;
+  while (p + 2 <= u8.length && f.length < 40) { const n = u8[p] | (u8[p + 1] << 8); if (p + 2 + n > u8.length) break; f.push(dec.decode(u8.subarray(p + 2, p + 2 + n))); p += 2 + n; }
+  const u = f.findIndex((x) => /^https:\/\/assets\.clip-studio\.com/.test(x));
+  if (u < 1) return null;
+  const id = /^\d+$/.test(f[u - 1]) ? f[u - 1] : null;
+  return id ? { assetsId: id, creatorId: /^\d+$/.test(f[u + 1] || '') ? f[u + 1] : null, page: `https://assets.clip-studio.com/en-us/detail?id=${id}` } : null;
+}
+
 // ───────── a zip read entry by entry (a whole Material folder can be gigabytes) ─────────
 async function sliceBytes(file, a, b) { return new Uint8Array(await file.slice(a, b).arrayBuffer()); }
 async function inflateRaw(u8) {
@@ -209,10 +220,10 @@ export async function zipEntries(file) {
 // .bodyproportion files: [{ kind: 'pose' | 'body', name, set, data, thumb }]
 export async function readCspMaterials(files, progress = () => {}) {
   const items = [];
-  const add = async (kind, bytes, name, set, thumb) => {
+  const add = async (kind, bytes, name, set, thumb, credit) => {
     const xml = celsysXml(bytes); if (!xml) return;
     const data = kind === 'pose' ? parseCspPose(xml) : parseCspBody(xml);
-    if (data) items.push({ kind, name: name || (kind === 'body' && data.name) || 'Pose', set: set || '', data, thumb: thumb || null });
+    if (data) items.push({ kind, name: name || (kind === 'body' && data.name) || 'Pose', set: set || '', data, thumb: thumb || null, credit: credit || null });
   };
   for (const f of files) {
     const low = f.name.toLowerCase();
@@ -220,15 +231,19 @@ export async function readCspMaterials(files, progress = () => {}) {
     else if (low.endsWith('.bodyproportion')) await add('body', new Uint8Array(await f.arrayBuffer()), f.name.replace(/\.bodyproportion$/i, ''));
     else if (low.endsWith('.zip')) {
       const ents = await zipEntries(f), byPath = new Map(ents.map((x) => [x.name, x]));
+      // optional credits.json beside the materials: { assetsId: { author, title, page } }
+      let names = {};
+      const cj = ents.find((x) => /(^|\/)credits\.json$/i.test(x.name));
+      if (cj) { try { names = JSON.parse(new TextDecoder().decode(await cj.read())); } catch { /* ignore */ } }
       const mats = ents.filter((x) => /\/data\/[^/]*\.(pose|bodyproportion)$/i.test(x.name) || /^[^/]*\.(pose|bodyproportion)$/i.test(x.name));
       let n = 0;
       for (const m of mats) {
         progress(++n, mats.length);
         const dir = m.name.replace(/data\/[^/]*$/, ''), cac = byPath.get(dir + 'catalogMaterial.cac'), th = byPath.get(dir + 'thumbnail/thumbnail.png');
-        let name = null, thumb = null;
-        try { if (cac) name = cacName(await cac.read()); } catch {}
+        let name = null, thumb = null, credit = null;
+        try { if (cac) { const cb = await cac.read(); name = cacName(cb); credit = cacSource(cb); if (credit && names[credit.assetsId]) credit = { ...credit, ...names[credit.assetsId] }; } } catch {}
         try { if (th) thumb = new Blob([await th.read()], { type: 'image/png' }); } catch {}
-        try { await add(/\.pose$/i.test(m.name) ? 'pose' : 'body', await m.read(), name || m.name.split('/').pop().replace(/\.[^.]+$/, ''), name || '', thumb); } catch (e) { console.warn(m.name, e); }
+        try { await add(/\.pose$/i.test(m.name) ? 'pose' : 'body', await m.read(), name || m.name.split('/').pop().replace(/\.[^.]+$/, ''), name || '', thumb, credit); } catch (e) { console.warn(m.name, e); }
       }
     }
   }

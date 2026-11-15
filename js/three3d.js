@@ -555,7 +555,7 @@ export async function importCspFiles(files, progress) {
     const sig = it.kind + ':' + JSON.stringify(it.data).length + ':' + it.name;
     if (have.has(sig)) continue;
     have.add(sig);
-    await store.putAsset({ id: 'csp:' + uid(), kind: it.kind === 'pose' ? 'csppose' : 'cspbody', name: it.name, set: it.set, data: it.data, thumb: it.thumb ? await store.toBytes(it.thumb) : null, sig, added: Date.now() });
+    await store.putAsset({ id: 'csp:' + uid(), kind: it.kind === 'pose' ? 'csppose' : 'cspbody', name: it.name, set: it.set, data: it.data, thumb: it.thumb ? await store.toBytes(it.thumb) : null, credit: it.credit || null, sig, added: Date.now() });
     if (it.kind === 'pose') poses++; else bodies++;
   }
   return { poses, bodies };
@@ -1436,6 +1436,7 @@ export function tool3d(app) {
         h('p', { class: 'hint' }, 'On a PC the folder is %APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioCommon\\Material (right-click › Send to › Compressed folder). Downloaded 3D models stay encrypted by Clip Studio, but poses and body types are read exactly.'));
       else { drawTree(); drawGrid(); body.append(h('div', { class: 'csp-lib' }, side, main), h('p', { class: 'hint' }, 'Tap a pose to put it on the figure. Hold a pose to move, rename or delete it; hold one of your folders to rename or delete it.')); }
       dialog({ title: `Clip Studio poses (${list.length})`, wide: true, body, actions: [
+        { label: 'Credits', onClick: async () => { const L = await import('./learn/learn.js'); L.creditsDialog(); return false; } },
         { label: 'Import…', onClick: async () => { if (await this.importCsp()) this.cspPoseMenu(); } },
         { label: 'Done', primary: true }], onClose: () => { urls.forEach((u) => URL.revokeObjectURL(u)); this.commit('Clip Studio pose', snap); this.redraw(1); } });
     },

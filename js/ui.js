@@ -1355,7 +1355,8 @@ export function openSettings(app) {
     h('button', { class: 'pill', style: { margin: '6px 0' }, onclick: () => { app.recordPen = true; app.penLog = []; dlg.close(); toast('Recording: draw a few strokes with the Apple Pencil', 4000); } }, 'Record Pencil strokes (for support)…'),
   );
   const V = VERSION, vtxt = V.version === 'dev' ? 'development build' : `Version ${V.version}` + (V.build ? ` (build ${V.build})` : '');
-  body.append(h('div', { class: 'app-version' }, h('b', {}, 'Inkwell Studio'), h('span', {}, vtxt), V.commit || V.date ? h('small', {}, [V.date, V.commit].filter(Boolean).join(' · ')) : null));
+  body.append(h('div', { class: 'app-version' }, h('b', {}, 'Inkwell Studio'), h('span', {}, vtxt), V.commit || V.date ? h('small', {}, [V.date, V.commit].filter(Boolean).join(' · ')) : null,
+    h('button', { class: 'pill', style: { marginTop: '6px' }, onclick: async () => { const L = await import('./learn/learn.js'); L.creditsDialog(); } }, 'Credits')));
   // one tab per section instead of one long list
   const panes = [], tabsEl = h('div', { class: 'seg set-tabs' });
   for (const el of [...body.children]) { if (el.classList.contains('menu-section')) { panes.push({ name: el.textContent, el: h('div', { class: 'set-pane' }) }); el.remove(); } else if (panes.length && !el.classList.contains('app-version')) panes[panes.length - 1].el.append(el); }
