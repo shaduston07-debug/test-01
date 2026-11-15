@@ -925,3 +925,7 @@ body.liquid-ui .pop-arrow { background: rgba(60, 60, 70, 0.5); box-shadow: none;
 .sk-player.sk-full { position: fixed; inset: 0; z-index: 200; border-radius: 0; display: flex; flex-direction: column; padding: calc(10px + var(--safe-t)) calc(12px + var(--safe-r)) calc(10px + var(--safe-b)) calc(12px + var(--safe-l)); background: #000; overflow-y: auto; }
 .sk-player.sk-full .sk-video { flex: 1 1 auto; min-height: 0; max-height: none; object-fit: contain; border-radius: 0; }
 .sk-player.sk-full .sk-info .sk-tags { display: none; }
+
+/* layout switch through the logo: a flash of the logo's colours while it fills the screen */
+.logo-veil { position: fixed; inset: 0; z-index: 500; pointer-events: none; opacity: 0; background: conic-gradient(from 200deg, #ff6b6b, #ffd93d, #6bcb77, #4d96ff, #b06bff, #ff6b6b); }
+#gallery .brand { cursor: default; } #gallery .brand .logo { transition: transform 0.15s; } #gallery .brand:active .logo { transform: scale(0.9); }

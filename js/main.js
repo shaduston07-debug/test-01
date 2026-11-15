@@ -117,7 +117,10 @@ class App {
     Toon.loadSavedFonts();
     setTimeout(() => warmUp(), 1500);
     store.requestPersistence();
-    document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveNow(); else this.resync(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { this.saveNow(); clearTimeout(this.trimT); this.trimT = setTimeout(() => { if (document.hidden) this.trimMemory(); }, 2500); }
+      else { clearTimeout(this.trimT); this.resync(); if (this.doc) this.requestRender(); }
+    });
     // iPadOS can leave the whole web view shifted after the on-screen keyboard closes (or after
     // Split View / rotation / returning to the app); then the line no longer lands under the pen.
     // Put the page back and re-measure the canvas whenever that can happen.
@@ -131,6 +134,7 @@ class App {
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
     UI.renderGallery(this);
     Learn.initLearning(this);
+    this.restoreSession();
     AutoBackup.runSoon(this, 20000);
   }
 
@@ -153,12 +157,67 @@ class App {
     store.prefs.set('settings', this.settings);
   }
 
+  // In the background iOS (and signing / container apps that run Inkwell inside their own
+  // process) stop apps that hold a lot of memory. Everything that can be rebuilt is let go
+  // while the app is hidden: render caches, redo steps, scratch canvases. The drawing itself
+  // was saved a moment earlier.
+  trimMemory() {
+    if (this.engine && this.engine.active) return;
+    try {
+      this.dropCaches();
+      if (this._pick1) this._pick1 = null;
+      const hst = this.history;
+      if (hst && hst.r && hst.r.length) { for (const c of hst.r) { hst.bytes -= c.bytes || 0; try { c.dispose && c.dispose(); } catch { /* ignore */ } } hst.r.length = 0; this.updateUndoButtons(); }
+      if (this.doc && this.doc._tmp) { for (const c of this.doc._tmp) if (c && c.width) c.width = c.height = 0; this.doc._tmp = []; }
+    } catch (e) { console.warn('trim', e); }
+  }
+  // If the app was stopped while a canvas was open (in the background, or by a crash), open
+  // that canvas again on the next launch instead of dropping back to the Gallery.
+  async restoreSession() {
+    const sess = store.prefs.get('session.doc', null);
+    if (!sess || !sess.id || this.doc) return;
+    store.prefs.set('session.doc', null); // one try: a canvas that fails to open must not loop
+    try {
+      const m = (await store.listDocs()).find((q) => q.id === sess.id);
+      if (!m || this.doc) return;
+      await UI.openSavedCanvas(this, m);
+      if (this.doc) toast('Back where you left off', 1800);
+    } catch (e) { console.warn('restore', e); }
+  }
+
+  // The logo is the door between the two layouts: the view dives INTO the coloured square,
+  // the layout changes while the square fills the screen, then it pulls back out and snaps
+  // into place with a little overshoot. Going back plays it the other way round.
   toggleClassic() {
-    this.settings.classicUI = !this.settings.classicUI;
-    this.applySettings();
-    UI.dockClassic(this);
-    if (this.doc) { this.fitView(); this.requestRender('view'); }
-    toast(this.settings.classicUI ? 'Classic studio layout' : 'Inkwell layout', 1400);
+    if (this.switching) return;
+    const to = !this.settings.classicUI, logo = $('#gallery .brand .logo'), gal = $('#gallery');
+    const apply = () => {
+      this.settings.classicUI = to;
+      this.applySettings();
+      UI.dockClassic(this);
+      if (this.doc) { this.fitView(); this.requestRender('view'); }
+    };
+    if (!logo || !gal || gal.hidden || !gal.animate || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) { apply(); return; }
+    this.switching = true;
+    const origin = () => { const r = logo.getBoundingClientRect(), g = gal.getBoundingClientRect(); return `${r.left + r.width / 2 - g.left + gal.scrollLeft}px ${r.top + r.height / 2 - g.top + gal.scrollTop}px`; };
+    const veil = h('div', { class: 'logo-veil' }); document.body.append(veil);
+    const big = 46;
+    gal.style.transformOrigin = origin();
+    // entering: zoom in → switch → zoom out with a snap. leaving: the reverse (a short pull
+    // back first, then the dive, then the old layout settles).
+    const inK = to ? [{ transform: 'scale(1)' }, { transform: `scale(${big})` }] : [{ transform: 'scale(1)' }, { transform: 'scale(0.94)', offset: 0.28 }, { transform: `scale(${big})` }];
+    const a1 = gal.animate(inK, { duration: to ? 520 : 600, easing: 'cubic-bezier(0.7, 0, 0.84, 0)', fill: 'forwards' });
+    veil.animate([{ opacity: 0 }, { opacity: 0, offset: 0.55 }, { opacity: 1 }], { duration: to ? 520 : 600, fill: 'forwards' });
+    a1.onfinish = () => {
+      apply();
+      gal.style.transformOrigin = origin();
+      const outK = to
+        ? [{ transform: `scale(${big})` }, { transform: 'scale(0.9)', offset: 0.62, easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' }, { transform: 'scale(1.035)', offset: 0.8 }, { transform: 'scale(0.992)', offset: 0.91 }, { transform: 'scale(1)' }]
+        : [{ transform: `scale(${big})` }, { transform: 'scale(1)' }];
+      const a2 = gal.animate(outK, { duration: to ? 640 : 460, easing: to ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' });
+      veil.animate([{ opacity: 1 }, { opacity: 0, offset: 0.4 }, { opacity: 0 }], { duration: 400, fill: 'forwards' });
+      a2.onfinish = () => { a1.cancel(); a2.cancel(); gal.style.transformOrigin = ''; veil.remove(); this.switching = false; };
+    };
   }
 
   buildChrome() {
@@ -253,6 +312,7 @@ class App {
   async openDoc(doc) {
     this.lastSelection = null; this._lastSelVer = null;
     this.doc = doc;
+    store.prefs.set('session.doc', { id: doc.id, t: Date.now() }); // reopened if the app is stopped while it is open
     // back in the gallery, the tab of this canvas's kind is shown
     store.prefs.set('galTab', doc.mode || 'paint');
     this.selection = new Selection(doc.width, doc.height);
@@ -315,7 +375,7 @@ class App {
       await within(this.tlapse.detach(), 3000);
       if (globalThis.__closeLog) console.log('LOG close timelapse', Math.round(performance.now() - tt), 'ms');
     } finally {
-      step(() => { this.doc = null; this.dropCaches(); });
+      step(() => { this.doc = null; this.dropCaches(); store.prefs.set('session.doc', null); });
       $('#studio').hidden = true;
       // back to the tab you came from: the Gallery, or Inkwell Learning (challenge canvases)
       let toLearn = false;
