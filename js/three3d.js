@@ -1431,8 +1431,30 @@ export function tool3d(app) {
       const id = uid();
       L.models.set(id, { id, ext: rec.ext || 'glb', name: rec.name, real: true, blob: new Blob([rec.bytes]) });
       toast('Adding ' + rec.name + '…', 5000);
-      try { await this.addObject({ id: uid(), kind: 'model', modelId: id, name: rec.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Add asset'); toast(rec.name + ' added — use Move / Rotate / Scale', 3500); }
+      const oid = uid();
+      try {
+        await this.addObject({ id: oid, kind: 'model', modelId: id, name: rec.name, pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1 }, 'Add asset');
+        this.fitImported(oid);
+        toast(rec.name + ' added' + (rec.author ? ` · by ${rec.author}` : '') + ' — use Move / Rotate / Scale', 3500);
+      }
       catch (e) { console.error(e); L.models.delete(id); toast('Could not load that model: ' + e.message, 4500); }
+    },
+    // Downloaded models come in at whatever size and position their author used (centimetres,
+    // kilometres, floating in space…). Bring them to a person-sized scale, standing on the
+    // floor at the centre, and frame them.
+    fitImported(oid) {
+      const L = this.layer(), rt = runtimes.get(L), e = rt && rt.objs.get(oid); if (!e) return;
+      e.node.updateMatrixWorld(true);
+      const box = new T.Box3().setFromObject(e.node);
+      if (box.isEmpty()) return;
+      const size = box.getSize(new T.Vector3()), big = Math.max(size.x, size.y, size.z);
+      const o = e.data;
+      if (big > 0 && (big > 6 || big < 0.25)) o.scale = +(1.8 / big * o.scale).toPrecision(4);
+      const k = o.scale, c = box.getCenter(new T.Vector3());
+      o.pos = [o.pos[0] - c.x * k + c.x * 0, o.pos[1] - box.min.y * k, o.pos[2] - c.z * k];
+      syncObject(e);
+      this.redraw(1);
+      this.frameObject(oid);
     },
     async setMaterial(rec, tile) {
       const L = this.layer(), rt = runtimes.get(L), e = rt && rt.objs.get(this.sel); if (!e) return;
