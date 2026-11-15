@@ -1187,7 +1187,72 @@
       return closeCard();
     }
     if (!e.metaKey && !e.ctrlKey && !card.hidden) closeCard();
+    if (e.isComposing) return;
+    const shortcut = editorShortcut(e);
+    if (shortcut) {
+      e.preventDefault();
+      shortcut();
+      fixTranslatedSpans();
+      keepCaretComfortable();
+      saveCurrent();
+    }
   });
+
+  /* ---------- Keyboard shortcuts (hardware keyboards, iPad Magic Keyboard …) ---------- */
+
+  const insideList = () => {
+    const sel = getSelection();
+    const node = sel.rangeCount ? sel.anchorNode : null;
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    return !!(el && el.closest('li') && editor.contains(el));
+  };
+  const exec = (cmd, arg) => () => document.execCommand(cmd, false, arg);
+  const toggleBlock = tag => () => {
+    const current = (document.queryCommandValue('formatBlock') || '').toLowerCase();
+    document.execCommand('formatBlock', false, current === tag ? 'div' : tag);
+  };
+
+  // The action for a key press in the note, or null to let the browser have it.
+  function editorShortcut(e) {
+    const mod = e.metaKey || e.ctrlKey;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // Shift+Enter: a line break inside the same paragraph or list item.
+    if (key === 'Enter' && e.shiftKey && !mod && !e.altKey) {
+      return () => document.execCommand('insertLineBreak') || document.execCommand('insertHTML', false, '<br>');
+    }
+    // Tab: indent a list item (Shift+Tab: back out); elsewhere a tab space.
+    if (key === 'Tab' && !mod && !e.altKey) {
+      if (insideList()) return exec(e.shiftKey ? 'outdent' : 'indent');
+      return e.shiftKey ? null : exec('insertText', '    ');
+    }
+    if (!mod || e.altKey) return null;
+    // ⌘/Ctrl + Shift combinations (as in Apple Notes).
+    if (e.shiftKey) {
+      switch (e.code) {
+        case 'KeyX': return exec('strikeThrough');
+        case 'KeyH': return toggleBlock('h2');
+        case 'KeyT': return toggleBlock('h1');
+        case 'KeyB': return exec('formatBlock', 'div');   // body text
+        case 'Digit7': return exec('insertUnorderedList');
+        case 'Digit9': return exec('insertOrderedList');
+      }
+      return null;
+    }
+    switch (key) {
+      case ']': return exec('indent');
+      case '[': return exec('outdent');
+    }
+    return null;
+  }
+
+  const shortcutsModal = $('#shortcuts-modal');
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent);
+  shortcutsModal.querySelectorAll('kbd[data-mod]').forEach(k => { k.textContent = isMac ? '⌘' : 'Ctrl'; });
+  if (!isMac) shortcutsModal.querySelectorAll('kbd[data-alt]').forEach(k => { k.textContent = 'Alt'; });
+  const openShortcuts = () => { closeCard(); shortcutsModal.hidden = false; };
+  $('#open-shortcuts').addEventListener('click', openShortcuts);
+  $('#close-shortcuts').addEventListener('click', () => { shortcutsModal.hidden = true; });
+  shortcutsModal.addEventListener('click', e => { if (e.target === shortcutsModal) shortcutsModal.hidden = true; });
 
   editor.addEventListener('click', e => {
     typing = false;
@@ -1237,11 +1302,26 @@
       closeShare();
       hideSelectionBar();
       colourMenu.hidden = true;
+      shortcutsModal.hidden = true;
       Blocks.deselect();
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod || e.altKey && e.code !== 'KeyN') return;
+    if (e.key === '\\') {
       e.preventDefault();
       setSidebarHidden(!app.classList.contains('sidebar-hidden'));
+    } else if (e.key === '/' || e.key === '?') {
+      e.preventDefault();
+      shortcutsModal.hidden ? openShortcuts() : (shortcutsModal.hidden = true);
+    } else if (e.code === 'KeyN' && !e.shiftKey) {
+      // ⌘N in the app; browsers keep ⌘N for a new window, so ⌘⌥N works there.
+      e.preventDefault();
+      $('#new-note').click();
+    } else if (e.code === 'KeyF' && e.shiftKey) {
+      e.preventDefault();
+      if (app.classList.contains('sidebar-hidden')) setSidebarHidden(false);
+      search.focus();
+      search.select();
     }
   });
   editorScroll.addEventListener('scroll', () => {

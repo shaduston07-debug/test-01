@@ -1703,3 +1703,14 @@ html.native-app .sketch-bar { padding-top: calc(8px + env(safe-area-inset-top, 0
 .spelling.lookalike .misspelled-word { order: 1; text-decoration: underline dotted var(--hint-underline, #2f73d9); text-decoration-thickness: 2px; }
 .spelling.lookalike .card-label { order: 0; }
 .spelling.lookalike::after { content: "Or, if you meant English:"; order: 3; margin: 6px 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+
+/* Keyboard shortcuts list */
+.shortcut-list { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; font-size: 14px; align-items: baseline; }
+.shortcut-list dt { white-space: nowrap; }
+.shortcut-list dd { margin: 0; color: var(--muted); }
+.shortcut-list kbd {
+  display: inline-block; min-width: 1.6em; padding: 1px 6px; border-radius: 5px; text-align: center;
+  font: 600 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid var(--sidebar-border); border-bottom-width: 2px; background: var(--sidebar);
+}
+@media (max-width: 520px) { .shortcut-list { grid-template-columns: 1fr; gap: 2px; } .shortcut-list dd { margin-bottom: 8px; } }
