@@ -295,16 +295,19 @@ function lightbox(items, i, notes) {
 // the creators of the Clip Studio poses / body types in this device's library (from the
 // material catalogs: Assets page, and the creator's name when the pack came with it)
 async function cspCredits() {
-  let recs = [];
-  try { const store = await import('../storage.js'); recs = (await store.listAssets()).filter((a) => a.kind === 'csppose' || a.kind === 'cspbody'); } catch { return null; }
-  if (!recs.length) return null;
+  let recs = [], models = [];
+  try { const all = await store.listAssets(); recs = all.filter((a) => a.kind === 'csppose' || a.kind === 'cspbody'); models = all.filter((a) => a.kind === 'model' && a.author); } catch { return null; }
+  const modelSec = models.length ? h('div', {}, h('h3', {}, '3D models'), h('p', { class: 'hint' }, 'Downloaded models in your library, by their authors, under their licences.'),
+    ...models.sort((a, b) => a.name.localeCompare(b.name)).map((m) => h('div', {}, h('b', {}, m.name), ' — by ', m.author, m.license ? ' · ' + m.license : '', m.like ? ` · stands in for “${m.like}”` : '',
+      m.page ? [' · ', h('a', { href: m.page, target: '_blank', rel: 'noopener' }, m.src || 'source')] : null))) : null;
+  if (!recs.length) return modelSec;
   const packs = new Map();
   for (const r of recs) {
     const c = r.credit || {}, key = c.assetsId || r.set || r.name;
     if (!packs.has(key)) packs.set(key, { title: c.title || r.set || r.name.replace(/ · \d+$/, ''), author: c.author || null, page: c.page || null, n: 0, kind: r.kind });
     packs.get(key).n++;
   }
-  return h('div', {}, h('h3', {}, 'Clip Studio poses & body types'),
+  return h('div', {}, modelSec, h('h3', {}, 'Clip Studio poses & body types'),
     h('p', { class: 'hint' }, 'Clip Studio Assets materials in your library, by their creators. Used for personal work under the Clip Studio Assets terms.'),
     ...[...packs.values()].sort((a, b) => (a.author || '~').localeCompare(b.author || '~') || a.title.localeCompare(b.title)).map((p) => h('div', {},
       h('b', {}, p.title), ' — ', p.author ? 'by ' + p.author : 'creator on its Assets page', ` · ${p.n} ${p.kind === 'cspbody' ? 'body type' : 'pose'}${p.n === 1 ? '' : 's'}`,

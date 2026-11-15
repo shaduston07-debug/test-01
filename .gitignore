@@ -9,3 +9,4 @@ downloads/
 .claude/
 __pycache__/
 vendor/csp-bundled.zip
+vendor/models-bundled.zip

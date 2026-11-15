@@ -574,6 +574,32 @@ function importBundledCsp() {
     catch (e) { console.warn('bundled poses', e); }
   })());
 }
+// a model pack built into a personal copy of the app (vendor/models-bundled.zip: manifest.json +
+// .glb files + thumbnails) goes into the downloaded-models library once
+let bundledModels = null;
+function importBundledModels() {
+  return (bundledModels ||= (async () => {
+    if (store.prefs.get('modelsBundledDone', false)) return;
+    let blob = null;
+    try { const r = await fetch(new URL('../vendor/models-bundled.zip', import.meta.url)); if (r.ok) blob = await r.blob(); } catch { /* not in this build */ }
+    if (!blob || blob.size < 100) return;
+    try {
+      const CF = await import('./clipfile.js'), ents = await CF.zipEntries(new File([blob], 'models.zip')), by = new Map(ents.map((x) => [x.name, x]));
+      const man = JSON.parse(new TextDecoder().decode(await by.get('manifest.json').read()));
+      let n = 0;
+      for (const m of man) {
+        const f = by.get(m.file); if (!f) continue;
+        const bytes = await f.read(), th = m.thumb && by.get(m.thumb);
+        const thumb = th ? (await th.read()).slice().buffer : null;
+        await store.putAsset({ id: 'sf:model:' + m.uid, kind: 'model', src: 'Sketchfab', name: m.name, author: m.author, license: m.license, page: m.page,
+          ext: 'glb', bytes: bytes.slice().buffer, thumb, added: Date.now() + n, size: bytes.length, like: m.like || null });
+        n++;
+      }
+      store.prefs.set('modelsBundledDone', true);
+      if (n) toast(`Added ${n} models to 3D Assets › Downloaded`, 3500);
+    } catch (e) { console.warn('bundled models', e); }
+  })());
+}
 async function importedCsp(kind) {
   await importBundledCsp();
   return (await store.listAssets()).filter((a) => a.kind === kind).sort((a, b) => (a.set || '').localeCompare(b.set || '') || (a.added - b.added) || a.name.localeCompare(b.name));
@@ -588,6 +614,7 @@ export function tool3d(app) {
     layer() { const it = app.doc && app.doc.activeItem; return it && it.type === '3d' ? it : null; },
     async enter() {
       this.off = false;
+      importBundledModels();
       const L = this.layer();
       // like the cube button in the Layers panel: no 3D layer selected → add one and start editing it
       if (!L) { if (!this._adding) { this._adding = true; try { await add3DLayer(app); } finally { this._adding = false; } } return; }
@@ -1631,7 +1658,8 @@ export function tool3d(app) {
       try { await this.addObject(o, 'Add ' + rec.name); }
       catch (err) { console.error(err); toast('Could not add that model: ' + err.message, 4500); }
     },
-    assetMenu(query) {
+    async assetMenu(query) {
+      await importBundledModels();
       AS.openAssetBrowser({
         query: typeof query === 'string' ? query : undefined,
         onModel: (rec) => this.addAssetModel(rec),
