@@ -577,3 +577,149 @@ function armorMH(fig, style) {
   mat.color.set(med ? '#5d5953' : '#2b2e35');
   return m;
 }
+
+// ───────── auto-rig: make an unrigged human model posable ─────────
+// For a standing figure (T- or A-pose, facing +Z or -Z): landmarks come from the mesh itself
+// (height, where the hands and feet are, the body's centre line), a Mixamo-named skeleton is
+// placed on them, and every vertex is skinned to its nearest bones (arms never mix with legs,
+// left never with right). rigImported then poses it like any rigged model.
+export function autoRigHumanoid(node) {
+  node.updateMatrixWorld(true);
+  const inv = new T.Matrix4().copy(node.matrixWorld).invert();
+  const meshes = [];
+  node.traverse((o) => { if (o.isMesh && !o.isSkinnedMesh && o.geometry && o.geometry.attributes.position) meshes.push(o); });
+  if (!meshes.length) return false;
+  // all vertices in the node's space
+  const parts = meshes.map((m) => { const g = m.geometry.index ? m.geometry : m.geometry; const mw = new T.Matrix4().multiplyMatrices(inv, m.matrixWorld); const p = g.attributes.position; const a = new Float32Array(p.count * 3); const v = new T.Vector3(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i).applyMatrix4(mw); a[i * 3] = v.x; a[i * 3 + 1] = v.y; a[i * 3 + 2] = v.z; } return { m, mw, a }; });
+  let minY = Infinity, maxY = -Infinity, sx = 0, sz = 0, n = 0;
+  for (const { a } of parts) for (let i = 0; i < a.length; i += 3) { minY = Math.min(minY, a[i + 1]); maxY = Math.max(maxY, a[i + 1]); sx += a[i]; sz += a[i + 2]; n++; }
+  const H0 = maxY - minY; if (!(H0 > 0)) return false;
+  const cx = sx / n;
+  // shoulders: scanning down from the top, where the body suddenly gets wide (head / neck →
+  // shoulders or outstretched arms). Proportions are measured from there, so a model without
+  // a head (or with a hat) still gets its joints in the right places
+  const SL = 120, wid = new Float32Array(SL);
+  for (const { a } of parts) for (let i = 0; i < a.length; i += 3) { const k = Math.min(SL - 1, Math.floor((a[i + 1] - minY) / H0 * SL)); wid[k] = Math.max(wid[k], Math.abs(a[i] - cx)); }
+  let topW = 0; for (let k = SL - 1; k >= SL - 4; k--) topW = Math.max(topW, wid[k]);
+  let shK = -1;
+  for (let k = SL - 2; k > SL * 0.55; k--) if (wid[k] > Math.max(topW * 1.7, H0 * 0.07)) { shK = k; break; }
+  const shoulderY = shK > 0 ? minY + (shK + 0.5) / SL * H0 : minY + 0.81 * H0;
+  const H = Math.max(H0 * 0.85, (shoulderY - minY) / 0.81);
+  const Y = (f) => minY + f * H;
+  // facing: the toes stick out in front of the heels (more vertices ahead of the ankle centre)
+  let zFront = 0, zBack = 0, zc = 0, nz = 0;
+  for (const { a } of parts) for (let i = 0; i < a.length; i += 3) if (a[i + 1] < Y(0.04)) { zc += a[i + 2]; nz++; }
+  zc = nz ? zc / nz : sz / n;
+  for (const { a } of parts) for (let i = 0; i < a.length; i += 3) if (a[i + 1] < Y(0.04)) { if (a[i + 2] > zc) zFront += a[i + 2] - zc; else zBack += zc - a[i + 2]; }
+  const flip = zBack > zFront * 1.15; // facing -Z: mirror the landmark z / left-right
+  const L = flip ? -1 : 1; // the figure's left is +X when it faces +Z
+  // body centre (x, z) in a height band, from vertices near the middle
+  const centre = (y0, y1, wx) => { let x = 0, z = 0, k = 0; for (const { a } of parts) for (let i = 0; i < a.length; i += 3) { const y = a[i + 1]; if (y >= y0 && y <= y1 && Math.abs(a[i] - cx) < wx) { x += a[i]; z += a[i + 2]; k++; } } return k ? [x / k, z / k] : [cx, zc]; };
+  const torso = (f) => { const [x, z] = centre(Y(f - 0.03), Y(f + 0.03), H * 0.09); return [x, Y(f), z]; };
+  // hands: the vertex farthest out on each side above the hips
+  const tip = (s) => { let best = null, bx = -Infinity; for (const { a } of parts) for (let i = 0; i < a.length; i += 3) { if (a[i + 1] < Y(0.3)) continue; const d = s * L * (a[i] - cx); if (d > bx) { bx = d; best = [a[i], a[i + 1], a[i + 2]]; } } return best; };
+  const foot = (s) => { let x = 0, z = 0, k = 0; for (const { a } of parts) for (let i = 0; i < a.length; i += 3) if (a[i + 1] < Y(0.06) && s * L * (a[i] - cx) > 0) { x += a[i]; z += a[i + 2]; k++; } return k ? [x / k, z / k] : [cx + s * L * H * 0.06, zc]; };
+  const J = {};
+  J.pelvis = torso(0.53); J.spine = torso(0.6); J.chest = torso(0.7); J.neck = torso(0.84); J.head = torso(0.875);
+  J.headTop = [J.head[0], Math.max(maxY, Y(1)), J.head[2]];
+  const lerp = (p, q, t) => p.map((x, i) => x + (q[i] - x) * t);
+  for (const [s, S] of [[1, 'L'], [-1, 'R']]) {
+    const sh = [J.chest[0] + s * L * H * 0.1, Y(0.81), J.chest[2]];
+    const t = tip(s);
+    J['clav' + S] = [J.chest[0] + s * L * H * 0.025, Y(0.8), J.chest[2]];
+    J['shoulder' + S] = sh;
+    const reach = t && Math.abs(t[0] - sh[0]) > H * 0.12 ? t : [sh[0] + s * L * H * 0.08, Y(0.42), sh[2]];
+    J['elbow' + S] = lerp(sh, reach, 0.44);
+    J['hand' + S] = lerp(sh, reach, 0.83);
+    J['handTip' + S] = reach;
+    const [fx, fz] = foot(s);
+    J['hip' + S] = [J.pelvis[0] + s * L * H * 0.055, Y(0.5), J.pelvis[2]];
+    J['foot' + S] = [fx, Y(0.045), fz - L * 0 ];
+    J['knee' + S] = lerp(J['hip' + S], J['foot' + S], 0.5);
+    J['toe' + S] = [fx, Y(0.012), fz + (flip ? -1 : 1) * H * 0.06];
+    J['toeTip' + S] = [fx, Y(0.01), fz + (flip ? -1 : 1) * H * 0.1];
+  }
+  // skeleton (Mixamo names, so rigImported maps it)
+  const SPEC = [['pelvis', 'Hips', null], ['spine', 'Spine', 'pelvis'], ['chest', 'Spine2', 'spine'], ['neck', 'Neck', 'chest'], ['head', 'Head', 'neck']];
+  for (const [S, side] of [['L', 'Left'], ['R', 'Right']]) SPEC.push(['clav' + S, side + 'Shoulder', 'chest'], ['shoulder' + S, side + 'Arm', 'clav' + S], ['elbow' + S, side + 'ForeArm', 'shoulder' + S], ['hand' + S, side + 'Hand', 'elbow' + S],
+    ['hip' + S, side + 'UpLeg', 'pelvis'], ['knee' + S, side + 'Leg', 'hip' + S], ['foot' + S, side + 'Foot', 'knee' + S], ['toe' + S, side + 'ToeBase', 'foot' + S]);
+  const bones = [], bi = {};
+  for (const [k, name, par] of SPEC) {
+    const b = new T.Bone(); b.name = name;
+    const p = J[k], pp = par ? J[par] : [0, 0, 0];
+    b.position.set(p[0] - pp[0], p[1] - pp[1], p[2] - pp[2]);
+    if (par) bones[bi[par]].add(b);
+    bi[k] = bones.length; bones.push(b);
+  }
+  const TAIL = { pelvis: 'spine', spine: 'chest', chest: 'neck', neck: 'head', head: 'headTop' };
+  for (const S of ['L', 'R']) Object.assign(TAIL, { ['clav' + S]: 'shoulder' + S, ['shoulder' + S]: 'elbow' + S, ['elbow' + S]: 'hand' + S, ['hand' + S]: 'handTip' + S, ['hip' + S]: 'knee' + S, ['knee' + S]: 'foot' + S, ['foot' + S]: 'toe' + S, ['toe' + S]: 'toeTip' + S });
+  const segs = SPEC.map(([k]) => ({ k, a: new T.Vector3(...J[k]), b: new T.Vector3(...J[TAIL[k]]), side: /L$/.test(k) ? 'L' : /R$/.test(k) ? 'R' : '', limb: /^(clav|shoulder|elbow|hand)/.test(k) ? 'arm' : /^(hip|knee|foot|toe)/.test(k) ? 'leg' : 'body' }));
+  const parentOf = Object.fromEntries(SPEC.map(([k, , p]) => [k, p]));
+  const near = (i, j) => { const a = segs[i].k, b = segs[j].k; return parentOf[a] === b || parentOf[b] === a || parentOf[a] === parentOf[b]; };
+  const P = new T.Vector3(), ab = new T.Vector3(), ap = new T.Vector3();
+  const dist = (s) => { ab.subVectors(s.b, s.a); ap.subVectors(P, s.a); const t = Math.max(0, Math.min(1, ap.dot(ab) / (ab.lengthSq() || 1))); return P.distanceTo(ab.multiplyScalar(t).add(s.a)); };
+  // torso half-width: the median |x| of the vertices at chest and waist height that are within
+  // the shoulders (arms hanging at the sides are farther out)
+  const xs = [];
+  for (const { a } of parts) for (let i = 0; i < a.length; i += 3) { const y = a[i + 1]; if (y > Y(0.6) && y < Y(0.72)) { const dx = Math.abs(a[i] - cx); if (dx < H * 0.14) xs.push(dx); } }
+  xs.sort((p, q) => p - q);
+  const torsoHalf = xs.length ? Math.min(H * 0.11, xs[Math.floor(xs.length * 0.9)] * 1.02) : H * 0.085;
+  const skeleton = new T.Skeleton(bones);
+  // everything goes into one group placed first under the node (rigImported turns that child)
+  const holder = new T.Group(); holder.name = 'autorig';
+  holder.add(bones[0]);
+  for (const { m, a } of parts) {
+    const g = m.geometry.clone(), cnt = g.attributes.position.count;
+    // geometry baked into the node's space (the skinned mesh sits at the node's origin)
+    g.applyMatrix4(new T.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    const NB = segs.length, W = new Float32Array(cnt * NB);
+    for (let v = 0; v < cnt; v++) {
+      P.set(a[v * 3], a[v * 3 + 1], a[v * 3 + 2]);
+      const side = L * (P.x - cx) > H * 0.02 ? 'L' : L * (P.x - cx) < -H * 0.02 ? 'R' : '';
+      const inTorso = Math.abs(P.x - cx) < torsoHalf && P.y < Y(0.8) && P.y > Y(0.45);
+      let best = -1, bd = Infinity;
+      const d = segs.map((s, i) => { let x = dist(s); if (s.side && side && s.side !== side) x *= 4; if (inTorso && s.limb === 'arm' && s.k.startsWith('shoulder')) x *= 3; if (inTorso && /^(elbow|hand)/.test(s.k) && Math.abs(P.x - cx) < torsoHalf * 0.85) x *= 3; if (x < bd) { bd = x; best = i; } return x; });
+      // the nearest bone and the bones next to it (no arm ↔ leg, left ↔ right mixing)
+      for (let i = 0; i < NB; i++) if (i === best || near(i, best)) W[v * NB + i] = 1 / Math.pow(d[i] + H * 0.01, 4);
+    }
+    // smooth the weights over the surface (shared positions count as one point, so UV seams
+    // can't tear), then keep the four strongest
+    const key = new Map(), grp = new Int32Array(cnt);
+    for (let v = 0; v < cnt; v++) { const k = Math.round(a[v * 3] / H * 2000) + ',' + Math.round(a[v * 3 + 1] / H * 2000) + ',' + Math.round(a[v * 3 + 2] / H * 2000); let gi = key.get(k); if (gi === undefined) { gi = key.size; key.set(k, gi); } grp[v] = gi; }
+    const G = key.size, GW = new Float32Array(G * NB), gc = new Float32Array(G);
+    const norm = (arr, base) => { let t = 0; for (let i = 0; i < NB; i++) t += arr[base + i]; if (t > 0) for (let i = 0; i < NB; i++) arr[base + i] /= t; };
+    for (let v = 0; v < cnt; v++) { norm(W, v * NB); for (let i = 0; i < NB; i++) GW[grp[v] * NB + i] += W[v * NB + i]; gc[grp[v]]++; }
+    for (let gi = 0; gi < G; gi++) norm(GW, gi * NB);
+    const idx = g.index ? g.index.array : null, tris = idx ? idx.length : cnt;
+    const nbr = Array.from({ length: G }, () => new Set());
+    for (let t = 0; t + 2 < tris; t += 3) { const p0 = grp[idx ? idx[t] : t], p1 = grp[idx ? idx[t + 1] : t + 1], p2 = grp[idx ? idx[t + 2] : t + 2]; nbr[p0].add(p1).add(p2); nbr[p1].add(p0).add(p2); nbr[p2].add(p0).add(p1); }
+    let cur = GW, nxt = new Float32Array(G * NB);
+    for (let it = 0; it < 10; it++) {
+      for (let gi = 0; gi < G; gi++) {
+        const ns = nbr[gi], k = 1 / (ns.size + 1);
+        for (let i = 0; i < NB; i++) { let t = cur[gi * NB + i]; for (const n of ns) t += cur[n * NB + i]; nxt[gi * NB + i] = t * k; }
+      }
+      [cur, nxt] = [nxt, cur];
+    }
+    const si = new Uint16Array(cnt * 4), sw = new Float32Array(cnt * 4);
+    for (let v = 0; v < cnt; v++) {
+      const base = grp[v] * NB, top = [];
+      for (let i = 0; i < NB; i++) { const w = cur[base + i]; if (w > 0.01) top.push([w, i]); }
+      top.sort((x, y) => y[0] - x[0]); top.length = Math.min(4, top.length);
+      const t = top.reduce((x, y) => x + y[0], 0) || 1;
+      top.forEach(([w, i], k) => { si[v * 4 + k] = i; sw[v * 4 + k] = w / t; });
+      if (!top.length) { si[v * 4] = 0; sw[v * 4] = 1; }
+    }
+    g.setAttribute('skinIndex', new T.Uint16BufferAttribute(si, 4));
+    g.setAttribute('skinWeight', new T.Float32BufferAttribute(sw, 4));
+    const sm = new T.SkinnedMesh(g, m.material);
+    sm.name = m.name; sm.castShadow = m.castShadow; sm.frustumCulled = false;
+    holder.add(sm);
+    m.parent.remove(m);
+  }
+  node.add(holder); node.children.splice(node.children.indexOf(holder), 1); node.children.unshift(holder);
+  node.updateMatrixWorld(true);
+  skeleton.calculateInverses(); // the bones are in place only now
+  for (const o of holder.children) if (o.isSkinnedMesh) o.bind(skeleton, o.matrixWorld.clone());
+  return true;
+}

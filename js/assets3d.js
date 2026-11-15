@@ -150,6 +150,21 @@ export async function downloadMaterial(id, name, res = '1k', onProgress) {
 }
 async function fetchThumb(id) { try { return (await getBytes(THUMB(id, 160))).buffer; } catch { return null; } }
 export const localAssets = async (kind) => (await store.listAssets()).filter((a) => !kind || a.kind === kind).sort((a, b) => b.added - a.added);
+// does this model have a skeleton (posable like the drawing figure)? glTF / GLB: a skin in its
+// JSON; other formats: unknown (null)
+export function modelRigged(a) {
+  if (!a || a.kind !== 'model' || !a.bytes) return null;
+  if (a.rigged != null) return a.rigged;
+  try {
+    const u8 = new Uint8Array(a.bytes);
+    if (u8[0] === 0x67 && u8[1] === 0x6c && u8[2] === 0x54 && u8[3] === 0x46) {
+      const dv = new DataView(a.bytes), len = dv.getUint32(12, true);
+      const j = JSON.parse(new TextDecoder().decode(u8.subarray(20, 20 + len)));
+      a.rigged = !!(j.skins && j.skins.length);
+    } else a.rigged = null;
+  } catch { a.rigged = null; }
+  return a.rigged;
+}
 export const getAsset = (id) => store.getAsset(id);
 export const removeAsset = (id) => store.deleteAsset(id);
 export const assetThumb = (a) => (a && a.thumb ? URL.createObjectURL(new Blob([a.thumb], { type: 'image/png' })) : '');
@@ -304,7 +319,9 @@ export function openAssetBrowser({ onModel, onMaterial, query }) {
   const card = (a, local) => {
     const img = h('img', { loading: 'lazy', alt: '', referrerpolicy: 'no-referrer', src: local ? assetThumb(a) : a.sf ? a.thumb : THUMB(a.id, 200) });
     const meta = a.sf || (local && a.src === 'Sketchfab') ? h('small', {}, [a.author, shortLic(a.license)].filter(Boolean).join(' · ')) : null;
-    const b = h('button', { class: 'asset-card' + (!local && localIds.has(keyOf(a)) ? ' have' : '') + (a.animated ? ' anim' : '') }, img, h('span', {}, a.name), meta);
+    const rg = local ? modelRigged(a) : null;
+    const badge = rg ? h('em', { class: 'asset-pose' }, 'Posable') : local && a.kind === 'model' && rg === false ? h('em', { class: 'asset-pose no' }, 'Static · auto-rig') : null;
+    const b = h('button', { class: 'asset-card' + (!local && localIds.has(keyOf(a)) ? ' have' : '') + (a.animated ? ' anim' : '') }, img, h('span', {}, a.name), meta, badge);
     b.onclick = () => (local ? useLocal(a) : get(a, b));
     if (local) b.oncontextmenu = (e) => { e.preventDefault(); delLocal(a); };
     if (local) { let t; b.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; delLocal(a); }, 650); }); b.addEventListener('pointerup', () => clearTimeout(t)); b.addEventListener('pointerleave', () => clearTimeout(t)); }
@@ -345,19 +362,25 @@ export function openAssetBrowser({ onModel, onMaterial, query }) {
     grid.innerHTML = ''; cats.innerHTML = '';
     if (tab === 'sketchfab') {
       cats.append(...SF_CATS.map(([v, l]) => h('button', { class: sf.cat === v ? 'on' : '', onclick: () => { sf.cat = v; store.prefs.set('sf.cat', v); sfLoad(true); } }, l)),
-        h('span', { class: 'asset-sep' }), toggle('Rigged (poseable)', 'rigged'), toggle('Animated', 'animated'), toggle('Light (< 60k faces)', 'light'));
+        h('span', { class: 'asset-sep' }), toggle('Posable only (rigged)', 'rigged'), toggle('Animated', 'animated'), toggle('Light (< 60k faces)', 'light'));
       for (const a of items) grid.append(card(a, false));
       if (!items.length && !status.textContent) grid.append(h('p', { class: 'hint' }, 'No models found. Try other words or another category.'));
       more.hidden = !sf.next;
       return;
     }
     more.hidden = true;
+    if (tab === 'local') {
+      const pf = store.prefs.get('localPose', 'all');
+      cats.append(...[['all', 'All'], ['posable', 'Posable'], ['static', 'Not posable']].map(([v, l]) => h('button', { class: pf === v ? 'on' : '', onclick: () => { store.prefs.set('localPose', v); draw(); } }, l)),
+        h('span', { class: 'hint', style: 'margin-left:8px' }, 'Not posable people can be made posable: add one, then Pose › Make posable (auto-rig).'));
+    }
     if (tab !== 'local') {
       const counts = new Map(); for (const a of items) for (const c of a.cats) counts.set(c, (counts.get(c) || 0) + 1);
       const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([c]) => c);
       cats.append(h('button', { class: !cat ? 'on' : '', onclick: () => { cat = ''; draw(); } }, 'All'), ...top.map((c) => h('button', { class: cat === c ? 'on' : '', onclick: () => { cat = c; draw(); } }, c)));
     }
-    const list = items.filter((a) => (!cat || (a.cats || []).includes(cat)) && (!q || a.name.toLowerCase().includes(q) || (a.author || '').toLowerCase().includes(q) || (a.tags || []).some((t) => t.includes(q)) || (a.cats || []).some((t) => t.includes(q))));
+    const pfl = tab === 'local' ? store.prefs.get('localPose', 'all') : 'all';
+    const list = items.filter((a) => (pfl === 'all' || (a.kind === 'model' && (pfl === 'posable' ? modelRigged(a) === true : modelRigged(a) === false))) && (!cat || (a.cats || []).includes(cat)) && (!q || a.name.toLowerCase().includes(q) || (a.author || '').toLowerCase().includes(q) || (a.tags || []).some((t) => t.includes(q)) || (a.cats || []).some((t) => t.includes(q))));
     for (const a of list.slice(0, 240)) grid.append(card(a, tab === 'local'));
     if (!list.length) grid.append(h('p', { class: 'hint' }, tab === 'local' ? 'Nothing downloaded yet. Models and materials you download are kept here for offline use (hold one to remove it).' : 'No matches.'));
   };

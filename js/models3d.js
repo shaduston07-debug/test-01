@@ -1063,8 +1063,8 @@ export function retargetCSP(src, fig) {
     x.normalize(); const z = new T.Vector3().crossVectors(x, y);
     return new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(x, y, z));
   };
-  const fromFrames = (restDir, restSide, dir, side) => { const a = frame(restDir, restSide), b = frame(dir, side); return a && b ? b.multiply(a.invert()) : null; };
-  const aim = (pw, restDir, dir) => new T.Quaternion().setFromUnitVectors(restDir.clone().applyQuaternion(pw).normalize(), dir.clone().normalize()).multiply(pw);
+  const fromFrames = (restDir, restSide, dir, side) => { if (!restDir || !restSide || !dir || !side) return null; const a = frame(restDir, restSide), b = frame(dir, side); return a && b ? b.multiply(a.invert()) : null; };
+  const aim = (pw, restDir, dir) => (restDir && dir && restDir.lengthSq() > 1e-12 && dir.lengthSq() > 1e-12 ? new T.Quaternion().setFromUnitVectors(restDir.clone().applyQuaternion(pw).normalize(), dir.clone().normalize()).multiply(pw) : pw.clone());
   const sub = (a, b) => (a && b ? a.clone().sub(b) : null);
   const X = new T.Vector3(1, 0, 0), UP = new T.Vector3(0, 1, 0);
   const side = (s) => (s === 'L' ? 'left' : 'right');
@@ -1115,7 +1115,9 @@ export function retargetCSP(src, fig) {
     if (fig.joints['hand' + s]) {
       const w = fromFrames(sub(R('middle' + s + '1'), R('hand' + s)), sub(R('index' + s + '1'), R('pinky' + s + '1')),
         sub(S(sd + 'handmiddle1'), S(sd + 'hand')), sub(S(sd + 'handindex1'), S(sd + 'handpinky1')));
-      if (w) set('hand' + s, w); else worldRot['hand' + s] = pw('hand' + s);
+      // rigs without finger bones: aim the hand at the middle knuckle
+      const w2 = w || (S(sd + 'handmiddle1') ? aim(pw('hand' + s), sub(R('hand' + s), R('elbow' + s)), sub(S(sd + 'handmiddle1'), S(sd + 'hand'))) : null);
+      if (w2) set('hand' + s, w2); else worldRot['hand' + s] = pw('hand' + s);
     }
     // foot: to the toes, up the shin
     if (fig.joints['foot' + s]) {

@@ -277,8 +277,10 @@ async function buildObject(layer, rt, o) {
     if (o.color) node.traverse((m) => { if (m.isMesh && m.material && m.material.color) m.material.color.set(o.color); });
   } else if (o.kind === 'model') {
     node = await loadModel(layer.models.get(o.modelId));
-    // a rigged human (Blender, Mixamo, Rigify, VRM…) poses exactly like the drawing figures
-    const hf = node && MH.rigImported(node, M.mapRigNames);
+    // a rigged human (Blender, Mixamo, Rigify, VRM…) poses exactly like the drawing figures;
+    // an unrigged one gets a skeleton fitted to it when the user asked for it (Make posable)
+    let hf = node && MH.rigImported(node, M.mapRigNames);
+    if (node && !hf && o.autorig) { try { if (MH.autoRigHumanoid(node)) hf = MH.rigImported(node, M.mapRigNames); } catch (e) { console.warn('auto-rig', e); } }
     if (hf) { fig = hf; joints = hf.joints; rig = 'human'; o.pose ||= {}; }
   }
   if (!node) return;
@@ -977,6 +979,10 @@ export function tool3d(app) {
         out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), human && btn('Clip Studio poses…', () => this.cspPoseMenu()), btn('Reset pose', () => this.resetPose())),
           human && switchRow('IK (drag a hand / foot to move the limb)', this.ik, (v) => { this.ik = v; app.updateCtxBar(); }),
           h('p', { class: 'hint' }, this.joint ? `${this.jointLabel(this.joint)}: drag the rings to turn it. Tap it again to go back to the whole model.` : 'Tap a body part of the selected model to turn that joint with the rings.')));
+      }
+      if (o.kind === 'model' && !e.joints) {
+        out.push(sec('Pose', h('p', { class: 'hint' }, o.autorig ? 'Auto-rig couldn’t fit a skeleton to this model.' : 'This model has no skeleton. If it’s one standing person (arms out or down, like a base mesh), Inkwell can fit one so it poses like the drawing figure: poses, Clip Studio poses, IK. Works best on plain bodies; capes and very wide clothes may stretch in big poses.'),
+          !o.autorig && grid(btn('Make posable (auto-rig)', async () => { const b = this.snapshot(); o.autorig = true; await this.rebuild(e); const ne = this.selEntry(); this.commit('Make posable', b); this.redraw(1); this.panelRefresh(); toast(ne && ne.joints ? 'Posable — tap a body part in Pose mode, or use Poses… / Clip Studio poses…' : 'Couldn’t find a person shape in this model', 4500); }))));
       }
       const color = h('input', { type: 'color', value: o.color || '#cfcac2' });
       color.oninput = () => this.edit('Colour', () => { o.color = color.value; e.node.traverse((m) => { if (m.isMesh && !m.userData.outline && m.material && m.material.color && !m.userData.handle) m.material.color.set(color.value); }); });

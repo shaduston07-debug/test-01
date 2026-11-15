@@ -960,3 +960,5 @@ body.zooming #gallery, body.zooming #gallery * { -webkit-backdrop-filter: none !
 .csp-head { margin: 6px 2px; }
 @media (max-width: 640px) { .csp-lib { flex-direction: column; max-height: none; } .csp-tree { flex: none; max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--fill-1); } }
 .csp-node .csp-name small { display: block; font-size: 11px; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; }
+.asset-card .asset-pose { display: inline-block; margin-top: 3px; padding: 1px 7px; border-radius: 8px; font-size: 11px; font-style: normal; background: #2f9e5a; color: #fff; }
+.asset-card .asset-pose.no { background: var(--fill-1); color: inherit; opacity: 0.75; }
