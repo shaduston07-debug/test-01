@@ -84,6 +84,9 @@ jobs:
           }
           json.dump(src, open('sidestore.json', 'w'), indent=1)
           PY
+          # GitHub refuses files over 100 MB in a branch: then only the source goes here (it points
+          # at the release download, which has no such limit)
+          if [ "$(stat -f%z InkwellStudio.ipa)" -gt 95000000 ]; then rm InkwellStudio.ipa; fi
           git init -q -b download
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
