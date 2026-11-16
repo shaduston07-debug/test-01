@@ -892,12 +892,15 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   // the model's own normals carry its planes: no flat shading, no recomputed normals
   const mat = new T.MeshStandardMaterial({ color, roughness: 0.75, metalness: 0 });
   mesh.material = mat; mesh.castShadow = true; mesh.frustumCulled = false;
+  try { addPlanarFingers(mesh); } catch (e) { console.warn('finger joints', e); }
   shapePlanar(mesh, { ...PLANAR_DEFAULT, ...body }, H0);
   const base = (n) => (n || '').replace(/_\d+$/, '');
   const mapNames = (list) => {
     const map = {};
     for (const it of list) {
       const raw = base(it.bone.userData.name || it.rawName || it.name), m = /^(.*?)\.([LR])$/.exec(raw);
+      const fm = /^(thumb|index|middle|ring|pinky)(\d)\.([LR])$/.exec(raw);
+      if (fm) { map[fm[1] + fm[3] + fm[2]] = it; continue; }
       for (const [ours, theirs] of Object.entries(PLANAR_MAP)) {
         if (m && m[1] === theirs && !map[ours + m[2]]) map[ours + m[2]] = it;
         else if (!m && raw === theirs && !map[ours]) map[ours] = it;
@@ -926,6 +929,108 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   };
   fig.mat = mat; fig.planar = true; fig.H = height;
   return fig;
+}
+
+// Finger joints for a hand that came with a single bone. Cut across at 60 % of its length the
+// hand falls into four separate pieces — the fingers — and a lower cut leaves the thumb on its
+// own. Each gets three bones along its length (same orientation as the hand bone), and the
+// hand's vertices are re-skinned to them: rigid along each segment, blended at the knuckles.
+function addPlanarFingers(mesh) {
+  const g = mesh.geometry = mesh.geometry.clone(), P = g.attributes.position, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+  const sk = mesh.skeleton, base = (n) => (n || '').replace(/_\d+$/, '');
+  const names = sk.bones.map((bn) => base(bn.userData.name || bn.name));
+  const bindInv = new T.Matrix4().copy(mesh.bindMatrix).invert();
+  const bones = sk.bones.slice(), inverses = sk.boneInverses.map((m) => m.clone());
+  const idx = g.index ? g.index.array : null, nTri = (idx ? idx.length : P.count) / 3;
+  const pos = (i) => new T.Vector3().fromBufferAttribute(P, i);
+  const key = (i) => Math.round(P.getX(i) * 5000) + ',' + Math.round(P.getY(i) * 5000) + ',' + Math.round(P.getZ(i) * 5000);
+  const sst = (a, c, x) => { const t = Math.max(0, Math.min(1, (x - a) / (c - a))); return t * t * (3 - 2 * t); };
+  const newSI = Array.from(si.array), newSW = Array.from(sw.array);
+  for (const S of ['L', 'R']) {
+    const hi = names.indexOf('hand.' + S); if (hi < 0) continue;
+    const hv = []; // vertices that follow this hand
+    for (let i = 0; i < P.count; i++) { let w = 0; for (let k = 0; k < 4; k++) if (si.getComponent(i, k) === hi) w += sw.getComponent(i, k); if (w > 0.5) hv.push(i); }
+    if (hv.length < 40) continue;
+    const handBind = inverses[hi].clone().invert(), wrist = new T.Vector3().setFromMatrixPosition(handBind).applyMatrix4(bindInv);
+    // along the hand: wrist → fingertips
+    const far = hv.map((i) => [pos(i).distanceTo(wrist), i]).sort((p, q) => q[0] - p[0]).slice(0, Math.ceil(hv.length * 0.12));
+    const tipC = far.reduce((t, [, i]) => t.add(pos(i)), new T.Vector3()).divideScalar(far.length);
+    // the hand's long axis: the direction its vertices spread most (power iteration on their
+    // covariance), pointing from the wrist to the fingertips
+    const mean = hv.reduce((t, i) => t.add(pos(i)), new T.Vector3()).divideScalar(hv.length), C = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for (const i of hv) { const v = pos(i).sub(mean), a3 = [v.x, v.y, v.z]; for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) C[r * 3 + c] += a3[r] * a3[c]; }
+    let d = tipC.clone().sub(wrist).normalize();
+    for (let it = 0; it < 40; it++) d.set(C[0] * d.x + C[1] * d.y + C[2] * d.z, C[3] * d.x + C[4] * d.y + C[5] * d.z, C[6] * d.x + C[7] * d.y + C[8] * d.z).normalize();
+    if (d.dot(tipC.clone().sub(wrist)) < 0) d.negate();
+    const tOf = (i) => pos(i).sub(wrist).dot(d), ts = hv.map(tOf), t0 = Math.min(...ts), t1 = Math.max(...ts);
+    const comps = (cut, tv = ts) => { // connected pieces of the hand beyond a cut
+      const lo = Math.min(...tv), hiT = Math.max(...tv);
+      const ids = new Set(hv.filter((i, k) => tv[k] > lo + cut * (hiT - lo))), par = new Map(), find = (x) => { while (par.has(x) && par.get(x) !== x) x = par.get(x); return x; }, join = (x, y) => { x = find(x); y = find(y); if (x !== y) par.set(x, y); };
+      const byPos = new Map(); for (const i of ids) { par.set(i, i); const k = key(i); if (byPos.has(k)) join(i, byPos.get(k)); else byPos.set(k, i); }
+      for (let t = 0; t < nTri; t++) { const tri = [0, 1, 2].map((k) => (idx ? idx[t * 3 + k] : t * 3 + k)).filter((v) => ids.has(v)); for (let k = 1; k < tri.length; k++) join(tri[k], tri[0]); }
+      const out = new Map(); for (const i of ids) { const r = find(i); if (!out.has(r)) out.set(r, []); out.get(r).push(i); }
+      return [...out.values()].sort((p, q) => q.length - p.length);
+    };
+    let fingers = null; for (const c of [0.6, 0.65, 0.55, 0.7]) { const cs = comps(c).filter((x) => x.length >= 8); if (cs.length === 4) { fingers = cs; break; } }
+    if (!fingers) continue;
+    const inFinger = new Set(fingers.flat());
+    // the thumb: the piece that stands apart from the fingers at a lower cut (the biggest such piece)
+    let thumb = null;
+    // (measured along the wrist → fingertips line, then along the wrist → middle-of-the-hand line:
+    // a thumb held close to the palm only separates on one of them)
+    const cAll = hv.reduce((t, i) => t.add(pos(i)), new T.Vector3()).divideScalar(hv.length), d2 = cAll.sub(wrist).normalize(), ts2 = hv.map((i) => pos(i).sub(wrist).dot(d2));
+    search: for (const tv of [ts, ts2]) for (const c of [0.4, 0.35, 0.45, 0.3, 0.5, 0.25, 0.2, 0.15]) { const cs = comps(c, tv).filter((x) => x.length >= 6 && x.length < hv.length * 0.25 && !x.some((i) => inFinger.has(i))); if (cs.length) { thumb = cs[0]; break search; } }
+    const cen = (list) => list.reduce((t, i) => t.add(pos(i)), new T.Vector3()).divideScalar(list.length);
+    const ref = thumb ? cen(thumb) : null;
+    // index is the finger nearest the thumb
+    const order = fingers.map((f) => [f, cen(f)]);
+    if (ref) order.sort((p, q) => p[1].distanceTo(ref) - q[1].distanceTo(ref));
+    const defs = [];
+    const axisOf = (list, back) => { // a line through the piece: from its near end to its far end, extended back to the knuckle
+      const c = cen(list); let ax = new T.Vector3();
+      for (const i of list) { const v = pos(i).sub(c); if (v.dot(d) < 0) v.negate(); ax.add(v); }
+      ax.normalize(); const ss = list.map((i) => pos(i).sub(c).dot(ax)), s0 = Math.min(...ss), s1 = Math.max(...ss), len = (s1 - s0) * (1 + back);
+      const tip = c.clone().add(ax.clone().multiplyScalar(s1)), root = tip.clone().sub(ax.clone().multiplyScalar(len));
+      const rad = list.map((i) => { const v = pos(i).sub(c); return v.sub(ax.clone().multiplyScalar(v.dot(ax))).length(); }).sort((p, q) => p - q)[Math.floor(list.length * 0.7)];
+      return { root, ax, len, rad };
+    };
+    ['index', 'middle', 'ring', 'pinky'].forEach((n, k) => defs.push({ n, ...axisOf(order[k][0], 0.55), split: [0, 0.45, 0.74] }));
+    if (thumb) defs.push({ n: 'thumb', ...axisOf(thumb, 0.9), split: [0, 0.42, 0.72] });
+    // bones: three per finger, oriented like the hand bone
+    for (const f of defs) {
+      f.bi = []; let parent = bones[hi], parentInv = inverses[hi];
+      for (let k = 0; k < 3; k++) {
+        const pg = f.root.clone().add(f.ax.clone().multiplyScalar(f.len * f.split[k])), pb = pg.clone().applyMatrix4(mesh.bindMatrix);
+        const world = handBind.clone().setPosition(pb), inv = world.clone().invert();
+        const bn = new T.Bone(); bn.name = f.n + (k + 1) + S; bn.userData.name = f.n + (k + 1) + '.' + S;
+        bn.position.copy(pb).applyMatrix4(parentInv); parent.add(bn);
+        f.bi.push(bones.length); bones.push(bn); inverses.push(inv); parent = bn; parentInv = inv;
+      }
+    }
+    // re-skin: the hand's share of each vertex moves to the finger segment it lies on
+    for (const i of hv) {
+      const p = pos(i); let best = null;
+      for (const f of defs) {
+        const v = p.clone().sub(f.root), sAl = v.dot(f.ax), r = v.sub(f.ax.clone().multiplyScalar(sAl)).length();
+        if (sAl < -0.12 * f.len || sAl > f.len * 1.25 || r > f.rad * 1.9) continue;
+        if (!best || r / f.rad < best.q) best = { f, s: sAl / f.len, q: r / f.rad };
+      }
+      if (!best) continue;
+      const { f, s: u } = best, z = 0.07;
+      // weights of [hand, seg1, seg2, seg3] at u (0 = knuckle … 1 = tip)
+      const k1 = sst(-z, z, u - f.split[0]), k2 = sst(-z, z, u - f.split[1]), k3 = sst(-z, z, u - f.split[2]);
+      const wseg = [1 - k1, k1 * (1 - k2), k2 * (1 - k3), k3];
+      const inf = new Map(); let wh = 0;
+      for (let k = 0; k < 4; k++) { const b = si.getComponent(i, k), w = sw.getComponent(i, k); if (b === hi) wh += w; else if (w > 0) inf.set(b, (inf.get(b) || 0) + w); }
+      inf.set(hi, wh * wseg[0]); f.bi.forEach((b, k) => inf.set(b, wh * wseg[k + 1]));
+      const top = [...inf].filter(([, w]) => w > 1e-4).sort((p2, q2) => q2[1] - p2[1]).slice(0, 4), tot = top.reduce((t, [, w]) => t + w, 0) || 1;
+      for (let k = 0; k < 4; k++) { newSI[i * 4 + k] = top[k] ? top[k][0] : 0; newSW[i * 4 + k] = top[k] ? top[k][1] / tot : 0; }
+    }
+  }
+  if (bones.length === sk.bones.length) return;
+  g.setAttribute('skinIndex', new T.Uint16BufferAttribute(newSI, 4));
+  g.setAttribute('skinWeight', new T.Float32BufferAttribute(newSW, 4));
+  mesh.bind(new T.Skeleton(bones, inverses), mesh.bindMatrix.clone());
 }
 
 // body shape: every change is a function of the vertex position only (around the bones' axes
@@ -1002,7 +1107,7 @@ function shapePlanar(mesh, b, H) {
     const wN = wOf(i, (n) => /^neck/.test(n)); if (wN > 0.01) { const kk = 1 + (0.3 * s(b.neck) + 0.12 * s(b.muscle)) * wN, sz = J.neck1.z; v.x = spineX + (v.x - spineX) * kk; v.z = sz + (v.z - sz) * kk; }
     const wHd = wOf(i, (n) => n === 'head'); if (wHd > 0.01 && J.head) { const kk = 1 + 0.25 * s(b.head) * wHd; v.sub(J.head).multiplyScalar(kk).add(J.head); }
     for (const S of ['L', 'R']) {
-      const wHa = wOf(i, (n) => n === 'hand.' + S); if (wHa > 0.01 && J['hand.' + S]) { const kk = 1 + 0.3 * s(b.hands) * wHa; v.sub(J['hand.' + S]).multiplyScalar(kk).add(J['hand.' + S]); }
+      const wHa = wOf(i, (n) => n === 'hand.' + S || (/^(thumb|index|middle|ring|pinky)\d\./.test(n) && n.endsWith('.' + S))); if (wHa > 0.01 && J['hand.' + S]) { const kk = 1 + 0.3 * s(b.hands) * wHa; v.sub(J['hand.' + S]).multiplyScalar(kk).add(J['hand.' + S]); }
       const wF = wOf(i, (n) => /^foot/.test(n) && n.endsWith('.' + S)); if (wF > 0.01 && J['footControl.' + S]) { const o = J['footControl.' + S], kk = 1 + 0.3 * s(b.feet) * wF, y0 = v.y; v.sub(o).multiplyScalar(kk).add(o); v.y = y0 * (1 + (kk - 1) * 0.5); }
     }
     P.setXYZ(i, v.x, v.y, v.z);

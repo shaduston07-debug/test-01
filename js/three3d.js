@@ -42,7 +42,7 @@ const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', ri
   body: { sex, height: sex === 'male' ? 1.75 : 1.62, ...MH.PLANAR_DEFAULT } });
 // built-in library models (generated, no download)
 export const LIBRARY = [
-  ['Figures', [['figure-female', 'Planar figure (female)'], ['figure-male', 'Planar figure (male)'], ['mannequin-male', 'Mannequin'], ['mannequin-female', 'Mannequin (female)'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour'], ['planarhead', 'Planar head (study)']]],
+  ['Figures', [['figure-female', 'Planar figure (female)'], ['figure-male', 'Planar figure (male)'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour'], ['planarhead', 'Planar head (study)']]],
   ['Creatures', [['dragon', 'Dragon'], ['werewolf', 'Werewolf'], ['orc', 'Orc brute'], ['demon', 'Winged demon'], ['ghoul', 'Ghoul'], ['xeno', 'Alien'], ['spider', 'Giant spider'], ['golem', 'Stone golem'], ['kraken', 'Kraken']]],
   ['Weapons', Object.entries(WD.WEAPONS).map(([k, w]) => ['w:' + k, w.label])],
   ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
@@ -243,7 +243,20 @@ async function runtimeFor(layer) {
   return rt;
 }
 
+// the earlier drawing figures and mannequins become planar figures (same joints, so the pose
+// carries over); armoured figures (knight, sci-fi) keep the body their armour is made for
+function toPlanar(o) {
+  if (o.outfit && o.outfit !== 'none') return;
+  if (!((o.kind === 'figure' && o.rig !== 3) || o.kind === 'mannequin')) return;
+  const sex = o.kind === 'mannequin' ? (o.sex === 'female' ? 'female' : 'male') : (o.body && o.body.sex) || 'female';
+  const old = o.body || {};
+  o.kind = 'figure'; o.rig = 3; delete o.sex;
+  o.body = { sex, height: old.height || (sex === 'male' ? 1.75 : 1.62), ...MH.PLANAR_DEFAULT, muscle: old.muscle ?? 0.5, fat: old.fat ?? 0.5 };
+  o.color = '#ecebe8'; o.scale = o.scale || 1; o.pose = o.pose || {};
+  if (!o.name || /drawing figure|mannequin/i.test(o.name)) o.name = sex === 'male' ? 'Planar figure (male)' : 'Planar figure (female)';
+}
 async function buildObject(layer, rt, o) {
+  toPlanar(o);
   let node, joints = null, figMat = null, rig = null, fig = null;
   if (o.kind === 'figure' && o.rig === 3) {
     fig = await MH.buildPlanar(o.body, o.color);
