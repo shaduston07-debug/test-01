@@ -8,7 +8,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         window = UIWindow(windowScene: windowScene)
-        window?.rootViewController = CAPBridgeViewController()
+        window?.rootViewController = InkwellBridgeViewController()
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
@@ -62,5 +62,57 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         web.evaluateJavaScript(js) { res, err in
             if (err != nil || (res as? String) != "ok") && attempt < 60 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.deliver(url, name: name, attempt: attempt + 1) } }
         }
+    }
+}
+
+// The web view with the app's own native plugins registered
+class InkwellBridgeViewController: CAPBridgeViewController {
+    override open func capacitorDidLoad() {
+        bridge?.registerPluginInstance(InkwellKeychainPlugin())
+    }
+}
+
+// API keys and setup kept in the iOS Keychain: it outlives updates (and even deleting the app),
+// so a new version starts with the Sketchfab key, the cloud backup and the settings in place.
+@objc(InkwellKeychainPlugin)
+public class InkwellKeychainPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "InkwellKeychainPlugin"
+    public let jsName = "InkwellKeychain"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "get", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "set", returnType: CAPPluginReturnPromise),
+    ]
+    private let service = "com.inkwell.studio.setup"
+
+    private func query(_ account: String) -> [String: Any] {
+        return [kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account]
+    }
+
+    @objc func get(_ call: CAPPluginCall) {
+        let account = call.getString("key") ?? "setup"
+        var q = query(account)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        if status == errSecSuccess, let data = out as? Data, let text = String(data: data, encoding: .utf8) {
+            call.resolve(["value": text])
+        } else {
+            call.resolve(["value": NSNull()])
+        }
+    }
+
+    @objc func set(_ call: CAPPluginCall) {
+        let account = call.getString("key") ?? "setup"
+        let value = call.getString("value") ?? ""
+        SecItemDelete(query(account) as CFDictionary)
+        if value.isEmpty { call.resolve(); return }
+        var q = query(account)
+        q[kSecValueData as String] = value.data(using: .utf8)!
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(q as CFDictionary, nil)
+        if status == errSecSuccess { call.resolve() } else { call.reject("Keychain error \(status)") }
     }
 }

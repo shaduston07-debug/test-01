@@ -20,6 +20,7 @@ import { Reference } from './reference.js';
 import * as Learn from './learn/learn.js';
 import * as AutoBackup from './autobackup.js';
 import * as Classic from './classic.js';
+import * as Keys from './keystore.js';
 import { drawGuide as drawPerspGuide, snapper as perspSnapper, perspTool } from './perspective.js';
 
 // Apple M-series iPads (M1–M4) report 8+ cores and have 8–16 GB of RAM: give layers a
@@ -1662,6 +1663,8 @@ const oom = (e) => {
 window.addEventListener('error', oom);
 window.addEventListener('unhandledrejection', oom);
 
+// keys and setup kept in the iOS Keychain come back before anything reads them (fresh install)
+const restoredKeys = await Keys.restore();
 const app = new App();
 window.inkwell = app;
 // files opened from outside the app (iPad: Files, Safari downloads, "Open in…") — see SceneDelegate
@@ -1679,3 +1682,4 @@ window.addEventListener('inkwellopen', drainOpened);
 window.inkwellReady = true;
 drainOpened();
 app.init();
+if (restoredKeys) setTimeout(() => toast('Your keys, cloud backup and settings were restored from the Keychain', 4000), 1500);
