@@ -38,17 +38,42 @@ export function openOutline(app, anchor) {
   const c = target.canvas, ctx = c.getContext('2d', { willReadFrequently: true });
   const ab = alphaBounds(c);
   if (!ab) { toast('This layer is empty'); return; }
-  const P = { width: 8, soft: 0.5, pos: 'outside', only: false, newLayer: false, color: app.color, ...store.prefs.get('outline', {}) };
+  const P = { width: 8, soft: 0.5, pos: 'outside', only: false, newLayer: false, outer: true, gap: 6, color: app.color, ...store.prefs.get('outline', {}) };
   P.color = app.color;
   const M = 104; // room for the widest outline
   const x0 = Math.max(0, ab.x - M), y0 = Math.max(0, ab.y - M), x1 = Math.min(c.width, ab.x + ab.w + M), y1 = Math.min(c.height, ab.y + ab.h + M);
   const w = x1 - x0, hh = y1 - y0;
   const orig = ctx.getImageData(x0, y0, w, hh), od = orig.data;
-  const inside = new Uint8Array(w * hh); for (let i = 0; i < inside.length; i++) inside[i] = od[i * 4 + 3] >= 128;
-  const outside = new Uint8Array(w * hh); for (let i = 0; i < inside.length; i++) outside[i] = !inside[i];
-  const dOut = edt(inside, w, hh); // for pixels outside the paint: distance to it
-  const dIn = edt(outside, w, hh); // for pixels inside: distance to the edge
-  let done = false, raf = 0;
+  const paint = new Uint8Array(w * hh); for (let i = 0; i < paint.length; i++) paint[i] = od[i * 4 + 3] >= 128;
+  const dPaint = edt(paint, w, hh);
+  let inside, dOut, dIn;
+  // the shape the outline goes around: the paint itself, or (Outer edge only) its silhouette —
+  // everything the outside can't reach counts as inside, so the line never runs along the
+  // drawing's own lines or into the spaces between them. Gaps up to `gap` px are bridged.
+  const shape = () => {
+    const n = w * hh;
+    if (!P.outer) inside = paint;
+    else {
+      const g = P.gap, open = (i) => dPaint[i] > g, seen = new Uint8Array(n), st = [];
+      const seed = (i) => { if (!seen[i] && open(i)) { seen[i] = 1; st.push(i); } };
+      for (let x = 0; x < w; x++) { seed(x); seed((hh - 1) * w + x); }
+      for (let y = 0; y < hh; y++) { seed(y * w); seed(y * w + w - 1); }
+      while (st.length) {
+        const i = st.pop(), x = i % w;
+        if (x > 0) seed(i - 1); if (x < w - 1) seed(i + 1); if (i >= w) seed(i - w); if (i < n - w) seed(i + w);
+      }
+      // grow the reached outside back by the gap (it was kept that far from the paint)
+      const dSeen = g > 0 ? edt(seen, w, hh) : null;
+      inside = new Uint8Array(n);
+      for (let i = 0; i < n; i++) inside[i] = paint[i] || !(seen[i] || (dSeen && dSeen[i] <= g + 0.5));
+    }
+    const outside = new Uint8Array(n); for (let i = 0; i < n; i++) outside[i] = !inside[i];
+    dOut = inside === paint ? dPaint : edt(inside, w, hh); // for pixels outside the shape: distance to it
+    dIn = edt(outside, w, hh); // for pixels inside: distance to the edge
+  };
+  shape();
+  let done = false, raf = 0, reshapeT = 0;
+  const reshape = () => { clearTimeout(reshapeT); reshapeT = setTimeout(() => { if (done) return; shape(); preview(); }, 120); };
   // outline alpha (0–1) for one pixel
   const lineA = (i) => {
     const W = P.width, s = Math.max(0.5, P.soft * W * 0.5 + 0.5);
@@ -69,12 +94,12 @@ export function openOutline(app, anchor) {
       const sa = od[q + 3] / 255;
       if (mode === 'line' || P.only) {
         // outline only: hide the paint; an inside outline keeps the paint's own alpha edge
-        o[q] = r; o[q + 1] = g; o[q + 2] = b; o[q + 3] = (P.pos === 'inside' ? la * sa : la) * 255;
+        o[q] = r; o[q + 1] = g; o[q + 2] = b; o[q + 3] = (P.pos === 'inside' && !P.outer ? la * sa : la) * 255;
         continue;
       }
       // paint + outline: inside / centre lines lie on top of the paint, outside ones beneath it
       const top = P.pos !== 'outside';
-      const la2 = top && P.pos === 'inside' ? la * sa : la;
+      const la2 = top && P.pos === 'inside' && !P.outer ? la * sa : la;
       let fr, fg, fb, fa;
       if (top) { fa = la2 + sa * (1 - la2); fr = (r * la2 + od[q] * sa * (1 - la2)); fg = (g * la2 + od[q + 1] * sa * (1 - la2)); fb = (b * la2 + od[q + 2] * sa * (1 - la2)); }
       else { fa = sa + la * (1 - sa); fr = (od[q] * sa + r * la * (1 - sa)); fg = (od[q + 1] * sa + g * la * (1 - sa)); fb = (od[q + 2] * sa + b * la * (1 - sa)); }
@@ -87,7 +112,7 @@ export function openOutline(app, anchor) {
     if (raf) return;
     raf = requestAnimationFrame(() => { raf = 0; if (done) return; ctx.putImageData(render(), x0, y0); touch(c); app.markDirty({ x: x0, y: y0, w, h: hh }); });
   };
-  const save = () => store.prefs.set('outline', { width: P.width, soft: P.soft, pos: P.pos, only: P.only, newLayer: P.newLayer });
+  const save = () => store.prefs.set('outline', { width: P.width, soft: P.soft, pos: P.pos, only: P.only, newLayer: P.newLayer, outer: P.outer, gap: P.gap });
   const apply = () => {
     if (done) return; done = true; save();
     if (P.newLayer) {
@@ -108,11 +133,15 @@ export function openOutline(app, anchor) {
   const cancel = () => { if (done) return; done = true; ctx.putImageData(orig, x0, y0); touch(c); app.changed('patched'); app.markDirty({ x: x0, y: y0, w, h: hh }); };
   const colorIn = h('input', { type: 'color', value: P.color });
   colorIn.oninput = () => { P.color = colorIn.value; preview(); };
+  const gapF = field('Close gaps up to', { min: 0, max: 40, step: 1, value: P.gap, fmt: (v) => v + ' px', onInput: (v) => { P.gap = v; reshape(); } });
+  gapF.hidden = !P.outer;
   const body = h('div', { class: 'outline-pop' },
     field('Width', { min: 1, max: 100, step: 1, value: P.width, fmt: (v) => v + ' px', onInput: (v) => { P.width = v; preview(); } }),
     field('Softness', { min: 0, max: 1, step: 0.01, value: P.soft, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { P.soft = v; preview(); } }),
     h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), colorIn),
     seg([['outside', 'Outside'], ['center', 'Centre'], ['inside', 'Inside']], P.pos, (v) => { P.pos = v; preview(); }),
+    switchRow('Outer edge only (not along the lines inside)', P.outer, (v) => { P.outer = v; gapF.hidden = !v; reshape(); }),
+    gapF,
     switchRow('Outline only (remove the fill)', P.only, (v) => { P.only = v; preview(); }),
     switchRow('Put the outline on a new layer', P.newLayer, (v) => { P.newLayer = v; }),
   );
