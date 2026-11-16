@@ -1298,7 +1298,7 @@ export function tool3d(app) {
           h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => re(() => { b.sex = v; b.height = v === 'male' ? 1.75 : 1.62; o.name = o.name.replace(/\((fe)?male\)/, '(' + v + ')'); }))),
           h('div', { class: 'p3d-lab' }, 'Physique — tap or drag'), this.shapePad(o),
           field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => re(() => { b.height = v; }) }),
-          sl('Musculature', 'muscle'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hip volume', 'hips'), sl('Hip size', 'hipSize'), sl('Thigh volume', 'thighs'), sl('Thigh size', 'thighSize'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
+          sl('Musculature', 'muscle'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
           grid(btn('More…', () => this.bodyMore(o)), btn('My bodies…', () => this.bodiesMenu(o)), btn('Save body…', () => this.saveBody(o)), btn('Reset body', () => re(() => { Object.assign(b, MH.PLANAR_DEFAULT, { height: b.sex === 'male' ? 1.75 : 1.62 }); setTimeout(() => this.panelRefresh(), 400); })))));
       }
       if (o.kind === 'figure' && o.rig === 2) {
@@ -1452,10 +1452,10 @@ export function tool3d(app) {
       const group = (t, ...kids) => h('div', {}, h('div', { class: 'menu-section' }, t), ...kids);
       const body = h('div', { class: 'p3d' },
         group('Build', sl('Musculature', 'muscle'), sl('Body fat', 'fat')),
-        group('Torso', sl('Shoulders', 'shoulders'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hip volume', 'hips'), sl('Hip size', 'hipSize'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize')),
+        group('Torso', sl('Shoulders', 'shoulders'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize')),
         group('Head & neck', sl('Head size', 'head'), sl('Neck', 'neck')),
         group('Arms', sl('Upper arms', 'arms'), sl('Forearms', 'forearms'), sl('Hands', 'hands')),
-        group('Legs', sl('Thigh volume', 'thighs'), sl('Thigh size', 'thighSize'), sl('Lower legs', 'calves'), sl('Feet', 'feet')));
+        group('Legs', sl('Thighs', 'thighs'), sl('Lower legs', 'calves'), sl('Feet', 'feet')));
       dialog({ title: 'Body — all settings', body, actions: [{ label: 'Done', primary: true }], onClose: () => this.panelRefresh() });
     },
     shapePad(o) {
