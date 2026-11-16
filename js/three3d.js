@@ -1299,7 +1299,7 @@ export function tool3d(app) {
           h('div', { class: 'p3d-lab' }, 'Physique — tap or drag'), this.shapePad(o),
           field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => re(() => { b.height = v; }) }),
           sl('Musculature', 'muscle'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hip volume', 'hips'), sl('Hip size', 'hipSize'), sl('Thigh volume', 'thighs'), sl('Thigh size', 'thighSize'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
-          grid(btn('More…', () => this.bodyMore(o)), btn('Reset body', () => re(() => { Object.assign(b, MH.PLANAR_DEFAULT, { height: b.sex === 'male' ? 1.75 : 1.62 }); setTimeout(() => this.panelRefresh(), 400); })))));
+          grid(btn('More…', () => this.bodyMore(o)), btn('My bodies…', () => this.bodiesMenu(o)), btn('Save body…', () => this.saveBody(o)), btn('Reset body', () => re(() => { Object.assign(b, MH.PLANAR_DEFAULT, { height: b.sex === 'male' ? 1.75 : 1.62 }); setTimeout(() => this.panelRefresh(), 400); })))));
       }
       if (o.kind === 'figure' && o.rig === 2) {
         const b = o.body;
@@ -1421,6 +1421,31 @@ export function tool3d(app) {
     },
     // Clip Studio's body-shape pad: across = body fat (lean → heavy), up = musculature
     // every body setting of a planar figure, grouped (the panel shows the main ones)
+    // body shapes you made: saved by name (they travel with backups), put back on any planar figure
+    async saveBody(o) {
+      const name = await promptDialog('Name for this body', (o.body.sex === 'male' ? 'Male' : 'Female') + ' body ' + (store.prefs.get('savedBodies', []).length + 1));
+      if (!name) return;
+      const list = store.prefs.get('savedBodies', []).filter((x) => x.name !== name);
+      list.push({ name, body: JSON.parse(JSON.stringify(o.body)), at: Date.now() });
+      store.prefs.set('savedBodies', list); toast('Saved body “' + name + '”');
+    },
+    bodiesMenu(o) {
+      const grid = h('div', { class: 'lib3d-grid' });
+      const fill = () => {
+        grid.textContent = '';
+        const list = store.prefs.get('savedBodies', []);
+        if (!list.length) grid.append(h('p', { class: 'hint' }, 'No saved bodies yet. Shape the figure, then tap Save body….'));
+        for (const sb of list) grid.append(h('div', { class: 'lib3d-item', style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+          h('button', { style: { flex: 1, textAlign: 'left', background: 'none' }, onclick: () => {
+            this.edit('Body', () => { const keepH = o.body.height; Object.assign(o.body, MH.PLANAR_DEFAULT, JSON.parse(JSON.stringify(sb.body))); if (!sb.body.height) o.body.height = keepH; o.name = (o.name || '').replace(/\((fe)?male\)/, '(' + o.body.sex + ')'); }, true);
+            setTimeout(() => this.panelRefresh(), 400); toast('Body “' + sb.name + '”', 1200);
+          } }, h('b', {}, sb.name), h('div', { class: 'hint' }, (sb.body.sex === 'male' ? 'Male' : 'Female') + (sb.body.height ? ' · ' + sb.body.height.toFixed(2) + ' m' : ''))),
+          h('button', { class: 'small-btn', title: 'Delete', onclick: () => { store.prefs.set('savedBodies', store.prefs.get('savedBodies', []).filter((x) => x.name !== sb.name)); fill(); } }, '✕')));
+      };
+      fill();
+      dialog({ title: 'My bodies', body: h('div', { class: 'lib3d' }, h('p', { class: 'hint' }, 'Tap one to put it on the selected figure.'), grid), actions: [
+        { label: 'Save current…', onClick: async () => { await this.saveBody(o); fill(); return false; } }, { label: 'Done', primary: true }] });
+    },
     bodyMore(o) {
       const b = o.body, re = (fn) => this.edit('Body', fn, true);
       const sl = (label, key) => field(label, { min: 0, max: 100, step: 1, value: Math.round((b[key] ?? 0.5) * 100), fmt: (v) => (v === 50 ? 'standard' : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) });
