@@ -1106,7 +1106,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     v.addScaledVector(dv, amt * f * Math.min(1, w) / len);
   };
   // like pad, swelling along any direction N (unit vector)
-  const N = new T.Vector3();
+  const N = new T.Vector3(), bAx = new T.Vector3();
   const padV = (v, L, n, r, amt, w) => {
     if (!amt || w <= 0) return;
     dv.copy(v).sub(L); const along = dv.dot(n); if (along < -0.9 * r) return;
@@ -1146,21 +1146,27 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     for (const sd of ['L', 'R']) {
       const br = lm['breast' + sd], bt = lm['butt' + sd];
       const onSide = (x) => sst(-0.004 * H, 0.03 * H, (x - spineX) * (sd === 'L' ? 1 : -1));
-      if (br && wB > 0.01 && v.z > br.z - 0.09 * H) {
-        // a mound for each breast: its top edge stays where it is (no swelling up to the collar),
-        // it spreads down and out with Size and stands forward with Volume; the inner edge stops
-        // short of the middle, so the two never merge
-        const fem = b.sex !== 'male', R0 = (fem ? 0.06 : 0.065) * H, R = R0 * (1 + 0.3 * s(b.breastSize));
-        const amt = (fem ? 0.042 * s(b.breast) + 0.014 * s(b.breastSize) : 0.018 * s(b.breast) + 0.006 * s(b.breastSize) + 0.01 * s(b.muscle)) * H;
-        const dx = v.x - br.x, dy = v.y - br.y, inner = (dx * (br.x - spineX)) < 0;
-        const rx = inner ? Math.min(R * 0.85, Math.abs(br.x - spineX) * 0.95) : R * 1.05, ry = dy > 0 ? R0 * 0.7 : R * 1.25;
-        const d2 = (dx / rx) ** 2 + (dy / ry) ** 2;
-        if (amt && d2 < 1) {
-          const q = 1 - d2, f = Math.pow(q, 0.7) * sst(0, dy < 0 ? 0.4 : 0.22, q) * Math.min(1, wB) * onSide(v.x);
-          const a2 = amt * f;
-          v.z += a2;
-          if (fem && amt > 0) v.y -= a2 * 0.28 * Math.max(0, 1 - Math.max(0, dy) / ry); // weight: a little lower, fuller underneath
-          v.x += Math.sign(br.x - spineX) * a2 * 0.08;
+      if (br && wB > 0.01 && v.z > br.z - 0.1 * H) {
+        // a breast is swollen like a dome around its own axis (pointing forward, a bit out and
+        // down): points move outward from a centre inside the chest, most at the front, fading to
+        // nothing at the edge of a cone, so it grows from the front and the side alike. Size =
+        // how wide the cone is, Volume = how far it swells. The cone is shallower above the
+        // landmark (the upper chest stays) and stops short of the middle (no merging).
+        const fem = b.sex !== 'male', R0 = (fem ? 0.06 : 0.065) * H, sd = Math.sign(br.x - spineX) || 1;
+        bAx.set(sd * 0.22, -0.12, 1).normalize();
+        C.copy(br).addScaledVector(bAx, -0.95 * R0);
+        dv.copy(v).sub(C); const len = dv.length();
+        if (len > 1e-6 && len < 2.2 * R0) {
+          const cos = dv.dot(bAx) / len, up = v.y > br.y;
+          const half = Math.min(1.35, 1.0 * (1 + 0.3 * s(b.breastSize))) * (up ? 0.75 : 1.1);
+          const w0 = sst(Math.cos(half), 1, cos);
+          const inner = (v.x - spineX) * sd < Math.abs(br.x - spineX) * 0.18 ? 0 : 1;
+          const amt = (fem ? 0.042 * s(b.breast) + 0.014 * s(b.breastSize) : 0.02 * s(b.breast) + 0.008 * s(b.breastSize) + 0.01 * s(b.muscle)) * H;
+          const w = w0 * w0 * Math.min(1, wB) * onSide(v.x) * inner * (1 - sst(1.4 * R0, 2.2 * R0, len));
+          if (amt && w > 0) {
+            v.addScaledVector(dv, amt * w / len);
+            if (fem && amt > 0) v.y -= amt * w * 0.22 * (up ? 0.3 : 1); // weight: fuller underneath
+          }
         }
       }
       // pecs / upper chest (the Chest slider): a flatter pad higher up and toward the middle
