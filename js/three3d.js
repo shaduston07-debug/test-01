@@ -1551,14 +1551,17 @@ export function tool3d(app) {
         } });
         el.append(b);
       }
-      // the gap between the 3rd and 4th tab sits level with the eyedropper between the sliders
+      // spread over the two slider zones: the first three tabs beside the size slider (ending
+      // where it ends), the other four beside the opacity slider, the eyedropper in the gap
       const place = () => {
-        const mk = document.getElementById('btn-modify'), t = el.children;
-        if (!mk || t.length < 4 || el.hidden) return;
-        const sr = sb.getBoundingClientRect(), mr = mk.getBoundingClientRect();
-        if (!mr.height) return;
-        const gap = (t[2].offsetTop + t[2].offsetHeight + t[3].offsetTop) / 2;
-        el.style.transform = 'none'; el.style.top = Math.round(mr.top + mr.height / 2 - sr.top - gap) + 'px';
+        const sz = document.getElementById('sl-size'), op = document.getElementById('sl-opacity'), t = el.children;
+        if (!sz || !op || t.length < 4 || el.hidden) return;
+        const sr = sb.getBoundingClientRect(), a = sz.getBoundingClientRect(), c = op.getBoundingClientRect();
+        if (!a.height) return;
+        const hT = t[0].offsetHeight, g = 8, above = 3 * hT + 2 * g;
+        el.style.gap = g + 'px';
+        el.style.transform = 'none'; el.style.top = Math.round(a.bottom - sr.top - above) + 'px';
+        t[3].style.marginTop = Math.max(0, Math.round(c.top - a.bottom - g)) + 'px';
       };
       requestAnimationFrame(place);
       if (!this._tabsResize) { this._tabsResize = true; addEventListener('resize', () => { const e2 = document.getElementById('tabs3d'); if (e2 && !e2.hidden) this.modeTabs(true); }); }
