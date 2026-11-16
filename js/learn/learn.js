@@ -315,7 +315,7 @@ async function cspCredits() {
 }
 export async function creditsDialog() {
   const csp = await cspCredits();
-  const list = h('div', { class: 'ln-credits' }, csp, csp ? h('h3', {}, 'Lesson artwork') : null, h('p', {}, 'Lesson artwork is real, human-made art used under its licence: public domain or CC0 (Wikimedia Commons and The Metropolitan Museum of Art open access) and Pepper&Carrot by David Revoy, licensed CC BY 4.0. Every demo is drawn by the app itself.'),
+  const list = h('div', { class: 'ln-credits' }, csp, h('h3', {}, 'Drawing figures'), h('div', {}, h('b', {}, 'Planar Human Base Rigs'), ' — by dacancino, after Alexander Lee’s rig · CC Attribution · ', h('a', { href: 'https://sketchfab.com/3d-models/planar-human-base-rigs-15a1d670d29b4195a10c23dca0d13da9', target: '_blank', rel: 'noopener' }, 'Sketchfab')), h('h3', {}, 'Lesson artwork'), h('p', {}, 'Lesson artwork is real, human-made art used under its licence: public domain or CC0 (Wikimedia Commons and The Metropolitan Museum of Art open access) and Pepper&Carrot by David Revoy, licensed CC BY 4.0. Every demo is drawn by the app itself.'),
     ...Object.values(ART).map((a) => h('div', {}, h('b', {}, a.title), ' — ', credit(a), ' · ', h('a', { href: a.page, target: '_blank', rel: 'noopener' }, 'source'))));
   import('../util.js').then(({ dialog }) => dialog({ title: 'Credits', body: list, wide: true, actions: [{ label: 'Close', primary: true }] }));
 }

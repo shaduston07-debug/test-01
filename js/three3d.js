@@ -35,11 +35,14 @@ export const defaultScene = () => ({
 });
 // drawing figures: rig 2 = the Clip-Studio-style female / male figure with finger joints
 // (older documents keep their original simple figure)
-const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 2, name: sex === 'male' ? 'Drawing figure (male)' : 'Drawing figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#c9c6c1', outfit: 'none',
+const figureObject2 = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 2, name: sex === 'male' ? 'Drawing figure (male)' : 'Drawing figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#c9c6c1', outfit: 'none',
   body: sex === 'male' ? { sex: 'male', height: 1.75, heads: 7.5, build: 0.55, muscle: 0.65, fat: 0.42 } : { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, muscle: 0.45, fat: 0.45 } });
+// the drawing figures: planar study figures (rig 3), each on its own, shaped by the Body settings
+const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 3, name: sex === 'male' ? 'Planar figure (male)' : 'Planar figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#c9c6c1',
+  body: { sex, height: sex === 'male' ? 1.75 : 1.62, ...MH.PLANAR_DEFAULT } });
 // built-in library models (generated, no download)
 export const LIBRARY = [
-  ['Figures', [['figure-female', 'Female figure'], ['figure-male', 'Male figure'], ['mannequin-male', 'Mannequin'], ['mannequin-female', 'Mannequin (female)'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour'], ['planarhead', 'Planar head (study)']]],
+  ['Figures', [['figure-female', 'Planar figure (female)'], ['figure-male', 'Planar figure (male)'], ['mannequin-male', 'Mannequin'], ['mannequin-female', 'Mannequin (female)'], ['knight', 'Knight (medieval armour)'], ['scifi', 'Sci-fi armour'], ['planarhead', 'Planar head (study)']]],
   ['Creatures', [['dragon', 'Dragon'], ['werewolf', 'Werewolf'], ['orc', 'Orc brute'], ['demon', 'Winged demon'], ['ghoul', 'Ghoul'], ['xeno', 'Alien'], ['spider', 'Giant spider'], ['golem', 'Stone golem'], ['kraken', 'Kraken']]],
   ['Weapons', Object.entries(WD.WEAPONS).map(([k, w]) => ['w:' + k, w.label])],
   ['Vehicles', [['car', 'Car'], ['sports', 'Sports car'], ['moto', 'Motorcycle']]],
@@ -242,7 +245,10 @@ async function runtimeFor(layer) {
 
 async function buildObject(layer, rt, o) {
   let node, joints = null, figMat = null, rig = null, fig = null;
-  if (o.kind === 'figure' && o.rig === 2) {
+  if (o.kind === 'figure' && o.rig === 3) {
+    fig = await MH.buildPlanar(o.body, o.color);
+    node = fig.root; joints = fig.joints; figMat = fig.mat; rig = 'human';
+  } else if (o.kind === 'figure' && o.rig === 2) {
     fig = await M.buildHuman(o.body, o.color); if (o.outfit && o.outfit !== 'none') { if (fig.armor) await fig.armor(o.outfit); else M.buildArmor(fig, o.outfit); }
     node = fig.root; joints = fig.joints; figMat = fig.mat; rig = 'human';
   } else if (o.kind === 'figure') {
@@ -725,14 +731,14 @@ function snapNode(node, opts = {}) {
   return url;
 }
 async function modelThumb(layer, gen) {
-  const key = 'thumb:model:' + gen;
+  const key = 'thumb:model3:' + gen;
   if (thumbMem.has(key)) return thumbMem.get(key);
   try { const a = await store.getAsset(key); if (a && a.url) { thumbMem.set(key, a.url); return a.url; } } catch { /* none */ }
   await three();
   const fake = { scene: new T.Scene(), objs: new Map(), outlineW: { value: 0.008 } };
   const o = gen === 'figure-female' || gen === 'figure-male' ? figureObject(0, gen.endsWith('male') && !gen.endsWith('female') ? 'male' : 'female')
     : gen === 'mannequin-male' || gen === 'mannequin-female' ? { id: uid(), kind: 'mannequin', sex: gen.endsWith('female') ? 'female' : 'male', pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#e2e1dd' }
-      : gen === 'knight' || gen === 'scifi' ? Object.assign(figureObject(0, gen === 'knight' ? 'male' : 'female'), { outfit: gen === 'knight' ? 'medieval' : 'scifi' })
+      : gen === 'knight' || gen === 'scifi' ? Object.assign(figureObject2(0, gen === 'knight' ? 'male' : 'female'), { outfit: gen === 'knight' ? 'medieval' : 'scifi' })
         : gen.startsWith('w:') ? { id: uid(), kind: 'weapon', weapon: gen.slice(2), pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cccccc' }
           : gen.startsWith('shape:') ? { id: uid(), kind: 'prim', prim: gen.slice(6), pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cfcac2' } : procObject(gen, 0);
   await buildObject(layer, fake, o);
@@ -1209,6 +1215,16 @@ export function tool3d(app) {
     panelObject(e, sec, btn, grid) {
       const o = e.data, human = e.rig === 'human', out = [];
       out.push(h('div', { class: 'p3d-title' }, o.name || o.kind));
+      if (o.kind === 'figure' && o.rig === 3) {
+        const b = o.body, re = (fn) => this.edit('Body', fn, true);
+        const sl = (label, key) => field(label, { min: 0, max: 100, step: 1, value: Math.round((b[key] ?? 0.5) * 100), fmt: (v) => (v === 50 ? 'standard' : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) });
+        out.push(sec('Body',
+          h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => re(() => { b.sex = v; b.height = v === 'male' ? 1.75 : 1.62; o.name = o.name.replace(/\((fe)?male\)/, '(' + v + ')'); }))),
+          h('div', { class: 'p3d-lab' }, 'Physique — tap or drag'), this.shapePad(o),
+          field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => re(() => { b.height = v; }) }),
+          sl('Musculature', 'muscle'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pectorals' : 'Breasts', 'breast'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt', 'butt'),
+          grid(btn('More…', () => this.bodyMore(o)), btn('Reset body', () => re(() => { Object.assign(b, MH.PLANAR_DEFAULT, { height: b.sex === 'male' ? 1.75 : 1.62 }); setTimeout(() => this.panelRefresh(), 400); })))));
+      }
       if (o.kind === 'figure' && o.rig === 2) {
         const b = o.body;
         const rebuildBody = (fn) => this.edit('Body', fn, true);
@@ -1327,6 +1343,19 @@ export function tool3d(app) {
       ] });
     },
     // Clip Studio's body-shape pad: across = body fat (lean → heavy), up = musculature
+    // every body setting of a planar figure, grouped (the panel shows the main ones)
+    bodyMore(o) {
+      const b = o.body, re = (fn) => this.edit('Body', fn, true);
+      const sl = (label, key) => field(label, { min: 0, max: 100, step: 1, value: Math.round((b[key] ?? 0.5) * 100), fmt: (v) => (v === 50 ? 'standard' : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) });
+      const group = (t, ...kids) => h('div', {}, h('div', { class: 'menu-section' }, t), ...kids);
+      const body = h('div', { class: 'p3d' },
+        group('Build', sl('Musculature', 'muscle'), sl('Body fat', 'fat')),
+        group('Torso', sl('Shoulders', 'shoulders'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pectorals' : 'Breasts', 'breast'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt', 'butt')),
+        group('Head & neck', sl('Head size', 'head'), sl('Neck', 'neck')),
+        group('Arms', sl('Upper arms', 'arms'), sl('Forearms', 'forearms'), sl('Hands', 'hands')),
+        group('Legs', sl('Thighs', 'thighs'), sl('Lower legs', 'calves'), sl('Feet', 'feet')));
+      dialog({ title: 'Body — all settings', body, actions: [{ label: 'Done', primary: true }], onClose: () => this.panelRefresh() });
+    },
     shapePad(o) {
       const W = 290, Hh = 150, c = h('canvas', { class: 'p3d-pad', width: W * 2, height: Hh * 2 });
       const { muscle, fat } = MH.bodyShape(o.body);
@@ -1335,8 +1364,17 @@ export function tool3d(app) {
         const x = c.getContext('2d'); x.setTransform(2, 0, 0, 2, 0, 0); x.clearRect(0, 0, W, Hh);
         x.fillStyle = 'rgba(0,0,0,0.28)'; x.fillRect(0, 0, W, Hh);
         x.strokeStyle = 'rgba(255,255,255,0.12)'; for (let k = 1; k < 4; k++) { x.beginPath(); x.moveTo(W * k / 4, 0); x.lineTo(W * k / 4, Hh); x.moveTo(0, Hh * k / 4); x.lineTo(W, Hh * k / 4); x.stroke(); }
-        x.fillStyle = 'rgba(255,255,255,0.55)'; x.font = '11px system-ui';
-        x.fillText('muscular', 6, 13); x.fillText('soft', 6, Hh - 6); x.textAlign = 'right'; x.fillText('heavy', W - 6, Hh / 2 + 4); x.textAlign = 'left'; x.fillText('lean', 6, Hh / 2 + 4);
+        // little figures show what each side of the pad means (up = muscular, right = heavy)
+        const icon = (cx, cy, mu, ft) => {
+          const hh = 34, sh = 5 + 5 * mu + 2 * ft, wa = 3 + 6 * ft + 1.5 * mu, hp = 4.5 + 4 * ft, lg = 2 + 1.6 * ft + 1.2 * mu, ar = 1.4 + 1.6 * mu + 1 * ft, top = cy - hh / 2;
+          x.fillStyle = 'rgba(255,255,255,0.5)';
+          x.beginPath(); x.arc(cx, top + 3.4, 3.4, 0, Math.PI * 2); x.fill();
+          x.beginPath(); x.moveTo(cx - sh, top + 8); x.lineTo(cx + sh, top + 8); x.lineTo(cx + wa, top + 15); x.lineTo(cx + hp, top + 20); x.lineTo(cx - hp, top + 20); x.lineTo(cx - wa, top + 15); x.closePath(); x.fill();
+          for (const d of [-1, 1]) { x.fillRect(cx + d * (hp - lg) - lg, top + 20, lg * 2, 14); x.save(); x.translate(cx + d * (sh + ar * 0.6), top + 8.5); x.rotate(d * -0.12); x.fillRect(-ar, 0, ar * 2, 12); x.restore(); }
+        };
+        for (const [u, w] of [[0.1, 0.12], [0.5, 0.12], [0.9, 0.12], [0.1, 0.88], [0.5, 0.88], [0.9, 0.88]]) icon(u * W, w * Hh + (w < 0.5 ? 8 : -8), 1 - w, u);
+        x.fillStyle = 'rgba(255,255,255,0.55)'; x.font = '10px system-ui';
+        x.textAlign = 'center'; x.fillText('muscular', W / 2, Hh / 2 - 14); x.fillText('soft', W / 2, Hh / 2 + 22); x.textAlign = 'right'; x.fillText('heavy', W - 6, Hh / 2 + 4); x.textAlign = 'left'; x.fillText('lean', 6, Hh / 2 + 4);
         const px = st.fat * W, py = (1 - st.muscle) * Hh;
         x.fillStyle = '#2f7dff'; x.strokeStyle = '#fff'; x.lineWidth = 2; x.beginPath(); x.arc(px, py, 8, 0, Math.PI * 2); x.fill(); x.stroke();
       };
@@ -1479,7 +1517,7 @@ export function tool3d(app) {
         const sex = gen.endsWith('female') ? 'female' : 'male';
         return this.addObject({ id: uid(), kind: 'mannequin', sex, name: sex === 'female' ? 'Mannequin (female)' : 'Mannequin', pos: [n * 0.7, 0, 0], quat: [0, 0, 0, 1], scale: sex === 'female' ? 0.95 : 1, pose: {}, color: '#e2e1dd' }, 'Add mannequin');
       }
-      if (gen === 'knight' || gen === 'scifi') { const o = figureObject(n * 0.7, gen === 'knight' ? 'male' : 'female'); o.outfit = gen === 'knight' ? 'medieval' : 'scifi'; o.name = gen === 'knight' ? 'Knight' : 'Sci-fi armour'; return this.addObject(o, 'Add ' + o.name); }
+      if (gen === 'knight' || gen === 'scifi') { const o = figureObject2(n * 0.7, gen === 'knight' ? 'male' : 'female'); o.outfit = gen === 'knight' ? 'medieval' : 'scifi'; o.name = gen === 'knight' ? 'Knight' : 'Sci-fi armour'; return this.addObject(o, 'Add ' + o.name); }
       if (gen.startsWith('w:')) return this.addWeapon(gen.slice(2));
       const big = ['castle', 'street', 'district', 'cyber', 'ruins', 'mountains', 'forest', 'desert'].includes(gen);
       const o = procObject(gen, big ? 0 : n * 1.2);

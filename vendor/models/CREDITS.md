@@ -29,3 +29,9 @@ materials and displacement, baked to texture maps; no external images are used f
 
 ## Mannequin (vendor/models/mannequin-*.glb)
 Built from scratch in Blender with scripts/blender-mannequin.py (original work, CC0).
+
+## planar-humans.glb
+
+"PLANAR HUMAN BASE RIGS" by dacancino (a modification of Alexander Lee's female rig, with a male
+model added), licensed CC Attribution 4.0.
+https://sketchfab.com/3d-models/planar-human-base-rigs-15a1d670d29b4195a10c23dca0d13da9

@@ -857,3 +857,154 @@ export function geometricRigMap(node) {
   node.updateMatrixWorld(true);
   return () => map;
 }
+
+// ───────── planar drawing figures ─────────
+// "Planar Human Base Rigs" by dacancino (after Alexander Lee's rig), CC Attribution: one file
+// with a male and a female planar figure. Each is loaded on its own, shaped by the body
+// settings (musculature, fat, chest, breast, waist, hips, butt, limb thickness, head, hands,
+// feet) and posed through its own skeleton like every other figure.
+let planarBuf = null;
+const PLANAR_MAP = { pelvis: 'pelvis_torsoControl', spine: 'lumbar2', chest: 'ribcage', neck: 'neck1', head: 'head',
+  clav: 'clavicle', shoulder: 'upperArm', elbow: 'foreArm', hand: 'hand', hip: 'thigh', knee: 'calf', foot: 'footControl', toe: 'footToes' };
+export const PLANAR_DEFAULT = { muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, shoulders: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
+export async function buildPlanar(body = {}, color = '#c9c6c1') {
+  planarBuf ||= fetch(new URL('../vendor/models/planar-humans.glb', import.meta.url)).then((r) => { if (!r.ok) throw new Error('figure model missing'); return r.arrayBuffer(); });
+  const gltf = await new Promise(async (res, rej) => new T.GLTFLoader().parse((await planarBuf).slice(0), '', res, rej));
+  const male = body.sex === 'male';
+  const skinned = []; gltf.scene.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
+  gltf.scene.updateMatrixWorld(true);
+  // the male stands at the origin, the female beside it
+  skinned.sort((a, b) => Math.abs(new T.Box3().setFromObject(a).getCenter(new T.Vector3()).x) - Math.abs(new T.Box3().setFromObject(b).getCenter(new T.Vector3()).x));
+  const mesh = skinned[male ? 0 : 1] || skinned[0];
+  if (!mesh) throw new Error('figure model has no body');
+  // keep only this figure: its mesh and its skeleton
+  const keep = new Set(); for (let o = mesh; o; o = o.parent) keep.add(o);
+  for (const b of mesh.skeleton.bones) { for (let o = b; o; o = o.parent) keep.add(o); b.traverse((c) => keep.add(c)); }
+  const drop = []; gltf.scene.traverse((o) => { if (!keep.has(o)) drop.push(o); });
+  for (const o of drop) if (o.parent) o.parent.remove(o);
+  // centred on the floor, at the body's height
+  const box = new T.Box3().setFromObject(mesh), H0 = box.max.y - box.min.y, cxm = (box.min.x + box.max.x) / 2;
+  const height = body.height || (male ? 1.75 : 1.62), k = height / H0;
+  const inner = new T.Group(); inner.add(gltf.scene);
+  gltf.scene.position.set(-cxm, -box.min.y, 0);
+  inner.scale.setScalar(k);
+  const node = new T.Group(); node.add(inner); node.updateMatrixWorld(true);
+  const mat = new T.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0, flatShading: true });
+  mesh.material = mat; mesh.castShadow = true; mesh.frustumCulled = false;
+  shapePlanar(mesh, { ...PLANAR_DEFAULT, ...body }, H0);
+  const base = (n) => (n || '').replace(/_\d+$/, '');
+  const mapNames = (list) => {
+    const map = {};
+    for (const it of list) {
+      const raw = base(it.bone.userData.name || it.rawName || it.name), m = /^(.*?)\.([LR])$/.exec(raw);
+      for (const [ours, theirs] of Object.entries(PLANAR_MAP)) {
+        if (m && m[1] === theirs && !map[ours + m[2]]) map[ours + m[2]] = it;
+        else if (!m && raw === theirs && !map[ours]) map[ours] = it;
+      }
+    }
+    return map;
+  };
+  const fig = rigImported(node, mapNames);
+  if (!fig) throw new Error('figure rig not recognised');
+  // the feet hang off the rig's root (old IK controls), not off the legs: they are carried by
+  // our foot joints
+  node.updateMatrixWorld(true);
+  const feet = [];
+  for (const S of ['L', 'R']) {
+    const bone = mesh.skeleton.bones.find((b) => base(b.userData.name || b.name) === 'footControl.' + S), joint = fig.joints['foot' + S];
+    if (bone && joint) feet.push({ bone, joint, off: new T.Matrix4().copy(joint.matrixWorld).invert().multiply(bone.matrixWorld) });
+  }
+  const drive0 = fig.drive, tmp = new T.Matrix4(), sc = new T.Vector3();
+  fig.drive = () => {
+    drive0();
+    for (const f of feet) {
+      tmp.copy(f.bone.parent.matrixWorld).invert().multiply(f.joint.matrixWorld).multiply(f.off);
+      tmp.decompose(f.bone.position, f.bone.quaternion, sc);
+    }
+    node.updateMatrixWorld(true);
+  };
+  fig.mat = mat; fig.planar = true; fig.H = height;
+  return fig;
+}
+
+// body shape: every change is a function of the vertex position only (around the bones' axes
+// and a few landmarks found on the mesh), so shared edges never split
+function shapePlanar(mesh, b, H) {
+  const g = mesh.geometry = mesh.geometry.clone(), P = g.attributes.position, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+  const bindInv = new T.Matrix4().copy(mesh.bindMatrix).invert(); // (bindMatrixInverse follows the mesh around the scene)
+  const base = (n) => (n || '').replace(/_\d+$/, '');
+  const names = mesh.skeleton.bones.map((bn) => base(bn.userData.name || bn.name));
+  // a bone's place in the mesh's own (bind) space: from its bind matrix, not its place in the scene
+  const at = (name) => { const k = names.indexOf(name); return k < 0 ? null : new T.Vector3().setFromMatrixPosition(mesh.skeleton.boneInverses[k].clone().invert()).applyMatrix4(bindInv); };
+  const wOf = (v, test) => { let w = 0; for (let k = 0; k < 4; k++) { const n = names[si.getComponent(v, k)]; if (n && test(n)) w += sw.getComponent(v, k); } return w; };
+  const s = (x) => (x - 0.5) * 2; // slider 0…1 → −1…1
+  const gauss = (d, r) => Math.exp(-(d * d) / (r * r));
+  const sst = (a, c, x) => { const t = Math.max(0, Math.min(1, (x - a) / (c - a))); return t * t * (3 - 2 * t); };
+  const J = {}; for (const n of ['pelvis_torsoControl', 'lumbar1', 'lumbar2', 'ribcage', 'neck1', 'neck2', 'head', 'thigh.L', 'thigh.R', 'calf.L', 'calf.R', 'footControl.L', 'footControl.R', 'upperArm.L', 'upperArm.R', 'foreArm.L', 'foreArm.R', 'hand.L', 'hand.R', 'clavicle.L', 'clavicle.R']) J[n] = at(n);
+  if (!J.ribcage || !J['thigh.L']) return;
+  const fwd = 1; // the figures face +Z
+  const spineX = J.ribcage.x, spineZ = (y) => J.lumbar1.z + (J.neck1.z - J.lumbar1.z) * Math.max(0, Math.min(1, (y - J.lumbar1.y) / (J.neck1.y - J.lumbar1.y)));
+  // landmarks on the mesh: the front-most chest point and the back-most seat point of each side
+  const lm = { breastL: null, breastR: null, buttL: null, buttR: null };
+  const yB0 = J.ribcage.y + (J.neck1.y - J.ribcage.y) * 0.25, yB1 = J.ribcage.y + (J.neck1.y - J.ribcage.y) * 0.62;
+  const v = new T.Vector3();
+  for (let i = 0; i < P.count; i++) {
+    v.fromBufferAttribute(P, i); const sd = v.x > spineX ? 'L' : 'R', ax = Math.abs(v.x - spineX);
+    if (v.y > yB0 && v.y < yB1 && ax > 0.03 * H && ax < 0.075 * H) { const k = 'breast' + sd; if (!lm[k] || v.z * fwd > lm[k].z * fwd) lm[k] = v.clone(); }
+    if (v.y < J.pelvis_torsoControl.y && v.y > J['thigh.L'].y - 0.07 * H && ax > 0.02 * H && ax < 0.09 * H) { const k = 'butt' + sd; if (!lm[k] || v.z * fwd < lm[k].z * fwd) lm[k] = v.clone(); }
+  }
+  const limb = (a, c) => { const A = J[a], B = J[c]; if (!A || !B) return null; const d = B.clone().sub(A), L = d.length(); return { A, d: d.divideScalar(L || 1), L }; };
+  const LIMBS = [];
+  for (const S of ['L', 'R']) LIMBS.push(
+    { ax: limb('upperArm.' + S, 'foreArm.' + S), test: (n) => n === 'upperArm.' + S || n === 'upperArm_rotate.' + S, k: 1 + 0.3 * s(b.arms) + 0.2 * s(b.muscle) + 0.12 * s(b.fat), bulge: 0.16 * s(b.muscle) },
+    { ax: limb('foreArm.' + S, 'hand.' + S), test: (n) => n === 'foreArm.' + S || n === 'foreArm_rotate.' + S, k: 1 + 0.3 * s(b.forearms) + 0.14 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.08 * s(b.muscle) },
+    { ax: limb('thigh.' + S, 'calf.' + S), test: (n) => n === 'thigh.' + S, k: 1 + 0.3 * s(b.thighs) + 0.14 * s(b.muscle) + 0.16 * s(b.fat), bulge: 0.1 * s(b.muscle) },
+    { ax: limb('calf.' + S, 'footControl.' + S), test: (n) => n === 'calf.' + S, k: 1 + 0.3 * s(b.calves) + 0.12 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.12 * s(b.muscle) });
+  const hipY = J['thigh.L'].y, waistY = J.lumbar2.y, chestY = (J.ribcage.y + J.neck1.y) / 2, shY = J['upperArm.L'].y;
+  const c = new T.Vector3(), q = new T.Vector3();
+  for (let i = 0; i < P.count; i++) {
+    v.fromBufferAttribute(P, i);
+    // limbs: thicker / thinner around their bone, muscles bulge mid-way
+    for (const Lm of LIMBS) {
+      if (!Lm.ax) continue; const w = wOf(i, Lm.test); if (w < 0.01) continue;
+      const t = Math.max(0, Math.min(Lm.ax.L, q.copy(v).sub(Lm.ax.A).dot(Lm.ax.d)));
+      c.copy(Lm.ax.d).multiplyScalar(t).add(Lm.ax.A);
+      const kk = 1 + (Lm.k - 1 + Lm.bulge * Math.sin(Math.PI * t / Lm.ax.L)) * w;
+      v.sub(c).multiplyScalar(kk).add(c);
+    }
+    // torso: around the spine line
+    const wT = wOf(i, (n) => /^(pelvis|lumbar|ribcage|clavicle|neck)/.test(n));
+    if (wT > 0.01) {
+      const y = v.y, sz = spineZ(y);
+      let kx = 1, kz = 1;
+      const gC = gauss(y - chestY, 0.1 * H), gW = gauss(y - waistY, 0.075 * H), gH = gauss(y - hipY, 0.085 * H), gS = gauss(y - shY, 0.06 * H);
+      kx += (0.16 * s(b.chest) + 0.07 * s(b.muscle)) * gC; kz += (0.2 * s(b.chest) + 0.06 * s(b.muscle)) * gC;
+      kx += (0.2 * s(b.waist) + 0.16 * s(b.fat) - 0.04 * s(b.muscle)) * gW; kz += (0.2 * s(b.waist) + 0.3 * s(b.fat)) * gW * (v.z > sz ? 1.25 : 0.7);
+      kx += (0.22 * s(b.hips) + 0.1 * s(b.fat)) * gH; kz += 0.1 * s(b.fat) * gH;
+      kx += (0.14 * s(b.shoulders) + 0.08 * s(b.muscle)) * gS;
+      v.x = spineX + (v.x - spineX) * (1 + (kx - 1) * wT); v.z = sz + (v.z - sz) * (1 + (kz - 1) * wT);
+      // chest / breast and seat: pushed out around their landmarks
+      for (const sd of ['L', 'R']) {
+        const br = lm['breast' + sd], bt = lm['butt' + sd];
+        if (br && v.z > sz) { const d = Math.hypot(v.x - br.x, (v.y - br.y) * 1.15); const amt = (b.sex === 'male' ? 0.035 * s(b.breast) + 0.02 * s(b.muscle) : 0.06 * s(b.breast)) * H; v.z += fwd * amt * gauss(d, 0.062 * H) * wT; if (b.sex !== 'male' && amt > 0) v.y -= amt * 0.2 * gauss(d, 0.062 * H) * wT; }
+        if (bt && v.z < sz) { const d = Math.hypot(v.x - bt.x, v.y - bt.y); v.z -= fwd * (0.07 * s(b.butt) + 0.02 * s(b.fat)) * H * gauss(d, 0.075 * H) * wT; }
+      }
+    }
+    // hips and seat carry into the top of the thighs
+    const wTh = wOf(i, (n) => /^thigh/.test(n));
+    if (wTh > 0.01) {
+      const gH = gauss(v.y - hipY, 0.085 * H), sd = v.x > spineX ? 'L' : 'R', bt = lm['butt' + sd], hx = J['thigh.' + sd].x;
+      if (Math.abs(v.x - spineX) > Math.abs(hx - spineX)) v.x = hx + (v.x - hx) * (1 + 0.45 * s(b.hips) * gH * wTh);
+      if (bt && v.z < J['thigh.' + sd].z) { const d = Math.hypot(v.x - bt.x, v.y - bt.y); v.z -= fwd * 0.07 * s(b.butt) * H * gauss(d, 0.075 * H) * wTh; }
+    }
+    // neck thickness; head, hands and feet scale about their own joint
+    const wN = wOf(i, (n) => /^neck/.test(n)); if (wN > 0.01) { const kk = 1 + (0.3 * s(b.neck) + 0.12 * s(b.muscle)) * wN, sz = J.neck1.z; v.x = spineX + (v.x - spineX) * kk; v.z = sz + (v.z - sz) * kk; }
+    const wHd = wOf(i, (n) => n === 'head'); if (wHd > 0.01 && J.head) { const kk = 1 + 0.25 * s(b.head) * wHd; v.sub(J.head).multiplyScalar(kk).add(J.head); }
+    for (const S of ['L', 'R']) {
+      const wHa = wOf(i, (n) => n === 'hand.' + S); if (wHa > 0.01 && J['hand.' + S]) { const kk = 1 + 0.3 * s(b.hands) * wHa; v.sub(J['hand.' + S]).multiplyScalar(kk).add(J['hand.' + S]); }
+      const wF = wOf(i, (n) => /^foot/.test(n) && n.endsWith('.' + S)); if (wF > 0.01 && J['footControl.' + S]) { const o = J['footControl.' + S], kk = 1 + 0.3 * s(b.feet) * wF, y0 = v.y; v.sub(o).multiplyScalar(kk).add(o); v.y = y0 * (1 + (kk - 1) * 0.5); }
+    }
+    P.setXYZ(i, v.x, v.y, v.z);
+  }
+  P.needsUpdate = true; g.computeVertexNormals(); g.computeBoundingBox(); g.computeBoundingSphere();
+}
