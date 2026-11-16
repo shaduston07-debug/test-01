@@ -533,6 +533,7 @@ function sheetBody(app, it, i, rerender, close, openBlend) {
   box.append(h('button', { class: 'sheet-item', onclick: () => openBlend() }, h('span', { html: ICONS.layers || '' }), h('span', { style: { whiteSpace: 'nowrap' } }, 'Blend & Opacity'),
     h('small', { class: 'sheet-val' }, (it.type === 'raster' || it.type === 'track' ? bm + ' · ' : '') + pct(it.opacity) + ' ›')));
 
+  if (it.type === '3d') box.append(section('Layer'), toggle('Lock Layer', 'locked', rerender), toggle('Private (hidden from time-lapse)', 'private', rerender));
   if (it.type === 'raster' || it.type === 'track') {
     box.append(section('Layer'));
     box.append(toggle('Alpha Lock', 'alphaLock', rerender), toggle('Clipping Mask', 'clip', rerender), toggle('Reference', 'reference', rerender), toggle('Lock Layer', 'locked', rerender), toggle('Private (hidden from time-lapse)', 'private', rerender));

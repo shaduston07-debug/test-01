@@ -317,6 +317,21 @@ function attachAll(rt) {
     if (e.node.parent !== parent) parent.add(e.node);
   }
 }
+// after undo / redo: the runtime scene follows the stored one — objects that are gone are
+// removed, objects that came back (or whose body, rig or model changed) are built again, the
+// rest just move / re-pose
+const LIGHT_KEYS = new Set(['pos', 'quat', 'scale', 'pose', 'name']);
+async function reconcile(layer, rt) {
+  const want = new Map(layer.scene3d.objects.map((o) => [o.id, o]));
+  for (const [id, e] of [...rt.objs]) {
+    const o = want.get(id);
+    const heavy = o && Object.keys({ ...o, ...e.data }).some((k) => !LIGHT_KEYS.has(k) && JSON.stringify(o[k]) !== JSON.stringify(e.data[k]));
+    if (!o || heavy) { rt.scene.remove(e.node); rt.objs.delete(id); }
+    else { e.data = o; syncObject(e); }
+  }
+  for (const o of layer.scene3d.objects) if (!rt.objs.has(o.id)) { try { await buildObject(layer, rt, o); } catch (err) { console.warn('rebuild', err); } }
+  attachAll(rt); syncAll(rt);
+}
 function syncObject(e) {
   const o = e.data;
   e.node.position.set(...o.pos);
@@ -681,10 +696,24 @@ export function tool3d(app) {
       });
     },
     snapshot() { return JSON.stringify(this.layer().scene3d); },
+    // several steps (add, fit to size, frame the camera…) recorded as one undo step
+    async group(label, fn) {
+      if (this.grouping) return fn();
+      const b = this.snapshot(); this.grouping = true;
+      try { return await fn(); } finally { this.grouping = false; this.commit(label, b); }
+    },
     commit(label, before, refresh = true) {
+      if (this.grouping) { if (refresh) this.panelRefresh(); return; }
       const L = this.layer(), after = this.snapshot();
       if (before === after) return;
-      const restore = async (json) => { L.scene3d = JSON.parse(json); const rt = runtimes.get(L); if (rt) for (const e of rt.objs.values()) { e.data = L.scene3d.objects.find((o) => o.id === e.data.id) || e.data; syncObject(e); } await render3D(L, app.doc, 1); app.changed('active'); if (this.layer() === L) this.panelRefresh(); };
+      const restore = async (json) => {
+        L.scene3d = JSON.parse(json);
+        const rt = runtimes.get(L);
+        if (rt) await reconcile(L, rt);
+        if (this.sel && !L.scene3d.objects.some((o) => o.id === this.sel)) { this.sel = null; this.joint = null; }
+        await render3D(L, app.doc, 1); app.changed('active'); app.updateCtxBar && app.updateCtxBar();
+        if (this.layer() === L) this.panelRefresh();
+      };
       app.history.push({ label, bytes: after.length, undo: () => restore(before), redo: () => restore(after) });
       app.changed('active');
       if (refresh) this.panelRefresh();
@@ -1256,7 +1285,8 @@ export function tool3d(app) {
       }
       dlg = dialog({ title: '3D model library', wide: true, body, actions: [{ label: 'Close', primary: true }] });
     },
-    async addLibrary(gen) {
+    async addLibrary(gen) { return this.group('Add model', () => this._addLibrary(gen)); },
+    async _addLibrary(gen) {
       const L = this.layer(), n = L.scene3d.objects.length;
       if (gen === 'figure-female' || gen === 'figure-male') return this.addFigure(gen === 'figure-male' ? 'male' : 'female');
       if (gen === 'mannequin-male' || gen === 'mannequin-female') {
@@ -1616,7 +1646,8 @@ export function tool3d(app) {
     // and body shape are encrypted by Clip Studio, so each object is matched to Inkwell's own
     // models by type and name, the camera is copied exactly, and the Clip Studio render goes on
     // a reference layer above to match the look and pose against.
-    async importClip(f) {
+    async importClip(f) { return this.group('Import from Clip Studio', () => this._importClip(f)); },
+    async _importClip(f) {
       toast('Reading ' + f.name + '…', 6000);
       let info;
       try { const CF = await import('./clipfile.js'); info = await CF.readClip(new Uint8Array(await f.arrayBuffer())); this._CF = CF; }
@@ -1719,7 +1750,8 @@ export function tool3d(app) {
         onMaterial: (rec) => { if (!this.sel) return false; this.setMaterial(rec); return true; },
       });
     },
-    async addAssetModel(rec) {
+    async addAssetModel(rec) { return this.group('Add ' + (rec.name || 'model'), () => this._addAssetModel(rec)); },
+    async _addAssetModel(rec) {
       const L = this.layer(); if (!L) return;
       const id = uid();
       L.models.set(id, { id, ext: rec.ext || 'glb', name: rec.name, real: true, blob: new Blob([rec.bytes]) });
