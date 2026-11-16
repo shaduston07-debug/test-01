@@ -38,14 +38,32 @@ export function openOutline(app, anchor) {
   const c = target.canvas, ctx = c.getContext('2d', { willReadFrequently: true });
   const ab = alphaBounds(c);
   if (!ab) { toast('This layer is empty'); return; }
-  const P = { width: 8, soft: 0.5, pos: 'outside', only: false, newLayer: false, outer: true, gap: 6, color: app.color, ...store.prefs.get('outline', {}) };
+  const P = { width: 8, soft: 0.5, pos: 'outside', only: false, newLayer: false, outer: true, whole: true, gap: 6, color: app.color, ...store.prefs.get('outline', {}) };
   P.color = app.color;
+  // the other visible layers of the drawing (colours under the line art…): with "whole drawing"
+  // the outline goes around all of them together, so open line art doesn't let it inside
+  const others = d.items.filter((it) => it !== d.activeItem && it.visible !== false && it.canvas && it.canvas.width === c.width && it.canvas.height === c.height && !it.reference && it.type !== 'group');
+  let U = { x: ab.x, y: ab.y, x1: ab.x + ab.w, y1: ab.y + ab.h };
+  for (const it of others) { const b2 = alphaBounds(it.canvas); if (b2 && b2.x < U.x1 + 200 && b2.x + b2.w > U.x - 200 && b2.y < U.y1 + 200 && b2.y + b2.h > U.y - 200) { U = { x: Math.min(U.x, b2.x), y: Math.min(U.y, b2.y), x1: Math.max(U.x1, b2.x + b2.w), y1: Math.max(U.y1, b2.y + b2.h) }; } }
   const M = 104; // room for the widest outline
-  const x0 = Math.max(0, ab.x - M), y0 = Math.max(0, ab.y - M), x1 = Math.min(c.width, ab.x + ab.w + M), y1 = Math.min(c.height, ab.y + ab.h + M);
+  const x0 = Math.max(0, U.x - M), y0 = Math.max(0, U.y - M), x1 = Math.min(c.width, U.x1 + M), y1 = Math.min(c.height, U.y1 + M);
   const w = x1 - x0, hh = y1 - y0;
   const orig = ctx.getImageData(x0, y0, w, hh), od = orig.data;
-  const paint = new Uint8Array(w * hh); for (let i = 0; i < paint.length; i++) paint[i] = od[i * 4 + 3] >= 128;
-  const dPaint = edt(paint, w, hh);
+  let paint, dPaint, allA = null;
+  const buildPaint = () => {
+    paint = new Uint8Array(w * hh);
+    if (P.whole && P.outer && others.length) {
+      if (!allA) {
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = hh;
+        const x = cv.getContext('2d', { willReadFrequently: true });
+        for (const it of [...others, d.activeItem]) x.drawImage(it === d.activeItem ? c : it.canvas, -x0, -y0);
+        allA = x.getImageData(0, 0, w, hh).data;
+      }
+      for (let i = 0; i < paint.length; i++) paint[i] = allA[i * 4 + 3] >= 128 || od[i * 4 + 3] >= 128;
+    } else for (let i = 0; i < paint.length; i++) paint[i] = od[i * 4 + 3] >= 128;
+    dPaint = edt(paint, w, hh);
+  };
+  buildPaint();
   let inside, dOut, dIn;
   // the shape the outline goes around: the paint itself, or (Outer edge only) its silhouette —
   // everything the outside can't reach counts as inside, so the line never runs along the
@@ -112,7 +130,7 @@ export function openOutline(app, anchor) {
     if (raf) return;
     raf = requestAnimationFrame(() => { raf = 0; if (done) return; ctx.putImageData(render(), x0, y0); touch(c); app.markDirty({ x: x0, y: y0, w, h: hh }); });
   };
-  const save = () => store.prefs.set('outline', { width: P.width, soft: P.soft, pos: P.pos, only: P.only, newLayer: P.newLayer, outer: P.outer, gap: P.gap });
+  const save = () => store.prefs.set('outline', { width: P.width, soft: P.soft, pos: P.pos, only: P.only, newLayer: P.newLayer, outer: P.outer, whole: P.whole, gap: P.gap });
   const apply = () => {
     if (done) return; done = true; save();
     if (P.newLayer) {
@@ -135,13 +153,15 @@ export function openOutline(app, anchor) {
   colorIn.oninput = () => { P.color = colorIn.value; preview(); };
   const gapF = field('Close gaps up to', { min: 0, max: 40, step: 1, value: P.gap, fmt: (v) => v + ' px', onInput: (v) => { P.gap = v; reshape(); } });
   gapF.hidden = !P.outer;
+  const wholeR = switchRow('Around the whole drawing (all visible layers, e.g. colours under the lines)', P.whole, (v) => { P.whole = v; buildPaint(); reshape(); });
+  wholeR.hidden = !P.outer || !others.length;
   const body = h('div', { class: 'outline-pop' },
     field('Width', { min: 1, max: 100, step: 1, value: P.width, fmt: (v) => v + ' px', onInput: (v) => { P.width = v; preview(); } }),
     field('Softness', { min: 0, max: 1, step: 0.01, value: P.soft, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { P.soft = v; preview(); } }),
     h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), colorIn),
     seg([['outside', 'Outside'], ['center', 'Centre'], ['inside', 'Inside']], P.pos, (v) => { P.pos = v; preview(); }),
-    switchRow('Outer edge only (not along the lines inside)', P.outer, (v) => { P.outer = v; gapF.hidden = !v; reshape(); }),
-    gapF,
+    switchRow('Outer edge only (not along the lines inside)', P.outer, (v) => { P.outer = v; gapF.hidden = !v; wholeR.hidden = !v || !others.length; buildPaint(); reshape(); }),
+    gapF, wholeR,
     switchRow('Outline only (remove the fill)', P.only, (v) => { P.only = v; preview(); }),
     switchRow('Put the outline on a new layer', P.newLayer, (v) => { P.newLayer = v; }),
   );
