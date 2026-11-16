@@ -889,7 +889,8 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   gltf.scene.position.set(-cxm, -box.min.y, 0);
   inner.scale.setScalar(k);
   const node = new T.Group(); node.add(inner); node.updateMatrixWorld(true);
-  const mat = new T.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0, flatShading: true });
+  // the model's own normals carry its planes: no flat shading, no recomputed normals
+  const mat = new T.MeshStandardMaterial({ color, roughness: 0.75, metalness: 0 });
   mesh.material = mat; mesh.castShadow = true; mesh.frustumCulled = false;
   shapePlanar(mesh, { ...PLANAR_DEFAULT, ...body }, H0);
   const base = (n) => (n || '').replace(/_\d+$/, '');
@@ -1006,5 +1007,5 @@ function shapePlanar(mesh, b, H) {
     }
     P.setXYZ(i, v.x, v.y, v.z);
   }
-  P.needsUpdate = true; g.computeVertexNormals(); g.computeBoundingBox(); g.computeBoundingSphere();
+  P.needsUpdate = true; g.computeBoundingBox(); g.computeBoundingSphere();
 }

@@ -38,7 +38,7 @@ export const defaultScene = () => ({
 const figureObject2 = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 2, name: sex === 'male' ? 'Drawing figure (male)' : 'Drawing figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#c9c6c1', outfit: 'none',
   body: sex === 'male' ? { sex: 'male', height: 1.75, heads: 7.5, build: 0.55, muscle: 0.65, fat: 0.42 } : { sex: 'female', height: 1.62, heads: 7.2, build: 0.4, muscle: 0.45, fat: 0.45 } });
 // the drawing figures: planar study figures (rig 3), each on its own, shaped by the Body settings
-const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 3, name: sex === 'male' ? 'Planar figure (male)' : 'Planar figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#c9c6c1',
+const figureObject = (x = 0, sex = 'female') => ({ id: uid(), kind: 'figure', rig: 3, name: sex === 'male' ? 'Planar figure (male)' : 'Planar figure (female)', pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#ecebe8',
   body: { sex, height: sex === 'male' ? 1.75 : 1.62, ...MH.PLANAR_DEFAULT } });
 // built-in library models (generated, no download)
 export const LIBRARY = [
