@@ -866,7 +866,7 @@ export function geometricRigMap(node) {
 let planarBuf = null;
 const PLANAR_MAP = { pelvis: 'pelvis_torsoControl', spine: 'lumbar2', chest: 'ribcage', neck: 'neck1', head: 'head',
   clav: 'clavicle', shoulder: 'upperArm', elbow: 'foreArm', hand: 'hand', hip: 'thigh', knee: 'calf', foot: 'footControl', toe: 'footToes' };
-export const PLANAR_DEFAULT = { muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
+export const PLANAR_DEFAULT = { muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, hipSize: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, thighSize: 0.5, calves: 0.5, feet: 0.5 };
 export async function buildPlanar(body = {}, color = '#c9c6c1') {
   planarBuf ||= fetch(new URL('../vendor/models/planar-humans.glb', import.meta.url)).then((r) => { if (!r.ok) throw new Error('figure model missing'); return r.arrayBuffer(); });
   const gltf = await new Promise(async (res, rej) => new T.GLTFLoader().parse((await planarBuf).slice(0), '', res, rej));
@@ -1065,24 +1065,38 @@ function shapePlanar(mesh, b, H) {
     if (v.y > yB0 && v.y < yB1 && ax > 0.03 * H && ax < 0.075 * H) { const k = 'breast' + sd; if (!lm[k] || v.z * fwd > lm[k].z * fwd) lm[k] = v.clone(); }
     if (v.y < J.pelvis_torsoControl.y && v.y > J['thigh.L'].y - 0.07 * H && ax > 0.02 * H && ax < 0.09 * H) { const k = 'butt' + sd; if (!lm[k] || v.z * fwd < lm[k].z * fwd) lm[k] = v.clone(); }
   }
+  // the widest point of each hip (outermost, around the hip joints)
+  for (let i = 0; i < P.count; i++) {
+    v.fromBufferAttribute(P, i); if (Math.abs(v.y - (J['thigh.L'].y + 0.01 * H)) > 0.05 * H) continue;
+    if (wOf(i, (n) => /^(pelvis|lumbar1|thigh)/.test(n)) < 0.5) continue;
+    const sd = v.x > spineX ? 'L' : 'R', k = 'hip' + sd;
+    if (!lm[k] || Math.abs(v.x - spineX) > Math.abs(lm[k].x - spineX)) lm[k] = v.clone();
+  }
   const limb = (a, c) => { const A = J[a], B = J[c]; if (!A || !B) return null; const d = B.clone().sub(A), L = d.length(); return { A, d: d.divideScalar(L || 1), L }; };
   const LIMBS = [];
   for (const S of ['L', 'R']) LIMBS.push(
     { ax: limb('upperArm.' + S, 'foreArm.' + S), test: (n) => n === 'upperArm.' + S || n === 'upperArm_rotate.' + S, k: 1 + 0.3 * s(b.arms) + 0.2 * s(b.muscle) + 0.12 * s(b.fat), bulge: 0.16 * s(b.muscle) },
     { ax: limb('foreArm.' + S, 'hand.' + S), test: (n) => n === 'foreArm.' + S || n === 'foreArm_rotate.' + S, k: 1 + 0.3 * s(b.forearms) + 0.14 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.08 * s(b.muscle) },
-    { ax: limb('thigh.' + S, 'calf.' + S), test: (n) => n === 'thigh.' + S, k: 1 + 0.3 * s(b.thighs) + 0.14 * s(b.muscle) + 0.16 * s(b.fat), bulge: 0.1 * s(b.muscle) },
+    { ax: limb('thigh.' + S, 'calf.' + S), test: (n) => n === 'thigh.' + S, k: 1 + 0.14 * s(b.muscle) + 0.16 * s(b.fat), bulge: 0.1 * s(b.muscle),
+      // thigh volume swells the upper / middle thigh; size sets how far down the knee it reaches
+      prof: (u) => { const hw = 0.42 * (1 + 0.45 * s(b.thighSize ?? 0.5)), d = (u - 0.32) / hw, f = d * d < 1 ? (1 - d * d) * (1 - d * d) : 0; return (0.32 * s(b.thighs) + 0.08 * s(b.thighSize ?? 0.5)) * f; } },
     { ax: limb('calf.' + S, 'footControl.' + S), test: (n) => n === 'calf.' + S, k: 1 + 0.3 * s(b.calves) + 0.12 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.12 * s(b.muscle) });
   const hipY = J['thigh.L'].y, waistY = J.lumbar2.y, chestY = (J.ribcage.y + J.neck1.y) / 2, shY = J['upperArm.L'].y;
   const c = new T.Vector3(), q = new T.Vector3(), pec = new T.Vector3(), C = new T.Vector3(), dv = new T.Vector3();
   // swell (amt > 0) or flatten the surface near L on the side facing dir (+1 front, −1 back):
   // points move away from a centre inside the body, so the result is round, not a spike;
   // `drop` moves that centre up, so the bottom fills more than the top
+  const N = new T.Vector3(), XL = new T.Vector3(1, 0, 0), XR = new T.Vector3(-1, 0, 0);
   const pad = (v, L, dir, r, amt, drop, w) => {
-    if (!amt || (v.z - L.z) * dir < -0.9 * r) return;
-    const dx = v.x - L.x, dy = (v.y - L.y) * 1.1, dz = (v.z - L.z) * 0.6, d2 = (dx * dx + dy * dy + dz * dz) / (r * r);
+    if (!amt) return;
+    if (typeof dir === 'number') N.set(0, 0, dir); else N.copy(dir);
+    dv.copy(v).sub(L); const along = dv.dot(N);
+    if (along < -0.9 * r) return;
+    // the footprint is round across the surface and shallower through the body
+    const d2 = (dv.lengthSq() - along * along * 0.64 + (dv.y * dv.y) * 0.21) / (r * r);
     if (d2 >= 1) return;
     const f = (1 - d2) * (1 - d2);
-    C.set(L.x, L.y + drop * r, L.z - dir * 0.85 * r);
+    C.copy(L).addScaledVector(N, -0.85 * r); C.y += drop * r;
     dv.copy(v).sub(C); const len = dv.length(); if (len < 1e-6) return;
     v.addScaledVector(dv, amt * f * Math.min(1, w) / len);
   };
@@ -1093,7 +1107,7 @@ function shapePlanar(mesh, b, H) {
       if (!Lm.ax) continue; const w = wOf(i, Lm.test); if (w < 0.01) continue;
       const t = Math.max(0, Math.min(Lm.ax.L, q.copy(v).sub(Lm.ax.A).dot(Lm.ax.d)));
       c.copy(Lm.ax.d).multiplyScalar(t).add(Lm.ax.A);
-      const kk = 1 + (Lm.k - 1 + Lm.bulge * Math.sin(Math.PI * t / Lm.ax.L)) * w;
+      const kk = 1 + (Lm.k - 1 + Lm.bulge * Math.sin(Math.PI * t / Lm.ax.L) + (Lm.prof ? Lm.prof(t / Lm.ax.L) : 0)) * w;
       v.sub(c).multiplyScalar(kk).add(c);
     }
     // torso: around the spine line
@@ -1104,7 +1118,7 @@ function shapePlanar(mesh, b, H) {
       const gC = gauss(y - chestY, 0.1 * H), gW = gauss(y - waistY, 0.075 * H), gH = gauss(y - hipY, 0.085 * H), gS = gauss(y - shY, 0.06 * H);
       kx += (0.03 * s(b.chest) + 0.07 * s(b.muscle)) * gC; kz += (0.04 * s(b.chest) + 0.06 * s(b.muscle)) * gC * (v.z > sz ? 1 : 0.3);
       kx += (0.2 * s(b.waist) + 0.16 * s(b.fat) - 0.04 * s(b.muscle)) * gW; kz += (0.2 * s(b.waist) + 0.3 * s(b.fat)) * gW * (v.z > sz ? 1.25 : 0.7);
-      kx += (0.22 * s(b.hips) + 0.1 * s(b.fat)) * gH; kz += 0.1 * s(b.fat) * gH;
+      kx += 0.1 * s(b.fat) * gH; kz += 0.1 * s(b.fat) * gH;
       kx += (0.14 * s(b.shoulders) + 0.08 * s(b.muscle)) * gS;
       v.x = spineX + (v.x - spineX) * (1 + (kx - 1) * wT); v.z = sz + (v.z - sz) * (1 + (kz - 1) * wT);
     }
@@ -1125,18 +1139,18 @@ function shapePlanar(mesh, b, H) {
       }
       // pecs / upper chest (the Chest slider): a flatter pad higher up and toward the middle
       if (br && wT > 0.01) { pec.set(spineX + (br.x - spineX) * 0.75, br.y + 0.05 * H, br.z - 0.012 * H); pad(v, pec, 1, 0.085 * H, (0.022 * s(b.chest) + 0.008 * s(b.muscle)) * H, 0, wT * onSide(v.x)); }
+      // hips: a pad on the outside of each hip; volume = how far out, size = how tall the curve is
+      const hp = lm['hip' + sd];
+      if (hp && wSeat > 0.01) {
+        const r = 0.085 * H * (1 + 0.4 * s(b.hipSize ?? 0.5)), amt = (0.026 * s(b.hips) + 0.006 * s(b.fat) + 0.006 * s(b.hipSize ?? 0.5)) * H;
+        if (amt) pad(v, hp, sd === 'L' ? XL : XR, r, amt, 0, wSeat * onSide(v.x));
+      }
       // seat: each cheek only on its own side (fading to nothing at the cleft); size and volume
       if (bt && wSeat > 0.01) {
         const r = 0.08 * H * (1 + 0.4 * s(b.buttSize)), amt = (0.03 * s(b.butt) + 0.008 * s(b.fat) + 0.008 * s(b.buttSize)) * H;
         const m = onSide(v.x) * (1 - sst(bt.y + 0.55 * r, bt.y + 0.9 * r, v.y));
         if (m > 0) pad(v, bt, -1, r, amt, 0.25, wSeat * m);
       }
-    }
-    // hips and seat carry into the top of the thighs
-    const wTh = wOf(i, (n) => /^thigh/.test(n));
-    if (wTh > 0.01) {
-      const gH = gauss(v.y - hipY, 0.085 * H), sd = v.x > spineX ? 'L' : 'R', bt = lm['butt' + sd], hx = J['thigh.' + sd].x;
-      if (Math.abs(v.x - spineX) > Math.abs(hx - spineX)) v.x = hx + (v.x - hx) * (1 + 0.45 * s(b.hips) * gH * wTh);
     }
     // neck thickness; head, hands and feet scale about their own joint
     const wN = wOf(i, (n) => /^neck/.test(n)); if (wN > 0.01) { const kk = 1 + (0.3 * s(b.neck) + 0.12 * s(b.muscle)) * wN, sz = J.neck1.z; v.x = spineX + (v.x - spineX) * kk; v.z = sz + (v.z - sz) * kk; }
