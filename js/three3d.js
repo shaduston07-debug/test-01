@@ -941,9 +941,23 @@ export function tool3d(app) {
           const target = at.add(right.clone().multiplyScalar(dx * k)).add(up.clone().multiplyScalar(-dy * k));
           for (const n of M.solveIK(e.joints, this.joint, target)) o.pose[n] = e.joints[n].quaternion.toArray();
         } else if (this.mode === 'pose' && this.joint && e.joints) {
+          // Clip Studio-style: the dragged part follows the pencil — the joint turns so the end of
+          // its bone (the next joint along) stays under the pencil, 1:1 at any zoom / distance
           const j = e.joints[this.joint];
+          const tip = this.poseTip(e, this.joint);
           const pq = j.parent.getWorldQuaternion(new T.Quaternion());
-          const local = pq.clone().invert().multiply(qd).multiply(pq).multiply(j.quaternion);
+          let local = null;
+          if (tip) {
+            const at = j.getWorldPosition(new T.Vector3());
+            const plane = new T.Plane().setFromNormalAndCoplanarPoint(cam.getWorldDirection(new T.Vector3()), tip);
+            const hit = this.rayAt(p, cam).ray.intersectPlane(plane, new T.Vector3());
+            if (hit && hit.distanceTo(at) > 1e-4 && tip.distanceTo(at) > 1e-4) {
+              let w = new T.Quaternion().setFromUnitVectors(tip.clone().sub(at).normalize(), hit.clone().sub(at).normalize());
+              if (this.fineRot) w = new T.Quaternion().slerp(w, 0.25);
+              local = pq.clone().invert().multiply(w).multiply(pq).multiply(j.quaternion);
+            }
+          }
+          if (!local) local = pq.clone().invert().multiply(qd).multiply(pq).multiply(j.quaternion);
           o.pose[this.joint] = local.toArray();
         }
         syncObject(e);
@@ -1096,6 +1110,22 @@ export function tool3d(app) {
       if (L && !this.off) this.shownL = L;
     },
     highlightOn(L, j) { const keep = this.layer; this.layer = () => L; try { this.highlight(j); } finally { this.layer = keep; } },
+    // where a joint's bone ends (the point that follows the pencil when it's dragged): the next
+    // joint along the body (spine → chest → neck → head, shoulder → elbow → hand…), or for an
+    // end joint (head, hand without fingers, toe) a point along its own axis
+    poseTip(e, name) {
+      const j = e.joints[name]; if (!j) return null;
+      const kids = j.children.filter((c) => c.name && e.joints[c.name] === c);
+      const prefer = ['spine', 'chest', 'neck', 'head', 'elbowL', 'elbowR', 'handL', 'handR', 'kneeL', 'kneeR', 'footL', 'footR', 'toeL', 'toeR', 'middleL1', 'middleR1'];
+      const next = kids.find((c) => prefer.includes(c.name) && !/^clav/.test(c.name)) || kids.find((c) => !/^(clav|hip)/.test(c.name)) || kids[0];
+      if (next) return next.getWorldPosition(new T.Vector3());
+      const at = j.getWorldPosition(new T.Vector3()), q = j.getWorldQuaternion(new T.Quaternion());
+      const len = 0.1 * (e.fig && e.fig.H ? e.fig.H : 1) * (e.node.scale.x || 1);
+      const p = j.parent && j.parent.getWorldPosition ? j.parent.getWorldPosition(new T.Vector3()) : null;
+      // continue the bone the joint hangs from (finger tips, toes), else its own up axis (head)
+      const dir = p && p.distanceTo(at) > 1e-4 && !/^head|^neck/.test(name) ? at.clone().sub(p).normalize() : new T.Vector3(0, 1, 0).applyQuaternion(q);
+      return at.clone().add(dir.multiplyScalar(len));
+    },
     // make another 3D layer the one being edited
     activate(L) {
       const d = app.doc, i = d.items.indexOf(L); if (i < 0) return;
