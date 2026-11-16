@@ -933,6 +933,8 @@ export function tool3d(app) {
         this.tapHit = hit;
         // the selected figure: drag a hand / foot (or its fingers / toes) and the arm / leg follows (IK)
         const eff = hit && hit.joint && (hit.joint.replace(/^(thumb|index|middle|ring|pinky)([LR])\d$/, 'hand$2').replace(/^toe([LR])$/, 'foot$1'));
+        const grab = e && e.joints && app.settings.dragPose3d !== false;
+        if (grab && hit.joint && this.sel !== hit.objId) { this.sel = hit.objId; app.updateCtxBar(); } // any figure: no need to select it first
         if (e && hit.objId === this.sel && e.rig === 'human' && this.ik && M.IK_CHAINS[eff]) { this.joint = eff; this.dragIK = true; this.highlight(this.joint); }
         // any other part of the selected figure: drag it to pose it (no need to switch to Pose);
         // the hips / root and empty space turn the camera
@@ -1313,7 +1315,7 @@ export function tool3d(app) {
           switchRow('Guide lines (face & body centre, eye line)', b.guides !== false, (v) => { const m = e.fig && e.fig.mesh; this.edit('Guide lines', () => { b.guides = v; if (m && m.userData.setGuides) m.userData.setGuides(v); }); })));
       }
       if (e.joints) {
-        out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), human && btn('Clip Studio poses…', () => this.cspPoseMenu()), btn('Reset pose', () => this.resetPose())),
+        out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), btn('Reset pose', () => this.resetPose())),
           human && switchRow('IK (drag a hand / foot to move the limb)', this.ik, (v) => { this.ik = v; app.updateCtxBar(); }),
           field('Sensitivity', { min: 0.2, max: 1.5, step: 0.05, value: app.settings.sens3d ?? 0.6, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { app.settings.sens3d = v; app.applySettings(); } }),
           switchRow('Fine rotation (¼ speed)', !!this.fineRot, (v) => { this.fineRot = v; store.prefs.set('fineRot', v); }),
@@ -1503,15 +1505,15 @@ export function tool3d(app) {
       this.showModelsButton(true);
       // short enough to fit without scrolling: adding models lives in the ＋ Models pop-up above the
       // bar, everything about the selected model in the 3D panel
-      const other = !['object', 'pose'].includes(this.mode);
-      const items = [
-        cb('Object', () => setMode('object'), this.mode === 'object'), cb('Pose', () => setMode('pose'), this.mode === 'pose'),
-        ...(this.mode === 'pose' ? [cb('Poses…', () => this.poseMenu()), cb('Clip Studio poses…', () => this.cspPoseMenu())] : []),
-        cb(other ? this.mode[0].toUpperCase() + this.mode.slice(1) + ' ▾' : 'Modes ▾', (ev) => this.modesMenu(ev.currentTarget, setMode), other), sep(),
-        cb('Camera…', () => this.cameraMenu()), cb('Panel', () => (isFloating('3d') ? closeFloat('3d') : this.openPanel()), isFloating('3d')),
-      ];
-      if (this.sel) items.push(sep(), cb('Delete', () => this.deleteSel()));
-      items.push(sep(), cb('Rasterize', () => this.rasterize(), false, 'primary'));
+      // one everyday mode: drag a body part to pose it, a model's rings / arrows to move it, empty
+      // space to turn the camera (fingers or pencil, Settings › 3D). The rest sits under ⋯
+      if (this.mode === 'pose') this.mode = 'object';
+      const rt = runtimes.get(L), posable = rt && [...rt.objs.values()].some((x) => x.joints);
+      const items = [];
+      if (this.mode !== 'object') items.push(cb(this.mode[0].toUpperCase() + this.mode.slice(1) + ' ✕', () => setMode('object'), true), sep());
+      if (posable) items.push(cb('Poses', () => this.poseMenu()));
+      items.push(cb('Camera', () => this.cameraMenu()), cb('Panel', () => (isFloating('3d') ? closeFloat('3d') : this.openPanel()), isFloating('3d')),
+        cb('⋯', (ev) => this.modesMenu(ev.currentTarget, setMode)));
       return items;
     },
     // a pop-up that opens upwards from a button at the bottom of the screen
@@ -1536,12 +1538,17 @@ export function tool3d(app) {
     modelsMenu() { return this.libraryMenu(); },
     modesMenu(anchor, setMode) {
       const row = (m, label, hint) => h('button', { class: 'lib3d-item' + (this.mode === m ? ' on' : ''), onclick: () => { closePopover(); setMode(m); } }, h('b', {}, label), h('div', { class: 'hint' }, hint));
-      const body = h('div', { class: 'lib3d' }, h('div', { class: 'lib3d-grid' },
-        row('object', 'Object', 'Tap to select, manipulator, drag empty space to orbit'), row('pose', 'Pose', 'Tap a body part and drag it'),
-        row('orbit', 'Orbit', 'Drag to turn the camera'), row('pan', 'Pan', 'Drag to slide the camera'), row('zoom', 'Zoom', 'Drag up / down'),
-        row('move', 'Move', 'Drag a model'), row('rotate', 'Rotate', 'Drag to turn a model'), row('scale', 'Scale', 'Drag up / down')),
-      switchRow('Manipulator (rings & arrows)', this.gizmoOn, (v) => { this.gizmoOn = v; this.redraw(1); }));
-      this.popAbove(anchor, { title: '3D modes', body, width: 420, key: '3d-modes' });
+      const act = (label, fn, cls = '') => h('button', { class: 'pill' + (cls ? ' ' + cls : ''), onclick: () => { closePopover(); fn(); } }, label);
+      const body = h('div', { class: 'lib3d' },
+        h('div', { class: 'row-btns', style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' } },
+          this.sel ? act('Delete model', () => this.deleteSel()) : null, act('Rasterize layer', () => this.rasterize())),
+        h('div', { class: 'hint' }, 'Single-purpose drags (tap ✕ on the bar to go back to normal):'),
+        h('div', { class: 'lib3d-grid' },
+          row('object', 'Normal', 'Drag a body part to pose, empty space to turn the camera'),
+          row('orbit', 'Orbit', 'Drag to turn the camera'), row('pan', 'Pan', 'Drag to slide the camera'), row('zoom', 'Zoom', 'Drag up / down'),
+          row('move', 'Move', 'Drag a model'), row('rotate', 'Rotate', 'Drag to turn a model'), row('scale', 'Scale', 'Drag up / down')),
+        switchRow('Manipulator (rings & arrows)', this.gizmoOn, (v) => { this.gizmoOn = v; this.redraw(1); }));
+      this.popAbove(anchor, { title: '3D', body, width: 420, key: '3d-modes' });
     },
     addShape(k, l) { this.addObject({ id: uid(), kind: 'prim', prim: k, name: l, pos: [0.8, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cfcac2' }, 'Add ' + l); },
     selEntry() { const L = this.layer(), rt = L && runtimes.get(L); return rt && this.sel ? rt.objs.get(this.sel) : null; },
