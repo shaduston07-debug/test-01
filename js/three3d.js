@@ -1551,9 +1551,9 @@ export function tool3d(app) {
         } });
         el.append(b);
       }
-      // the middle tab (4th) is centred on the saved-sizes (bookmark) button: 3 tabs above, 3 below
+      // the middle tab (4th) is centred on the eyedropper button between the sliders: 3 tabs above, 3 below
       const place = () => {
-        const mk = document.getElementById('btn-points'), t = el.children;
+        const mk = document.getElementById('btn-modify'), t = el.children;
         if (!mk || t.length < 4 || el.hidden) return;
         const sr = sb.getBoundingClientRect(), mr = mk.getBoundingClientRect();
         if (!mr.height) return;
