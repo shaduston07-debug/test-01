@@ -358,6 +358,8 @@ async function reconcile(layer, rt) {
 }
 const ICON_UNDO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
 const ICON_REDO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>';
+// sliders that start at the model's own shape (they only add, never cave it in)
+const BASE0 = new Set(['breast', 'breastSize']);
 const u3dStacks = new WeakMap();
 function u3d(L) { let st = u3dStacks.get(L); if (!st) u3dStacks.set(L, st = { undo: [], redo: [] }); return st; }
 function syncObject(e) {
@@ -1348,7 +1350,7 @@ export function tool3d(app) {
       out.push(h('div', { class: 'p3d-title' }, o.name || o.kind));
       if (o.kind === 'figure' && o.rig === 3) {
         const b = o.body, re = (fn) => this.edit('Body', fn, true);
-        const sl = (label, key) => field(label, { min: 0, max: 100, step: 1, value: Math.round((b[key] ?? 0.5) * 100), fmt: (v) => (v === 50 ? 'standard' : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) });
+        const sl = (label, key) => { const b0 = BASE0.has(key); return field(label, { min: b0 ? 50 : 0, max: 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
         out.push(sec('Body',
           h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => re(() => { b.sex = v; b.height = v === 'male' ? 1.75 : 1.62; o.name = o.name.replace(/\((fe)?male\)/, '(' + v + ')'); }))),
           h('div', { class: 'p3d-lab' }, 'Physique — tap or drag'), this.shapePad(o),
@@ -1503,7 +1505,7 @@ export function tool3d(app) {
     },
     bodyMore(o) {
       const b = o.body, re = (fn) => this.edit('Body', fn, true);
-      const sl = (label, key) => field(label, { min: 0, max: 100, step: 1, value: Math.round((b[key] ?? 0.5) * 100), fmt: (v) => (v === 50 ? 'standard' : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) });
+      const sl = (label, key) => { const b0 = BASE0.has(key); return field(label, { min: b0 ? 50 : 0, max: 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
       const group = (t, ...kids) => h('div', {}, h('div', { class: 'menu-section' }, t), ...kids);
       const body = h('div', { class: 'p3d' },
         group('Build', sl('Musculature', 'muscle'), sl('Body fat', 'fat')),

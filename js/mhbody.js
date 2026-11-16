@@ -1158,10 +1158,11 @@ function shapePlanar(mesh, b, H, inPlace = false) {
         dv.copy(v).sub(C); const len = dv.length();
         if (len > 1e-6 && len < 2.2 * R0) {
           const cos = dv.dot(bAx) / len, up = v.y > br.y;
-          const half = Math.min(1.35, 1.0 * (1 + 0.3 * s(b.breastSize))) * (up ? 0.75 : 1.1);
+          const half = Math.min(1.35, 1.0 * (1 + 0.3 * Math.max(0, s(b.breastSize)))) * (up ? 0.75 : 1.1);
           const w0 = sst(Math.cos(half), 1, cos);
           const inner = (v.x - spineX) * sd < Math.abs(br.x - spineX) * 0.18 ? 0 : 1;
-          const amt = (fem ? 0.042 * s(b.breast) + 0.014 * s(b.breastSize) : 0.02 * s(b.breast) + 0.008 * s(b.breastSize) + 0.01 * s(b.muscle)) * H;
+          const bv = Math.max(0, s(b.breast)), bs = Math.max(0, s(b.breastSize)); // the model's own breasts are the smallest
+          const amt = (fem ? 0.042 * bv + 0.014 * bs : 0.02 * bv + 0.008 * bs + 0.01 * Math.max(0, s(b.muscle))) * H;
           const w = w0 * w0 * Math.min(1, wB) * onSide(v.x) * inner * (1 - sst(1.4 * R0, 2.2 * R0, len));
           if (amt && w > 0) {
             v.addScaledVector(dv, amt * w / len);
