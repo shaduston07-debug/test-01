@@ -1200,6 +1200,8 @@ function shapePlanar(mesh, b, H, inPlace = false) {
             // otherwise: pushed out along the surface (forward on the front, sideways on the side)
             v.addScaledVector(bN, k * (1 - bl));
             v.z += (zSmooth - v.z) * bl;
+            // the outer side is round too: it bulges out sideways (toward the arm), most at nipple height
+            if (fem && xo > 0) v.x += sd * amt * 0.55 * W * sst(0, 0.7, xo / rx) * Math.pow(Math.max(0, 1 - e * e), 0.6) * (1 - 0.5 * sst(0, 1, Math.abs(u) / ry));
             if (smw) smw[i] = Math.max(smw[i], sst(0, 0.01 * H, amt) * W * Math.min(1, Math.max(0, 1 - e) * 3));
             // a little fuller and lower under the nipple
             if (fem && u < 0) { const t2 = -u / ry; v.y -= k * 0.45 * t2 * t2; }
