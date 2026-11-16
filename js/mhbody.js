@@ -665,6 +665,44 @@ export function autoRigHumanoid(node, opt = {}) {
   for (const { a } of parts) for (let i = 0; i < a.length; i += 3) { const y = a[i + 1]; if (y > Y(0.6) && y < Y(0.72)) { const dx = Math.abs(a[i] - cx); if (dx < H * 0.14) xs.push(dx); } }
   xs.sort((p, q) => p - q);
   const torsoHalf = xs.length ? Math.min(H * 0.11, xs[Math.floor(xs.length * 0.9)] * 1.02) : H * 0.085;
+  // every bone is a capsule with its own thickness (the torso an ellipse: wide, less deep), and a
+  // vertex belongs to the bone it is nearest to *in units of that thickness* — so the side of the
+  // chest stays with the chest even when an arm hangs right next to it
+  const zs = [];
+  for (const { a } of parts) for (let i = 0; i < a.length; i += 3) { const y = a[i + 1]; if (y > Y(0.6) && y < Y(0.72) && Math.abs(a[i] - cx) < torsoHalf * 0.6) zs.push(Math.abs(a[i + 2] - J.chest[2])); }
+  zs.sort((p, q) => p - q);
+  const torsoDepth = zs.length ? Math.max(H * 0.045, Math.min(H * 0.11, zs[Math.floor(zs.length * 0.9)] * 1.02)) : H * 0.065;
+  const R0 = { pelvis: 0, spine: 0, chest: 0, neck: 0.035, head: 0.075, clav: 0.04, shoulder: 0.04, elbow: 0.035, hand: 0.03, hip: 0.065, knee: 0.05, foot: 0.04, toe: 0.03 };
+  const sst = (e0, e1, x) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+  segs.forEach((sg, i) => {
+    const base = sg.k.replace(/[LR]$/, '');
+    sg.torso = ['pelvis', 'spine', 'chest'].includes(base);
+    sg.r = sg.torso ? torsoHalf : R0[base] * H; sg.rz = sg.torso ? torsoDepth : sg.r;
+    sg.dir = sg.b.clone().sub(sg.a); sg.len = sg.dir.length() || 1e-6; sg.dir.divideScalar(sg.len);
+    sg.par = parentOf[sg.k] ? segs.findIndex((x) => x.k === parentOf[sg.k]) : -1;
+  });
+  const cp = new T.Vector3();
+  const ndist = (sg) => {
+    ap.subVectors(P, sg.a); const t = Math.max(0, Math.min(sg.len, ap.dot(sg.dir)));
+    cp.copy(sg.dir).multiplyScalar(t).add(sg.a);
+    const dx = P.x - cp.x, dy = P.y - cp.y, dz = P.z - cp.z;
+    return sg.torso ? Math.sqrt((dx / sg.r) ** 2 + (dy / sg.r) ** 2 + (dz / sg.rz) ** 2) : Math.sqrt(dx * dx + dy * dy + dz * dz) / sg.r;
+  };
+  const nearest = (out) => {
+    const side = L * (P.x - cx) > H * 0.02 ? 'L' : L * (P.x - cx) < -H * 0.02 ? 'R' : '';
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < segs.length; i++) { let x = ndist(segs[i]); if (segs[i].side && side && segs[i].side !== side) x *= 4; if (out) out[i] = x; if (x < bd) { bd = x; best = i; } }
+    return best;
+  };
+  // the limbs' real thickness (armour, sleeves, a thin or heavy build): the usual distance of
+  // the vertices each bone got on a first pass
+  {
+    const acc = segs.map(() => []);
+    for (const { a } of parts) { const step = Math.max(1, Math.floor(a.length / 3 / 60000)); for (let i = 0; i < a.length; i += 3 * step) { P.set(a[i], a[i + 1], a[i + 2]); const bst = nearest(null); if (!segs[bst].torso) acc[bst].push(ndist(segs[bst]) * segs[bst].r); } }
+    segs.forEach((sg, i) => { if (sg.torso || acc[i].length < 12) return; acc[i].sort((p, q) => p - q); const med = acc[i][Math.floor(acc[i].length * 0.75)]; sg.r = sg.rz = Math.max(sg.r * 0.6, Math.min(sg.r * 1.8, med)); });
+    // left and right alike
+    for (const sg of segs) if (sg.side === 'L') { const o = segs.find((x) => x.k === sg.k.replace(/L$/, 'R')); if (o) { const m = (sg.r + o.r) / 2; sg.r = sg.rz = o.r = o.rz = m; } }
+  }
   const skeleton = new T.Skeleton(bones);
   // everything goes into one group placed first under the node (rigImported turns that child)
   const holder = new T.Group(); holder.name = 'autorig';
@@ -674,14 +712,25 @@ export function autoRigHumanoid(node, opt = {}) {
     // geometry baked into the node's space (the skinned mesh sits at the node's origin)
     g.applyMatrix4(new T.Matrix4().multiplyMatrices(inv, m.matrixWorld));
     const NB = segs.length, W = new Float32Array(cnt * NB);
+    const dn = new Float32Array(NB);
     for (let v = 0; v < cnt; v++) {
       P.set(a[v * 3], a[v * 3 + 1], a[v * 3 + 2]);
-      const side = L * (P.x - cx) > H * 0.02 ? 'L' : L * (P.x - cx) < -H * 0.02 ? 'R' : '';
-      const inTorso = Math.abs(P.x - cx) < torsoHalf && P.y < Y(0.8) && P.y > Y(0.45);
-      let best = -1, bd = Infinity;
-      const d = segs.map((s, i) => { let x = dist(s); if (s.side && side && s.side !== side) x *= 4; if (inTorso && s.limb === 'arm' && s.k.startsWith('shoulder')) x *= 3; if (inTorso && /^(elbow|hand)/.test(s.k) && Math.abs(P.x - cx) < torsoHalf * 0.85) x *= 3; if (x < bd) { bd = x; best = i; } return x; });
-      // the nearest bone and the bones next to it (no arm ↔ leg, left ↔ right mixing)
-      for (let i = 0; i < NB; i++) if (i === best || near(i, best)) W[v * NB + i] = 1 / Math.pow(d[i] + H * 0.01, 4);
+      const best = nearest(dn);
+      // rigid on its own bone; shared with the bone across a joint only in a band around that joint
+      const B = segs[best], zb = B.r;
+      let rest = 1;
+      for (let i = 0; i < NB; i++) {
+        if (i === best) continue;
+        const S = segs[i]; let s, z;
+        if (B.par === i) { s = -(P.clone().sub(B.a).dot(B.dir)); z = Math.max(zb, S.r); }       // towards the parent: before this bone's start
+        else if (S.par === best) { s = P.clone().sub(S.a).dot(S.dir); z = Math.max(zb, S.r); }  // towards a child: past the child's start
+        else continue;
+        z *= 1.1;
+        const along = sst(-z, z, s), close = 1 - sst(1.05, 1.9, dn[i] / Math.max(1e-6, dn[best]));
+        const w = along * close;
+        if (w > 0.002) { W[v * NB + i] = w; rest *= 1 - w; }
+      }
+      W[v * NB + best] = Math.max(rest, 0.02);
     }
     // smooth the weights over the surface (shared positions count as one point, so UV seams
     // can't tear), then keep the four strongest
@@ -695,7 +744,7 @@ export function autoRigHumanoid(node, opt = {}) {
     const nbr = Array.from({ length: G }, () => new Set());
     for (let t = 0; t + 2 < tris; t += 3) { const p0 = grp[idx ? idx[t] : t], p1 = grp[idx ? idx[t + 1] : t + 1], p2 = grp[idx ? idx[t + 2] : t + 2]; nbr[p0].add(p1).add(p2); nbr[p1].add(p0).add(p2); nbr[p2].add(p0).add(p1); }
     let cur = GW, nxt = new Float32Array(G * NB);
-    for (let it = 0; it < 10; it++) {
+    for (let it = 0; it < 2; it++) {
       for (let gi = 0; gi < G; gi++) {
         const ns = nbr[gi], k = 1 / (ns.size + 1);
         for (let i = 0; i < NB; i++) { let t = cur[gi * NB + i]; for (const n of ns) t += cur[n * NB + i]; nxt[gi * NB + i] = t * k; }
