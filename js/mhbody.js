@@ -893,8 +893,11 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   const mat = new T.MeshStandardMaterial({ color, roughness: 0.75, metalness: 0 });
   mesh.material = mat; mesh.castShadow = true; mesh.frustumCulled = false;
   try { addPlanarFingers(mesh); } catch (e) { console.warn('finger joints', e); }
-  const basePos = mesh.geometry.attributes.position.array.slice();
-  shapePlanar(mesh, { ...PLANAR_DEFAULT, ...body }, H0);
+  try { refineChest(mesh); } catch (e) { console.warn('chest detail', e); }
+  mesh.geometry = mesh.geometry.clone();
+  const basePos = mesh.geometry.attributes.position.array.slice(), baseNrm = mesh.geometry.attributes.normal.array.slice();
+  mesh.geometry.userData.basePos = basePos;
+  shapePlanar(mesh, { ...PLANAR_DEFAULT, ...body }, H0, true);
   const base = (n) => (n || '').replace(/_\d+$/, '');
   const mapNames = (list) => {
     const map = {};
@@ -939,7 +942,7 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   // height scales the whole figure; only a change of sex needs a new build
   fig.sex = male ? 'male' : 'female'; fig.builtHeight = height; fig.hk = 1;
   fig.reshape = (b) => {
-    const P = mesh.geometry.attributes.position; P.array.set(basePos);
+    const g = mesh.geometry; g.attributes.position.array.set(basePos); g.attributes.normal.array.set(baseNrm);
     shapePlanar(mesh, { ...PLANAR_DEFAULT, ...b }, H0, true);
     fig.hk = (b.height || height) / height;
   };
@@ -1084,6 +1087,31 @@ function shapePlanar(mesh, b, H, inPlace = false) {
       const k = 'trap' + sd; if (!lm[k] || v.y > lm[k].y) lm[k] = v.clone();
     }
   }
+  // female breasts as semi-round balloons on the chest: per side, a sphere through a base circle
+  // on the chest (Size widens it) and an apex in front of it (Volume pushes it out). The body is
+  // the union of itself and the sphere: only what is inside the balloon moves out onto it, so the
+  // middle of the chest and the skin around the breast don't change.
+  const balloons = {};
+  if (b.sex !== 'male') for (const sd0 of ['L', 'R']) {
+    const br = lm['breast' + sd0]; if (!br) continue;
+    const sd = Math.sign(br.x - spineX) || 1, bv = Math.max(0, s(b.breast)), bs = Math.max(0, s(b.breastSize));
+    if (!bv && !bs) continue;
+    // the chest's depth around this breast (where the model's own breast starts)
+    const R0 = 0.055 * H; let zs = 0, nz = 0;
+    for (let i = 0; i < P.count; i++) {
+      v.fromBufferAttribute(P, i); if ((v.x - spineX) * sd <= 0) continue;
+      const d = Math.hypot(v.x - br.x, (v.y - br.y) * 0.9); if (d < R0 * 1.0 || d > R0 * 1.3 || v.z < br.z - 0.12 * H) continue;
+      if (wOf(i, (n) => n === 'ribcage') < 0.5) continue;
+      zs += v.z; nz++;
+    }
+    const zc = nz ? zs / nz : br.z - 0.5 * R0, p0 = Math.max(0.2 * R0, br.z - zc);
+    const base = Math.min(R0 * (0.95 + 0.3 * bs), Math.abs(br.x - spineX) * 0.95);                       // radius of the base on the chest
+    const proj = p0 * 0.9 + (0.038 * bv + 0.008 * bs) * H;      // how far the apex stands out
+    const r = (base * base + proj * proj) / (2 * proj);          // sphere through base circle and apex
+    const ax = new T.Vector3(sd * 0.28, -0.12, 1).normalize();   // breasts point a little out and down
+    const apex = new T.Vector3(br.x + sd * 0.1 * base, br.y - 0.15 * base * (bv + bs) / 2, zc).addScaledVector(ax, proj);
+    balloons[sd0] = { sd, r, C: apex.clone().addScaledVector(ax, -r), ax, br, base };
+  }
   const limb = (a, c) => { const A = J[a], B = J[c]; if (!A || !B) return null; const d = B.clone().sub(A), L = d.length(); return { A, d: d.divideScalar(L || 1), L }; };
   const LIMBS = [];
   for (const S of ['L', 'R']) LIMBS.push(
@@ -1146,14 +1174,24 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     for (const sd of ['L', 'R']) {
       const br = lm['breast' + sd], bt = lm['butt' + sd];
       const onSide = (x) => sst(-0.004 * H, 0.03 * H, (x - spineX) * (sd === 'L' ? 1 : -1));
-      if (br && wB > 0.01 && v.z > br.z - 0.1 * H) {
+      const bal = balloons[sd];
+      if (bal && wB > 0.01) {
+        // inside the balloon: out onto its surface (with a soft edge where it meets the chest)
+        dv.copy(v).sub(bal.C); const len = dv.length();
+        if (len > 1e-6 && len < bal.r && dv.dot(bal.ax) > -0.35 * len && (v.x - spineX) * bal.sd > Math.abs(bal.br.x - spineX) * 0.12) {
+          const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n))) * onSide(v.x);
+          const depth = (bal.r - len) / bal.r;                  // 0 at the balloon's skin
+          const soft = sst(0, 0.12, depth + 0.02);               // a little fillet at the base
+          v.addScaledVector(dv, (bal.r - len) / len * W * soft);
+        }
+      } else if (br && wB > 0.01 && v.z > br.z - 0.1 * H && b.sex === 'male') {
         // a breast is swollen like a dome around its own axis (pointing forward, a bit out and
         // down): points move outward from a centre inside the chest, most at the front, fading to
         // nothing at the edge of a cone, so it grows from the front and the side alike. Size =
         // how wide the cone is, Volume = how far it swells. The cone is shallower above the
         // landmark (the upper chest stays) and stops short of the middle (no merging).
         const fem = b.sex !== 'male', R0 = (fem ? 0.06 : 0.065) * H, sd = Math.sign(br.x - spineX) || 1, wR = wOf(i, (n) => n === 'ribcage');
-        bAx.set(sd * 0.3, -0.12, 1).normalize();
+        bAx.set(sd * 0.22, -0.12, 1).normalize();
         C.copy(br).addScaledVector(bAx, -0.95 * R0);
         dv.copy(v).sub(C); const len = dv.length();
         if (len > 1e-6 && len < 2.2 * R0) {
@@ -1169,8 +1207,6 @@ function shapePlanar(mesh, b, H, inPlace = false) {
           if (amt && w > 0) {
             v.addScaledVector(dv, amt * w / len);
             if (fem && amt > 0) v.y -= amt * w * 0.15 * (up ? 0.3 : 1); // weight: fuller underneath
-            // the outer side rounds out toward the arm instead of lying flat on the ribs
-            if (fem && amt > 0 && (v.x - br.x) * sd > 0) v.x += sd * amt * w * 0.4 * sst(0, 0.6 * R0, (v.x - br.x) * sd);
           }
         }
       }
@@ -1216,4 +1252,95 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     P.setXYZ(i, v.x, v.y, v.z);
   }
   P.needsUpdate = true; g.computeBoundingBox(); g.computeBoundingSphere();
+  smoothMovedNormals(g, null, H);
 }
+// the model keeps its own (planar) normals; where the shape was changed a lot (bigger breasts…)
+// they no longer fit, so there the normals are worked out again from the new surface, smooth
+function smoothMovedNormals(g, smw, H) {
+  const P = g.attributes.position, Nr = g.attributes.normal, idx = g.index && g.index.array, base = g.userData.basePos;
+  if (!idx || !base) return;
+  const n = P.count, moved = new Float32Array(n); let any = false;
+  for (let i = 0; i < n; i++) { let d = Math.hypot(P.getX(i) - base[i * 3], P.getY(i) - base[i * 3 + 1], P.getZ(i) - base[i * 3 + 2]); if (smw && smw[i] > 0.01) d = Math.max(d, 0.002 * H + smw[i] * 0.012 * H); moved[i] = d; if (d > 0.002 * H) any = true; }
+  if (!any) return;
+  const kOf = g.userData.adj && g.userData.adj.keyOf;
+  const key = kOf ? (i) => kOf[i] : (i) => Math.round(base[i * 3] * 1e4) + ',' + Math.round(base[i * 3 + 1] * 1e4) + ',' + Math.round(base[i * 3 + 2] * 1e4);
+  const acc = new Map(), a = new T.Vector3(), b = new T.Vector3(), c = new T.Vector3(), fn = new T.Vector3();
+  for (let t = 0; t < idx.length; t += 3) {
+    const i0 = idx[t], i1 = idx[t + 1], i2 = idx[t + 2];
+    if (moved[i0] < 0.001 * H && moved[i1] < 0.001 * H && moved[i2] < 0.001 * H) continue;
+    a.fromBufferAttribute(P, i0); b.fromBufferAttribute(P, i1); c.fromBufferAttribute(P, i2);
+    fn.subVectors(c, b).cross(a.sub(b)); // area-weighted
+    for (const i of [i0, i1, i2]) { const k = key(i); let s = acc.get(k); if (!s) acc.set(k, s = [0, 0, 0]); s[0] += fn.x; s[1] += fn.y; s[2] += fn.z; }
+  }
+  const o = new T.Vector3(), m = new T.Vector3();
+  for (let i = 0; i < n; i++) {
+    if (moved[i] < 0.002 * H) continue;
+    const s = acc.get(key(i)); if (!s) continue;
+    m.set(s[0], s[1], s[2]).normalize(); o.fromBufferAttribute(Nr, i);
+    const k = Math.min(1, (moved[i] - 0.002 * H) / (0.012 * H));
+    o.lerp(m, k).normalize(); Nr.setXYZ(i, o.x, o.y, o.z);
+  }
+  Nr.needsUpdate = true;
+}
+
+// more triangles on the chest (two levels of splitting, crack-free next to the rest), so bigger
+// breasts can be round instead of a few large flat faces. Skin weights are blended.
+function refineChest(mesh, levels = 2) {
+  const names = mesh.skeleton.bones.map((bn) => (bn.userData.name || bn.name || '').replace(/_\d+$/, ''));
+  const bindInv = new T.Matrix4().copy(mesh.bindMatrix).invert();
+  const at = (nm) => { const k = names.indexOf(nm); return k < 0 ? null : new T.Vector3().setFromMatrixPosition(mesh.skeleton.boneInverses[k].clone().invert()).applyMatrix4(bindInv); };
+  const rib = at('ribcage'), neck = at('neck1'), lum = at('lumbar1'), sh = at('upperArm.L');
+  if (!rib || !neck || !sh) return;
+  mesh.geometry.computeBoundingBox(); const bb = mesh.geometry.boundingBox, H = bb.max.y - bb.min.y;
+  const cx = rib.x, half = Math.abs(sh.x - cx) * 1.05, y0 = rib.y - 0.17 * H, y1 = neck.y - 0.01 * H, zc = rib.z - 0.01 * H;
+  const inRegion = (x, y, z) => Math.abs(x - cx) < half && y > y0 && y < y1 && z > zc;
+  for (let L = 0; L < levels; L++) {
+    const g = mesh.geometry, idx = g.index.array, A = g.attributes;
+    const P = A.position, Nm = A.normal, UV = A.uv, SI = A.skinIndex, SW = A.skinWeight;
+    const pk = (i) => Math.round(P.getX(i) * 1e5) + ',' + Math.round(P.getY(i) * 1e5) + ',' + Math.round(P.getZ(i) * 1e5);
+    const ek = (a, b) => { const ka = pk(a), kb = pk(b); return ka < kb ? ka + '|' + kb : kb + '|' + ka; };
+    const split = new Set();
+    for (let t = 0; t < idx.length; t += 3) {
+      const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+      const x = (P.getX(a) + P.getX(b) + P.getX(c)) / 3, y = (P.getY(a) + P.getY(b) + P.getY(c)) / 3, z = (P.getZ(a) + P.getZ(b) + P.getZ(c)) / 3;
+      if (inRegion(x, y, z)) { split.add(ek(a, b)); split.add(ek(b, c)); split.add(ek(c, a)); }
+    }
+    const pos = Array.from(P.array), nrm = Array.from(Nm.array), uv = UV ? Array.from(UV.array) : null, si = Array.from(SI.array), sw = Array.from(SW.array);
+    let count = P.count; const mids = new Map();
+    const mid = (a, b) => {
+      const k = a < b ? a + '_' + b : b + '_' + a; let m = mids.get(k); if (m != null) return m;
+      m = count++; mids.set(k, m);
+      for (let j = 0; j < 3; j++) pos.push((pos[a * 3 + j] + pos[b * 3 + j]) / 2);
+      const nx = nrm[a * 3] + nrm[b * 3], ny = nrm[a * 3 + 1] + nrm[b * 3 + 1], nz = nrm[a * 3 + 2] + nrm[b * 3 + 2], nl = Math.hypot(nx, ny, nz) || 1;
+      nrm.push(nx / nl, ny / nl, nz / nl);
+      if (uv) uv.push((uv[a * 2] + uv[b * 2]) / 2, (uv[a * 2 + 1] + uv[b * 2 + 1]) / 2);
+      const wm = new Map();
+      for (const v of [a, b]) for (let j = 0; j < 4; j++) { const w = sw[v * 4 + j]; if (w > 0) wm.set(si[v * 4 + j], (wm.get(si[v * 4 + j]) || 0) + w / 2); }
+      const top = [...wm].sort((p, q) => q[1] - p[1]).slice(0, 4), tot = top.reduce((s2, x) => s2 + x[1], 0) || 1;
+      for (let j = 0; j < 4; j++) { si.push(top[j] ? top[j][0] : 0); sw.push(top[j] ? top[j][1] / tot : 0); }
+      return m;
+    };
+    const out = [];
+    for (let t = 0; t < idx.length; t += 3) {
+      let v = [idx[t], idx[t + 1], idx[t + 2]];
+      const sp = (k) => split.has(ek(v[k], v[(k + 1) % 3]));
+      const n = (sp(0) ? 1 : 0) + (sp(1) ? 1 : 0) + (sp(2) ? 1 : 0);
+      if (n === 0) { out.push(...v); continue; }
+      if (n === 3) { const [a, b, c] = v, m1 = mid(a, b), m2 = mid(b, c), m3 = mid(c, a); out.push(a, m1, m3, m1, b, m2, m3, m2, c, m1, m2, m3); continue; }
+      if (n === 1) { while (!sp(0)) v = [v[1], v[2], v[0]]; const [a, b, c] = v, m = mid(a, b); out.push(a, m, c, m, b, c); continue; }
+      // two split edges: turn so that (a,b) and (b,c) are the split ones
+      while (!(sp(0) && sp(1))) v = [v[1], v[2], v[0]];
+      const [a, b, c] = v, m1 = mid(a, b), m2 = mid(b, c);
+      out.push(m1, b, m2, a, m1, m2, a, m2, c);
+    }
+    const ng = new T.BufferGeometry();
+    ng.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+    ng.setAttribute('normal', new T.Float32BufferAttribute(nrm, 3));
+    if (uv) ng.setAttribute('uv', new T.Float32BufferAttribute(uv, 2));
+    ng.setAttribute('skinIndex', new T.Uint16BufferAttribute(si, 4));
+    ng.setAttribute('skinWeight', new T.Float32BufferAttribute(sw, 4));
+    ng.setIndex(out);
+    mesh.geometry = ng;
+  }
+}
+
