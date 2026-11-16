@@ -1340,6 +1340,8 @@ export function openSettings(app) {
       h('p', { class: 'hint' }, 'Every brush is made to look right at full strength; pressure is a bonus. Auto uses pressure only once your pen shows it really senses it. Optional extras for pens without pressure: Tilt — lean the pen for a thicker, darker line; Speed — slow strokes are heavier, fast ones lighter.')),
     switchRow('Steady ink — pens stay solid black at any pressure; pressure only changes the width a little', s.steadyInk !== false, (v) => { s.steadyInk = v; save(); }),
     h('div', { class: 'stack' }, h('label', {}, 'Finger behaviour'), seg([['auto', 'Auto (pencil only once detected)'], ['on', 'Pencil only'], ['off', 'Fingers draw']], s.penOnly, (v) => { s.penOnly = v; save(); })),
+    h('div', { class: 'stack' }, h('label', {}, '3D: move the camera with'), seg([['touch', 'Fingers'], ['pen', 'Apple Pencil'], ['none', 'Off']], s.cam3d || 'touch', (v) => { s.cam3d = v; save(); }),
+      h('p', { class: 'hint' }, 'In every 3D mode (Pose included) dragging with this turns the camera around the scene; the other one poses and uses the rings. A tap still selects.')),
     field('Pressure curve (lower = softer touch)', { min: 0.3, max: 2.5, step: 0.05, value: s.pressureGamma, fmt: (v) => v.toFixed(2), onInput: (v) => { s.pressureGamma = v; save(); } }),
     switchRow('QuickShape (hold at end of a stroke)', s.quickShape, (v) => { s.quickShape = v; save(); }),
     field('Ink blobs where strokes start / end (brushes with a “bleed” fade; 0 = clean joins)', { min: 0, max: 1, step: 0.05, value: s.blobAmount ?? 0, fmt: pct, onInput: (v) => { s.blobAmount = v; save(); } }),

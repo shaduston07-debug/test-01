@@ -289,6 +289,7 @@ export class Doc {
     this.projPalettes = Array.isArray(o.projPalettes) ? o.projPalettes : [];
     // perspective guide (vanishing points, horizon, snapping) — see perspective.js
     this.persp = o.persp || null;
+    this.last3D = o.last3D || null; // the 3D layer the 3D tool goes back to
   }
 
   static create({ name, mode, width, height, bg }) {
@@ -603,7 +604,7 @@ export class Doc {
     const out = {
       v: 1, id: this.id, name: this.name, mode: this.mode, width: this.width, height: this.height,
       bg: this.bg, bgVisible: this.bgVisible, active: this.active, playhead: this.playhead,
-      anim: this.anim, webtoon: this.webtoon, created: this.created, folder: this.folder, timelapse: this.timelapse, projPalettes: this.projPalettes, persp: this.persp, layers: [], tracks: [],
+      anim: this.anim, webtoon: this.webtoon, created: this.created, folder: this.folder, timelapse: this.timelapse, projPalettes: this.projPalettes, persp: this.persp, last3D: this.last3D || null, layers: [], tracks: [],
     };
     for (const l of this.layers) {
       const o = {}; for (const k of LAYER_PROPS) o[k] = l[k];

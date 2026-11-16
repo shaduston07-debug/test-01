@@ -1048,6 +1048,8 @@ class App {
   // (only the brush outline moved) or nothing (content changed: caches are rebuilt).
   // Frames that only need 'active' / 'cursor' repaint just the changed part of the screen.
   requestRender(kind) {
+    // the 3D tool redraws a 3D layer without its manipulator once another layer is picked
+    if (this.tools && this.tools['3d'] && this.doc) this.tools['3d'].watchLayer();
     // an undo / redo step is running: it reports what changed itself (stepHistory)
     if (this.quietContent && kind == null) kind = 'view';
     if (kind !== 'view' && kind !== 'active' && kind !== 'cursor') this.contentVer++;

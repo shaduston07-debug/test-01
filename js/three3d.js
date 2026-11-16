@@ -648,6 +648,103 @@ async function importedCsp(kind) {
   return (await store.listAssets()).filter((a) => a.kind === kind).sort((a, b) => (a.set || '').localeCompare(b.set || '') || (a.added - b.added) || a.name.localeCompare(b.name));
 }
 
+// a short English gloss for Japanese Clip Studio pack names
+const CSP_GLOSS = [['バトル', 'Battle'], ['キック', 'Kick'], ['パンチ', 'Punch'], ['回避', 'Dodge'], ['防御', 'Block'], ['構え', 'Stance'], ['能力', 'Ability'], ['ビースト', 'Beast'], ['美少女', 'Girl'], ['後ろ手', 'Hands behind'], ['振り返る', 'Looking back'], ['アクション', 'Action'], ['座り', 'Sitting'], ['立ち', 'Standing'], ['歩き', 'Walking'], ['走り', 'Running'], ['ジャンプ', 'Jump'], ['手', 'Hands'], ['剣', 'Sword'], ['武器', 'Weapon'], ['日常', 'Everyday'], ['かわいい', 'Cute'], ['格闘', 'Fighting'], ['アイドル', 'Idol'], ['ダンス', 'Dance'], ['寝', 'Lying'], ['男性', 'Male'], ['女性', 'Female']];
+export const cspGloss = (t) => { if (!/[\u3040-\u30ff\u4e00-\u9fff]/.test(t)) return ''; const w = CSP_GLOSS.filter(([j]) => t.includes(j)).map(([, en]) => en); const n = t.match(/(\d+)\s*種/); return w.length ? w.join(' · ') + (n ? ` (${n[1]})` : '') : ''; };
+
+// a pack's name in English: its official English title from Clip Studio Assets when known,
+// else a short translation; the original name is shown under it
+const hasCJK = (t) => /[\u3040-\u30ff\u3400-\u9fff]/.test(t || '');
+export function cspSetTitle(set, recs = []) {
+  const t = (recs.find((r) => r.credit && r.credit.title) || {}).credit?.title;
+  if (t && !/^No data$/i.test(t) && !hasCJK(t)) return t;
+  if (!hasCJK(set)) return set || 'Poses';
+  const g = cspGloss(set); return g ? g.replace(/ · /g, ' ') + ' poses' : set;
+}
+
+// ───────── picker windows (poses, models) laid out like Clip Studio's Material panel ─────────
+// folders on the left (grouped), search + thumbnail grid on the right. folders:
+// [{ key, label, sub?, group, items: [{ key, label, thumb?: url | () => Promise<url> }] }]
+function folderBrowser({ title, folders, onPick, onHold, extra = [], startKey, remember, hint }) {
+  const all = folders.flatMap((f) => f.items.map((it) => ({ ...it, folder: f })));
+  let where = (remember && store.prefs.get(remember, null)) || startKey || (folders[0] && folders[0].key) || 'all', query = '', cur = null;
+  if (where !== 'all' && !folders.some((f) => f.key === where)) where = 'all';
+  const side = h('div', { class: 'csp-tree' }), grid = h('div', { class: 'lib3d-grid' }), head = h('div', { class: 'csp-head' });
+  const search = h('input', { type: 'search', placeholder: 'Search', class: 'csp-search' });
+  const main = h('div', { class: 'csp-main' }, search, ...extra, head, grid);
+  search.oninput = () => { query = search.value.trim().toLowerCase(); drawGrid(); };
+  // thumbnails are made as tiles scroll into view, one at a time
+  const queue = []; let busy = false;
+  const pump = async () => { if (busy) return; busy = true; while (queue.length) { const [img, fn] = queue.shift(); if (!img.isConnected) continue; try { const u = await fn(); if (u) img.src = u; } catch (e) { console.warn('thumb', e); } await new Promise((r) => setTimeout(r, 0)); } busy = false; };
+  const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { io.unobserve(e.target); const fn = e.target._thumb; if (fn) { queue.push([e.target, fn]); pump(); } } }, { root: main }) : null;
+  const node = (key, label, sub, n) => h('button', { class: 'csp-node' + (where === key ? ' on' : ''), style: key === 'all' ? '' : 'padding-left:24px', onclick: () => { where = key; remember && store.prefs.set(remember, key); search.value = ''; query = ''; drawTree(); drawGrid(); } },
+    h('span', { class: 'csp-ico' }, key === 'all' ? '▦' : '📁'), h('span', { class: 'csp-name' }, label, sub ? h('small', {}, sub) : null), h('span', { class: 'csp-count' }, String(n)));
+  const drawTree = () => {
+    side.replaceChildren(node('all', 'All', null, all.length));
+    let g = null;
+    for (const f of folders) {
+      if (f.group !== g) { g = f.group; if (g) side.append(h('div', { class: 'csp-group' }, g)); }
+      side.append(node(f.key, f.label, f.sub, f.items.length));
+    }
+  };
+  const drawGrid = () => {
+    const list = query ? all.filter((it) => (it.label + ' ' + it.folder.label + ' ' + (it.folder.sub || '')).toLowerCase().includes(query)) : where === 'all' ? all : all.filter((it) => it.folder.key === where);
+    const f = folders.find((x) => x.key === where);
+    head.replaceChildren(h('b', {}, query ? `Search “${query}”` : f ? f.label : 'All'), h('span', { class: 'hint' }, ` · ${list.length}`));
+    grid.replaceChildren(...list.slice(0, 400).map((it) => {
+      const img = h('img', { alt: '' });
+      if (typeof it.thumb === 'string') img.src = it.thumb; else if (typeof it.thumb === 'function') { img._thumb = it.thumb; io ? io.observe(img) : (queue.push([img, it.thumb]), pump()); }
+      const bt = h('button', { class: 'lib3d-item my-model' + (cur === it.key ? ' on' : ''), onclick: () => { if (bt.dataset.held) { delete bt.dataset.held; return; } cur = it.key; grid.querySelectorAll('.on').forEach((x) => x.classList.remove('on')); bt.classList.add('on'); onPick(it); } }, img, h('span', {}, it.label));
+      if (onHold) { let t; bt.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; bt.dataset.held = '1'; onHold(it, () => { bt.remove(); }); }, 600); }); const stop = () => clearTimeout(t); bt.addEventListener('pointerup', stop); bt.addEventListener('pointerleave', stop); bt.addEventListener('pointercancel', stop); }
+      return bt;
+    }));
+    if (!list.length) grid.append(h('p', { class: 'hint' }, 'Nothing here.'));
+  };
+  drawTree(); drawGrid();
+  const body = h('div', {}, h('div', { class: 'csp-lib' }, side, main), hint ? h('p', { class: 'hint' }, hint) : null);
+  return { body, title, close: () => io && io.disconnect() };
+}
+
+// thumbnails of built-in models / poses, rendered off-screen and kept (models: on the device)
+let thumbR = null;
+const thumbMem = new Map();
+function snapNode(node, opts = {}) {
+  thumbR ||= new T.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  thumbR.setSize(176, 176, false); thumbR.setClearColor(0xffffff, 1);
+  if (thumbR.outputColorSpace !== undefined) thumbR.outputColorSpace = T.SRGBColorSpace;
+  const sc = new T.Scene(); sc.add(new T.HemisphereLight(0xffffff, 0x8a8478, 1.2)); const sun = new T.DirectionalLight(0xffffff, 2.2); sun.position.set(2, 4, 3); sc.add(sun);
+  const parent = node.parent, idx = parent ? parent.children.indexOf(node) : -1;
+  sc.add(node); node.updateMatrixWorld(true);
+  const box = new T.Box3().setFromObject(node), c = box.getCenter(new T.Vector3()), size = box.getSize(new T.Vector3());
+  const cam = new T.PerspectiveCamera(30, 1, 0.01, 10000), r = Math.max(size.length() / 2, 0.01);
+  const dir = new T.Vector3(...(opts.dir || [0.45, 0.25, 1])).normalize();
+  cam.position.copy(c).add(dir.multiplyScalar(r / Math.sin((15 * Math.PI) / 180) * 1.02)); cam.near = r / 50; cam.far = r * 50; cam.lookAt(c); cam.updateProjectionMatrix();
+  thumbR.render(sc, cam);
+  const url = thumbR.domElement.toDataURL('image/jpeg', 0.82);
+  sc.remove(node); if (parent) { parent.children.splice(idx, 0, node); node.parent = parent; }
+  return url;
+}
+async function modelThumb(layer, gen) {
+  const key = 'thumb:model:' + gen;
+  if (thumbMem.has(key)) return thumbMem.get(key);
+  try { const a = await store.getAsset(key); if (a && a.url) { thumbMem.set(key, a.url); return a.url; } } catch { /* none */ }
+  await three();
+  const fake = { scene: new T.Scene(), objs: new Map(), outlineW: { value: 0.008 } };
+  const o = gen === 'figure-female' || gen === 'figure-male' ? figureObject(0, gen.endsWith('male') && !gen.endsWith('female') ? 'male' : 'female')
+    : gen === 'mannequin-male' || gen === 'mannequin-female' ? { id: uid(), kind: 'mannequin', sex: gen.endsWith('female') ? 'female' : 'male', pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1, pose: {}, color: '#e2e1dd' }
+      : gen === 'knight' || gen === 'scifi' ? Object.assign(figureObject(0, gen === 'knight' ? 'male' : 'female'), { outfit: gen === 'knight' ? 'medieval' : 'scifi' })
+        : gen.startsWith('w:') ? { id: uid(), kind: 'weapon', weapon: gen.slice(2), pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cccccc' }
+          : gen.startsWith('shape:') ? { id: uid(), kind: 'prim', prim: gen.slice(6), pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: 1, color: '#cfcac2' } : procObject(gen, 0);
+  await buildObject(layer, fake, o);
+  const e = fake.objs.get(o.id); if (!e) return null;
+  if (e.rig === 'human') { M.applyPose(e.joints, {}, e.fig.rest || M.HUMAN_REST, e.fig.H); if (e.fig.drive) e.fig.drive(); }
+  const url = snapNode(e.node);
+  e.node.traverse((m) => { if (m.isMesh && m.geometry) m.geometry.dispose(); });
+  thumbMem.set(key, url);
+  store.putAsset({ id: key, kind: 'thumb', url }).catch(() => {});
+  return url;
+}
+
 export function tool3d(app) {
   const t = {
     // 'object' works like Clip Studio's Object tool: tap to select a model (tap again on a body part
@@ -659,9 +756,16 @@ export function tool3d(app) {
     async enter() {
       this.off = false;
       importBundledModels();
-      const L = this.layer();
-      // like the cube button in the Layers panel: no 3D layer selected → add one and start editing it
-      if (!L) { if (!this._adding) { this._adding = true; try { await add3DLayer(app); } finally { this._adding = false; } } return; }
+      let L = this.layer();
+      // no 3D layer selected: go back to the canvas's 3D layer (the last one used, else the top
+      // one); only a canvas without any gets a new one
+      if (!L) {
+        const d = app.doc, list = d.items.map((it, i) => [it, i]).filter(([it]) => it.type === '3d');
+        const pickIt = list.find(([it]) => it.id === d.last3D) || list.filter(([it]) => it.visible).pop() || list.pop();
+        if (pickIt) { this.activate(pickIt[0]); L = pickIt[0]; }
+        else { if (!this._adding) { this._adding = true; try { await add3DLayer(app); } finally { this._adding = false; } } return; }
+      }
+      app.doc.last3D = L.id;
       try { await this.redraw(1); } catch (e) { console.error(e); toast('3D failed to start: ' + e.message); }
       this.openPanel();
     },
@@ -761,10 +865,15 @@ export function tool3d(app) {
         });
       }
     },
-    down(p) {
+    down(p, ev) {
       const L = this.layer(); if (!L) { toast('Select a 3D layer'); return false; }
       if (!runtimes.get(L)) { this.enter(); return false; }
       this.p0 = p; this.last = p; this.moved = false; this.before = this.snapshot(); this.jointBefore = this.joint; this.dragIK = false;
+      // the camera hand (Settings › 3D camera): fingers (or the pencil) always turn the camera,
+      // in any mode; a tap still selects
+      const camWith = app.settings.cam3d || 'touch', pt = ev && ev.pointerType;
+      this.camDrag = camWith !== 'none' && ((camWith === 'touch' && pt === 'touch') || (camWith === 'pen' && (pt === 'pen' || pt === 'mouse')));
+      if (this.camDrag) { this.tapHit = this.pick(p); this.dragging = true; return; }
       const gh = this.gizmoHit(p);
       if (gh && this.startGizmo(gh, p)) { this.dragging = true; return; }
       if (this.mode === 'object') {
@@ -792,6 +901,14 @@ export function tool3d(app) {
       if (Math.hypot(p.x - this.p0.x, p.y - this.p0.y) > 3) this.moved = true;
       if (this.gz) { this.gizmoMove(p, dx, dy); this.redraw(this.previewScale()); return; }
       const s = L.scene3d, cam = rt.camera;
+      if (this.camDrag) {
+        if (!this.moved) return;
+        const pos = new T.Vector3(...s.camera.pos), tgt = new T.Vector3(...s.camera.target);
+        const off = pos.clone().sub(tgt), sph = new T.Spherical().setFromVector3(off);
+        sph.theta -= dx * 0.006; sph.phi = clamp(sph.phi - dy * 0.006, 0.05, Math.PI - 0.05);
+        off.setFromSpherical(sph); s.camera.pos = tgt.clone().add(off).toArray();
+        this.redraw(this.previewScale()); return;
+      }
       const pos = new T.Vector3(...s.camera.pos), tgt = new T.Vector3(...s.camera.target);
       const right = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 0), up = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
       const unit = (dist) => (2 * Math.tan((cam.fov * Math.PI / 180) / 2) * dist) / app.doc.height;
@@ -836,12 +953,24 @@ export function tool3d(app) {
     up() {
       if (!this.dragging) return;
       this.dragging = false;
+      if (this.camDrag) {
+        this.camDrag = false;
+        if (!this.moved) {
+          // a tap: select (in Pose mode, the body part too)
+          const hit = this.tapHit;
+          if (!hit && this.p0) { const p0 = this.p0; this.tapOtherLayer(p0).then((ok) => { if (!ok) this.tapSelect(null); }); }
+          else if (this.mode === 'pose' && hit) { const e = runtimes.get(this.layer()).objs.get(hit.objId); this.sel = hit.objId; this.joint = e && e.joints && hit.joint ? hit.joint : null; this.highlight(this.joint); app.updateCtxBar(); this.panelRefresh(); }
+          else this.tapSelect(hit);
+        }
+        this.commit('Orbit camera', this.before); this.redraw(1); return;
+      }
       if (this.gz) {
         const g = this.gz; this.gz = null;
         this.commit(g.joint ? 'Pose' : g.handle === 'sc' ? 'Scale object' : g.handle[0] === 'r' ? 'Rotate object' : 'Move object', this.before);
         this.redraw(1); return;
       }
       if (this.mode === 'object') {
+        if (!this.moved && !this.tapHit && this.p0) { const p0 = this.p0; this.tapOtherLayer(p0).then((ok) => { if (!ok) this.tapSelect(null); }); this.commit('Orbit camera', this.before); this.redraw(1); return; }
         if (!this.moved) this.tapSelect(this.tapHit);
         this.commit(this.dragIK ? 'Pose' : 'Orbit camera', this.before);
         this.dragIK = false; this.redraw(1); return;
@@ -952,6 +1081,47 @@ export function tool3d(app) {
         o.pos = node.parent.worldToLocal(node.getWorldPosition(new T.Vector3()).add(d)).toArray();
       }
       syncObject(g.e);
+    },
+    // another layer picked while a 3D layer showed its manipulator / selection: that layer is
+    // drawn again clean (no rings and arrows left in its picture), and the selection resets
+    watchLayer() {
+      const L = this.layer();
+      if (this.shownL && this.shownL !== L) {
+        const old = this.shownL; this.shownL = null;
+        this.sel = null; this.joint = null;
+        const rt = runtimes.get(old);
+        if (rt) { rt.gizmoTarget = null; if (rt.gizmo) rt.gizmo.visible = false; this.highlightOn(old, null); render3D(old, app.doc, 1).then(() => app.requestRender('view')).catch(() => {}); }
+        this.panelRefresh();
+      }
+      if (L && !this.off) this.shownL = L;
+    },
+    highlightOn(L, j) { const keep = this.layer; this.layer = () => L; try { this.highlight(j); } finally { this.layer = keep; } },
+    // make another 3D layer the one being edited
+    activate(L) {
+      const d = app.doc, i = d.items.indexOf(L); if (i < 0) return;
+      d.active = i; d.last3D = L.id; this.sel = null; this.joint = null;
+      app.changed('layers'); app.updateCtxBar(); this.panelRefresh();
+    },
+    // a tap on a model of another 3D layer: that layer becomes the one being edited, with the
+    // model selected (the layer's own picture says which layer has something there)
+    async tapOtherLayer(p) {
+      const d = app.doc, cur = this.layer();
+      const others = d.items.filter((it) => it.type === '3d' && it !== cur && it.visible).reverse();
+      for (const L of others) {
+        const x = Math.floor(p.x), y = Math.floor(p.y);
+        if (x < 0 || y < 0 || x >= L.canvas.width || y >= L.canvas.height) continue;
+        if (!L.canvas.getContext('2d').getImageData(x, y, 1, 1).data[3]) continue;
+        if (!runtimes.get(L)) await render3D(L, d, 1);
+        this.activate(L);
+        // the exact point may be the outline (not pickable): look a few pixels around it
+        let hit = this.pick(p);
+        for (let r = 4; !hit && r <= 16; r += 4) for (const [ox, oy] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) { hit = this.pick({ x: p.x + ox, y: p.y + oy }); if (hit) break; }
+        if (hit) { this.sel = hit.objId; this.joint = null; }
+        this.highlight(null); app.updateCtxBar(); this.panelRefresh(); this.redraw(1);
+        toast('Editing ' + (L.name || '3D layer'), 1500);
+        return true;
+      }
+      return false;
     },
     // tap: select a model; tap the selected one again on a body part for that joint's rings
     tapSelect(hit) {
@@ -1220,31 +1390,7 @@ export function tool3d(app) {
       if (b) b.hidden = !on;
     },
     // everything you can add: figures, the model library, shapes, your own files, free assets
-    modelsMenu(anchor) {
-      const grid = (...b) => h('div', { class: 'lib3d-grid' }, ...b);
-      const pick = (fn) => () => { closePopover(); fn(); };
-      const btn = (label, fn) => h('button', { class: 'lib3d-item', onclick: pick(fn) }, label);
-      const body = h('div', { class: 'lib3d' },
-        h('div', { class: 'menu-section' }, 'Import'),
-        grid(btn('Open a file… (.blend, .glb, .gltf, .fbx, .obj, .vrm, .zip, Clip Studio .clip)', () => this.importModel()), btn('Free models & materials (Poly Haven)…', () => this.assetMenu())));
-      for (const [cat, items] of LIBRARY) body.append(h('div', { class: 'menu-section' }, cat), grid(...items.map(([gen, label]) => btn(label, () => this.addLibrary(gen)))));
-      body.append(h('div', { class: 'menu-section' }, 'Shapes'), grid(...SHAPES.map(([k, l]) => btn(l, () => this.addShape(k, l)))));
-      // your saved models first (like Clip Studio's material library)
-      const mine = h('div');
-      body.insertBefore(mine, body.firstChild);
-      store.listAssets().then((all) => {
-        const list = all.filter((a) => a.kind === 'preset').sort((a, b) => b.added - a.added);
-        if (!list.length) return;
-        const g = grid(...list.map((rec) => {
-          const b = h('button', { class: 'lib3d-item my-model', onclick: pick(() => this.addPreset(rec)) }, rec.thumb ? h('img', { src: URL.createObjectURL(new Blob([rec.thumb], { type: 'image/png' })), alt: '' }) : null, h('span', {}, rec.name));
-          let t; b.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; closePopover(); dialog({ title: rec.name, body: h('p', {}, 'Delete this saved model?'), actions: [{ label: 'Cancel' }, { label: 'Delete', primary: true, onClick: () => store.deleteAsset(rec.id) }] }); }, 650); });
-          b.addEventListener('pointerup', () => clearTimeout(t)); b.addEventListener('pointerleave', () => clearTimeout(t));
-          return b;
-        }));
-        mine.append(h('div', { class: 'menu-section' }, 'My models'), g, h('p', { class: 'hint' }, 'Hold one to delete it.'));
-      });
-      this.popAbove(anchor, { title: 'Add 3D', body, width: 520, key: '3d-models' });
-    },
+    modelsMenu() { return this.libraryMenu(); },
     modesMenu(anchor, setMode) {
       const row = (m, label, hint) => h('button', { class: 'lib3d-item' + (this.mode === m ? ' on' : ''), onclick: () => { closePopover(); setMode(m); } }, h('b', {}, label), h('div', { class: 'hint' }, hint));
       const body = h('div', { class: 'lib3d' }, h('div', { class: 'lib3d-grid' },
@@ -1274,16 +1420,26 @@ export function tool3d(app) {
         { label: 'Female', onClick: () => this.addFigure('female') }, { label: 'Male', onClick: () => this.addFigure('male') }, { label: 'Cancel', primary: true },
       ] });
     },
-    libraryMenu() {
-      const body = h('div', { class: 'lib3d' });
+    async libraryMenu() {
+      const L = this.layer(); if (!L) return;
       let dlg = null;
-      for (const [cat, items] of LIBRARY) {
-        body.append(h('div', { class: 'menu-section' }, cat));
-        const grid = h('div', { class: 'lib3d-grid' });
-        for (const [gen, label] of items) grid.append(h('button', { class: 'lib3d-item', onclick: () => { dlg && dlg.close(); this.addLibrary(gen); } }, label));
-        body.append(grid);
-      }
-      dlg = dialog({ title: '3D model library', wide: true, body, actions: [{ label: 'Close', primary: true }] });
+      const folders = LIBRARY.map(([cat, items]) => ({ key: 'lib:' + cat, label: cat, group: 'Built-in', items: items.map(([gen, label]) => ({ key: gen, label, gen, thumb: () => modelThumb(L, gen) })) }));
+      folders.push({ key: 'shapes', label: 'Shapes', group: 'Built-in', items: SHAPES.map(([k, l]) => ({ key: 'shape:' + k, label: l, shape: k, thumb: () => modelThumb(L, 'shape:' + k) })) });
+      const all = await store.listAssets().catch(() => []);
+      const presets = all.filter((a) => a.kind === 'preset').sort((a, b) => b.added - a.added);
+      if (presets.length) folders.unshift({ key: 'mine', label: 'My models', group: 'Mine', items: presets.map((rec) => ({ key: rec.id, label: rec.name, preset: rec, thumb: rec.thumb ? URL.createObjectURL(new Blob([rec.thumb], { type: 'image/png' })) : undefined })) });
+      const mine = all.filter((a) => a.kind === 'model' && a.bytes).sort((a, b) => b.added - a.added);
+      const posable = mine.filter((a) => AS.modelRigged(a)), stat = mine.filter((a) => !AS.modelRigged(a));
+      const dl = (list) => list.map((a) => ({ key: a.id, label: a.name, rec: a, thumb: AS.assetThumb(a) || undefined }));
+      if (posable.length) folders.push({ key: 'dl-pose', label: 'Posable', sub: 'rigged', group: 'Downloaded', items: dl(posable) });
+      if (stat.length) folders.push({ key: 'dl-static', label: 'Not posable', sub: 'Make posable in the panel', group: 'Downloaded', items: dl(stat) });
+      const fb = folderBrowser({ title: '3D models', folders, remember: 'libFolder', hint: 'Tap a model to add it to the scene.',
+        onPick: (it) => { dlg && dlg.close(); if (it.rec) this.addAssetModel(it.rec); else if (it.preset) this.addPreset(it.preset); else if (it.shape) this.addShape(it.shape, it.label); else this.addLibrary(it.gen); },
+        onHold: (it, gone) => { if (!it.preset) return; dialog({ title: it.label, body: h('p', {}, 'Delete this saved model?'), actions: [{ label: 'Cancel' }, { label: 'Delete', primary: true, onClick: async () => { await store.deleteAsset(it.preset.id); gone(); } }] }); } });
+      dlg = dialog({ title: '3D models', wide: true, body: fb.body, actions: [
+        { label: 'Open a file…', onClick: () => { this.importModel(); } },
+        { label: 'Sketchfab & Poly Haven…', onClick: () => { this.assetMenu(); } },
+        { label: 'Close', primary: true }], onClose: fb.close });
     },
     async addLibrary(gen) { return this.group('Add model', () => this._addLibrary(gen)); },
     async _addLibrary(gen) {
@@ -1331,51 +1487,46 @@ export function tool3d(app) {
         { label: 'Cancel', primary: true },
       ] });
     },
-    poseMenu() {
+    async poseMenu() {
       const e = this.poseTarget();
       if (!e) { toast('Add a figure or a creature first'); return; }
       const cname = e.rig === 'creature' ? e.data.name : 'Dragon';
-      const b = this.snapshot(), lib = e.rig === 'dragon' ? { Dragon: M.DRAGON_POSES } : e.rig === 'creature' ? { [cname]: C.creaturePoses(e.data.gen) } : e.rig === 'human' ? M.HUMAN_POSES : null;
+      const lib = e.rig === 'dragon' ? { Dragon: M.DRAGON_POSES } : e.rig === 'creature' ? { [cname]: C.creaturePoses(e.data.gen) } : e.rig === 'human' ? M.HUMAN_POSES : null;
       if (!lib) { toast('This older figure has no pose library — add a new figure'); return; }
-      const body = h('div', { class: 'lib3d' });
-      if (e.rig === 'human') body.append(h('button', { class: 'pill primary p3d-wide', style: 'margin-bottom:8px', onclick: () => { dlgP && dlgP.close(); this.cspPoseMenu(); } }, 'Clip Studio poses…'));
-      let cur = null, dlgP = null;
-      // your own poses (like registering a pose as a material in Clip Studio)
-      const rigKey = e.rig === 'creature' ? 'creature:' + e.data.gen : e.rig;
+      const snap = this.snapshot(), rigKey = e.rig === 'creature' ? 'creature:' + e.data.gen : e.rig;
+      const rest = e.rig === 'dragon' ? M.DRAGON_REST : e.rig === 'creature' ? C.creatureRest(e.data.gen) : e.fig.rest || M.HUMAN_REST, H = e.rig === 'human' ? e.fig.H : 1;
+      let mirror = !!store.prefs.get('cspMirror', false), last = null;
+      const keepHands = () => Object.fromEntries(Object.entries(e.data.pose || {}).filter(([k]) => /^(thumb|index|middle|ring|pinky)[LR]\d$/.test(k)));
+      // each item knows how to make its pose; thumbnails show it on this very figure
+      const make = (it) => (it.def ? { ...(e.rig === 'human' ? keepHands() : {}), ...M.poseFromDegrees(it.def) } : it.pose ? JSON.parse(JSON.stringify(it.pose)) : it.csp ? M.retargetCSP(it.csp, e.fig) : {});
+      const put = (it) => { try { const ps = make(it); e.data.pose = mirror && e.rig === 'human' ? M.mirrorStored(ps) : ps; syncObject(e); this.redraw(this.previewScale()); last = it; } catch (err) { console.error(err); toast('Could not apply that pose: ' + err.message, 4000); } };
+      const thumbOf = (key, it) => () => {
+        const k = 'pose:' + e.data.id + ':' + key; if (thumbMem.has(k)) return thumbMem.get(k);
+        try { M.applyPose(e.joints, make(it), rest, H); if (e.fig && e.fig.drive) e.fig.drive(); const url = snapNode(e.node, { dir: [0.3, 0.12, 1] }); thumbMem.set(k, url); return url; }
+        finally { syncObject(e); }
+      };
+      const folders = [];
       const saved = store.prefs.get('savedPoses', []).filter((x) => x.rig === rigKey);
-      if (saved.length) {
-        body.append(h('div', { class: 'menu-section' }, 'My poses'));
-        const grid = h('div', { class: 'lib3d-grid' });
-        for (const sp of saved) {
-          const btn = h('button', { class: 'lib3d-item', onclick: () => { e.data.pose = JSON.parse(JSON.stringify(sp.pose)); syncObject(e); this.redraw(1); if (cur) cur.classList.remove('on'); btn.classList.add('on'); cur = btn; } }, sp.name);
-          let t; btn.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; store.prefs.set('savedPoses', store.prefs.get('savedPoses', []).filter((x) => x !== sp && !(x.name === sp.name && x.rig === sp.rig))); btn.remove(); toast('Removed ' + sp.name); }, 700); });
-          btn.addEventListener('pointerup', () => clearTimeout(t)); btn.addEventListener('pointerleave', () => clearTimeout(t));
-          grid.append(btn);
-        }
-        body.append(grid, h('p', { class: 'hint' }, 'Hold a saved pose to delete it.'));
+      folders.push({ key: 'mine', label: 'My poses', group: 'Mine', items: saved.map((sp, i) => ({ key: 'my' + i + sp.name, label: sp.name, pose: sp.pose, sp })) });
+      for (const [cat, poses] of Object.entries(lib)) folders.push({ key: 'b:' + cat, label: cat, group: 'Built-in', items: Object.entries(poses).map(([name, def]) => ({ key: cat + name, label: name, def })) });
+      if (e.rig === 'human') {
+        const csp = await importedCsp('csppose'), sets = new Map();
+        for (const r of csp) { const k = r.folder ? 'my:' + r.folder : r.set || 'Poses'; if (!sets.has(k)) sets.set(k, []); sets.get(k).push(r); }
+        for (const [k, rs] of sets) folders.push({ key: 'csp:' + k, label: k.startsWith('my:') ? k.slice(3) : cspSetTitle(k, rs), sub: !k.startsWith('my:') && cspSetTitle(k, rs) !== k ? k : undefined, group: 'Clip Studio', items: rs.map((r) => ({ key: r.id, label: r.set && r.name.startsWith(r.set + ' · ') ? 'Pose ' + r.name.slice(r.set.length + 3) : r.name, csp: r.data, thumb: r.thumb ? URL.createObjectURL(store.toBlob(r.thumb)) : undefined })) });
       }
-      for (const [cat, poses] of Object.entries(lib)) {
-        body.append(h('div', { class: 'menu-section' }, cat));
-        const grid = h('div', { class: 'lib3d-grid' });
-        for (const [name, def] of Object.entries(poses)) {
-          const btn = h('button', { class: 'lib3d-item', onclick: () => {
-            // keep the current hand shapes unless the pose sets its own
-            const keepHands = Object.fromEntries(Object.entries(e.data.pose || {}).filter(([k]) => /^(thumb|index|middle|ring|pinky)[LR]\d$/.test(k)));
-            e.data.pose = { ...keepHands, ...M.poseFromDegrees(def) };
-            syncObject(e); this.redraw(1);
-            if (cur) cur.classList.remove('on'); btn.classList.add('on'); cur = btn;
-          } }, name);
-          grid.append(btn);
-        }
-        body.append(grid);
-      }
-      dlgP = dialog({ title: (e.rig === 'human' ? 'Figure' : cname) + ' poses', wide: true, body, actions: [
+      for (const f of folders) for (const it of f.items) if (!it.thumb) it.thumb = thumbOf(it.key, it);
+      const extra = e.rig === 'human' ? [switchRow('Mirror (flip left ↔ right)', mirror, (v) => { mirror = v; store.prefs.set('cspMirror', v); if (last) put(last); })] : [];
+      const fb = folderBrowser({ title: 'Poses', folders, extra, remember: 'poseFolder:' + rigKey, startKey: folders[1] && folders[1].key, onPick: put,
+        hint: 'Tap a pose to put it on the figure. Hold one of your saved poses to delete it.',
+        onHold: (it, gone) => { if (!it.sp) return; store.prefs.set('savedPoses', store.prefs.get('savedPoses', []).filter((x) => !(x.name === it.sp.name && x.rig === it.sp.rig))); gone(); toast('Removed ' + it.sp.name); } });
+      dialog({ title: (e.rig === 'human' ? 'Figure' : cname) + ' poses', wide: true, body: fb.body, actions: [
         { label: 'Save current pose…', onClick: async () => {
           const name = await promptDialog('Name for this pose', 'My pose'); if (!name) return false;
           store.prefs.set('savedPoses', [...store.prefs.get('savedPoses', []), { name, rig: rigKey, pose: JSON.parse(JSON.stringify(e.data.pose || {})) }]);
-          toast('Saved pose "' + name + '"');
+          toast('Saved pose "' + name + '"'); return false;
         } },
-        { label: 'Done', primary: true }], onClose: () => this.commit('Pose preset', b) });
+        ...(e.rig === 'human' ? [{ label: 'Import Clip Studio…', onClick: async () => { if (await this.importCsp()) { this.poseMenu(); } } }] : []),
+        { label: 'Done', primary: true }], onClose: () => { fb.close(); this.commit('Pose preset', snap); this.redraw(1); } });
     },
     handMenu() {
       const e = this.poseTarget(); if (!e || e.rig !== 'human') return;
@@ -1457,8 +1608,7 @@ export function tool3d(app) {
       const setOf = (r) => r.set || 'Poses';
       const inFolder = (r, f) => f === 'all' || (f.startsWith('my:') ? r.folder === f.slice(3) : !r.folder && 'dl:' + setOf(r) === f);
       // a short English gloss for Japanese pack names (Clip Studio Assets packs are often Japanese)
-      const GLOSS = [['バトル', 'Battle'], ['キック', 'Kick'], ['パンチ', 'Punch'], ['回避', 'Dodge'], ['防御', 'Block'], ['構え', 'Stance'], ['能力', 'Ability'], ['ビースト', 'Beast'], ['美少女', 'Girl'], ['後ろ手', 'Hands behind'], ['振り返る', 'Looking back'], ['アクション', 'Action'], ['座り', 'Sitting'], ['立ち', 'Standing'], ['歩き', 'Walking'], ['走り', 'Running'], ['ジャンプ', 'Jump'], ['手', 'Hands'], ['剣', 'Sword'], ['武器', 'Weapon'], ['日常', 'Everyday'], ['かわいい', 'Cute'], ['格闘', 'Fighting'], ['アイドル', 'Idol'], ['ダンス', 'Dance'], ['寝', 'Lying'], ['男性', 'Male'], ['女性', 'Female']];
-      const gloss = (t) => { if (!/[\u3040-\u30ff\u4e00-\u9fff]/.test(t)) return ''; const w = GLOSS.filter(([j]) => t.includes(j)).map(([, en]) => en); const n = t.match(/(\d+)\s*種/); return w.length ? w.join(' · ') + (n ? ` (${n[1]})` : '') : ''; };
+      const gloss = cspGloss;
       const label = (r) => (r.set && r.name.startsWith(r.set + ' · ') ? 'Pose ' + r.name.slice(r.set.length + 3) : r.name);
       const put = (r) => {
         try { const ps = M.retargetCSP(r.data, e.fig); e.data.pose = mirror ? M.mirrorStored(ps) : ps; syncObject(e); this.redraw(this.previewScale()); return true; }
@@ -1472,9 +1622,9 @@ export function tool3d(app) {
       main.append(search, switchRow('Mirror (flip left ↔ right)', mirror, (v) => { mirror = v; store.prefs.set('cspMirror', v); if (curRec) put(curRec); }), head, grid);
       const choose = (f) => { where = f; store.prefs.set('cspFolder', f); search.value = ''; query = ''; drawTree(); drawGrid(); };
       const holdable = (el, fn) => { let t; el.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; el.dataset.held = '1'; fn(); }, 600); }); const stop = () => clearTimeout(t); el.addEventListener('pointerup', stop); el.addEventListener('pointerleave', stop); el.addEventListener('pointercancel', stop); };
-      const node = (f, text, n, depth = 0, hold) => {
+      const node = (f, text, n, depth = 0, hold, orig) => {
         const bt = h('button', { class: 'csp-node' + (where === f ? ' on' : ''), style: `padding-left:${10 + depth * 14}px`, onclick: () => { if (bt.dataset.held) { delete bt.dataset.held; return; } choose(f); } },
-          h('span', { class: 'csp-ico' }, f === 'all' ? '▦' : '📁'), h('span', { class: 'csp-name', title: text }, text, gloss(text) ? h('small', {}, gloss(text)) : null), h('span', { class: 'csp-count' }, String(n)));
+          h('span', { class: 'csp-ico' }, f === 'all' ? '▦' : '📁'), h('span', { class: 'csp-name', title: orig || text }, text, orig && orig !== text ? h('small', {}, orig) : null), h('span', { class: 'csp-count' }, String(n)));
         if (hold) holdable(bt, hold);
         return bt;
       };
@@ -1487,12 +1637,12 @@ export function tool3d(app) {
         const sets = [...new Set(list.filter((r) => !r.folder).map(setOf))];
         if (sets.length) {
           side.append(h('div', { class: 'csp-group' }, 'Download'));
-          for (const st of sets) side.append(node('dl:' + st, st, list.filter((r) => !r.folder && setOf(r) === st).length, 1));
+          for (const st of sets) { const rs = list.filter((r) => !r.folder && setOf(r) === st); side.append(node('dl:' + st, cspSetTitle(st, rs), rs.length, 1, null, st)); }
         }
       };
       const drawGrid = () => {
         const rs = query ? list.filter((r) => (r.name + ' ' + (r.set || '') + ' ' + gloss(r.set || '') + ' ' + (r.folder || '')).toLowerCase().includes(query)) : list.filter((r) => inFolder(r, where));
-        const title = query ? `Search “${query}”` : where === 'all' ? 'All poses' : where.slice(3);
+        const title = query ? `Search “${query}”` : where === 'all' ? 'All poses' : where.startsWith('dl:') ? cspSetTitle(where.slice(3), list.filter((r) => !r.folder && 'dl:' + setOf(r) === where)) : where.slice(3);
         head.replaceChildren(h('b', {}, title), h('span', { class: 'hint' }, `${gloss(title) ? ' · ' + gloss(title) : ''} · ${rs.length} pose${rs.length === 1 ? '' : 's'}`));
         grid.replaceChildren(...rs.map((r) => {
           const u = thumbUrl(r);

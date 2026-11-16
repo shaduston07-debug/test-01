@@ -28,7 +28,7 @@ async function unpack(value, zip) {
 
 // your 3D library (Clip Studio poses / body types, downloaded models, saved figures) goes in
 // backups too; the models that ship with the app are left out (they come back with it)
-const myAssets = async () => (await store.listAssets().catch(() => [])).filter((a) => !a.builtin && !a.like);
+const myAssets = async () => (await store.listAssets().catch(() => [])).filter((a) => !a.builtin && !a.like && a.kind !== 'thumb');
 // Build a backup zip. onlyIds: just these canvases (docs + meta records, no brushes/prefs).
 export async function buildBackup({ timelapse = false, onlyIds = null, library = false, onProgress } = {}) {
   const JSZip = await zipLib(), zip = new JSZip(), files = [], data = { app: 'inkwell', v: 1, created: Date.now(), stores: {}, prefs: {} };
