@@ -344,7 +344,12 @@ async function reconcile(layer, rt) {
   const want = new Map(layer.scene3d.objects.map((o) => [o.id, o]));
   for (const [id, e] of [...rt.objs]) {
     const o = want.get(id);
-    const heavy = o && Object.keys({ ...o, ...e.data }).some((k) => !LIGHT_KEYS.has(k) && JSON.stringify(o[k]) !== JSON.stringify(e.data[k]));
+    const diff = o ? Object.keys({ ...o, ...e.data }).filter((k) => !LIGHT_KEYS.has(k) && JSON.stringify(o[k]) !== JSON.stringify(e.data[k])) : [];
+    // only a planar figure's body changed (same sex): reshape in place, no rebuild
+    if (o && diff.length && diff.every((k) => k === 'body' || k === 'name') && e.fig && e.fig.reshape && o.body && o.body.sex === e.fig.sex) {
+      e.data = o; try { e.fig.reshape(o.body); } catch (err) { console.warn('reshape', err); } syncObject(e); continue;
+    }
+    const heavy = diff.length > 0;
     if (!o || heavy) { rt.scene.remove(e.node); rt.objs.delete(id); }
     else { e.data = o; syncObject(e); }
   }
@@ -355,7 +360,7 @@ function syncObject(e) {
   const o = e.data;
   e.node.position.set(...o.pos);
   e.node.quaternion.set(...o.quat);
-  e.node.scale.setScalar(o.scale);
+  e.node.scale.setScalar(o.scale * ((e.fig && e.fig.hk) || 1));
   if (e.rig === 'human') { M.applyPose(e.joints, o.pose || {}, e.fig.rest || M.HUMAN_REST, e.fig.H); if (e.fig.drive) e.fig.drive(); }
   else if (e.rig === 'dragon') M.applyPose(e.joints, o.pose || {}, M.DRAGON_REST, 1);
   else if (e.rig === 'creature') M.applyPose(e.joints, o.pose || {}, C.creatureRest(o.gen), 1);
@@ -878,6 +883,18 @@ export function tool3d(app) {
     edit(label, fn, rebuild = false) {
       if (!this.editBefore) this.editBefore = this.snapshot();
       fn();
+      // planar figures reshape live while a slider moves (once per frame), no rebuild
+      const le = rebuild && this.selEntry();
+      if (le && le.fig && le.fig.reshape && le.data.body && le.data.body.sex === le.fig.sex) {
+        if (!this.bodyRaf) this.bodyRaf = requestAnimationFrame(() => {
+          this.bodyRaf = 0; const e2 = this.selEntry(); if (!e2 || !e2.fig || !e2.fig.reshape) return;
+          try { e2.fig.reshape(e2.data.body); } catch (err) { console.warn('reshape', err); }
+          syncObject(e2); attachAll(runtimes.get(this.layer())); this.redraw(this.previewScale());
+        });
+        clearTimeout(this.editT);
+        this.editT = setTimeout(() => { const b = this.editBefore; this.editBefore = null; this.commit(label, b, false); this.redraw(1); }, 300);
+        return;
+      }
       if (!rebuild) { this.live = true; this.redraw(this.previewScale()); }
       clearTimeout(this.editT);
       this.editT = setTimeout(async () => {
@@ -1456,7 +1473,36 @@ export function tool3d(app) {
         group('Head & neck', sl('Head size', 'head'), sl('Neck', 'neck')),
         group('Arms', sl('Upper arms', 'arms'), sl('Forearms', 'forearms'), sl('Hands', 'hands')),
         group('Legs', sl('Thighs', 'thighs'), sl('Lower legs', 'calves'), sl('Feet', 'feet')));
-      dialog({ title: 'Body — all settings', body, actions: [{ label: 'Done', primary: true }], onClose: () => this.panelRefresh() });
+      // a side window instead of a dialog over the middle: the canvas slides left so the figure
+      // sits in the free space and every change can be watched; it slides back on close
+      if (isFloating('3dbody')) closeFloat('3dbody');
+      const v0 = { ...app.view };
+      openFloating('3dbody', 'Body — all settings', { width: 330, body: h('div', { class: 'pop-body p3d' }, body), onClose: () => { this.panelRefresh(); this.slideView(v0); } });
+      requestAnimationFrame(() => this.figureAside());
+    },
+    // slide the canvas so the selected model is centred in the space left of the side windows
+    figureAside() {
+      const e = this.selEntry(), L = this.layer(), rt = L && runtimes.get(L); if (!e || !rt) return;
+      const wins = [...document.querySelectorAll('.float-win')].map((w) => w.getBoundingClientRect()).filter((r) => r.width && r.left > innerWidth * 0.3);
+      if (!wins.length) return;
+      const free = Math.min(...wins.map((r) => r.left)), cr = app.canvas.getBoundingClientRect();
+      const c = new T.Box3().setFromObject(e.node).getCenter(new T.Vector3()).project(rt.camera);
+      const sc = app.docToScreen((c.x + 1) / 2 * app.doc.width, (1 - c.y) / 2 * app.doc.height);
+      const x = cr.left + sc.x, side = document.body.classList.contains('right-handed') ? 0 : 70;
+      const target = side + (free - side) / 2;
+      if (Math.abs(target - x) < 8) return;
+      this.slideView({ ...app.view, x: app.view.x + (target - x) });
+    },
+    slideView(to) {
+      const from = { ...app.view }, t0 = performance.now(), ease = (t) => 1 - Math.pow(1 - t, 3);
+      cancelAnimationFrame(this.slideRaf);
+      const step = (now) => {
+        const t = Math.min(1, (now - t0) / 260), k = ease(t);
+        app.view = { ...app.view, x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k };
+        app.requestRender('view');
+        if (t < 1) this.slideRaf = requestAnimationFrame(step);
+      };
+      this.slideRaf = requestAnimationFrame(step);
     },
     shapePad(o) {
       const W = 290, Hh = 150, c = h('canvas', { class: 'p3d-pad', width: W * 2, height: Hh * 2 });

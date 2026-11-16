@@ -893,6 +893,7 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   const mat = new T.MeshStandardMaterial({ color, roughness: 0.75, metalness: 0 });
   mesh.material = mat; mesh.castShadow = true; mesh.frustumCulled = false;
   try { addPlanarFingers(mesh); } catch (e) { console.warn('finger joints', e); }
+  const basePos = mesh.geometry.attributes.position.array.slice();
   shapePlanar(mesh, { ...PLANAR_DEFAULT, ...body }, H0);
   const base = (n) => (n || '').replace(/_\d+$/, '');
   const mapNames = (list) => {
@@ -934,6 +935,14 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   for (const [n, q] of Object.entries(fig.bindQ || {})) { const e = new T.Euler().setFromQuaternion(q); rest[n] = [e.x * R2D, e.y * R2D, e.z * R2D]; }
   fig.rest = rest;
   fig.mat = mat; fig.planar = true; fig.H = height;
+  // live body edits: the shape is worked out again on this same mesh (no reload of the model),
+  // height scales the whole figure; only a change of sex needs a new build
+  fig.sex = male ? 'male' : 'female'; fig.builtHeight = height; fig.hk = 1;
+  fig.reshape = (b) => {
+    const P = mesh.geometry.attributes.position; P.array.set(basePos);
+    shapePlanar(mesh, { ...PLANAR_DEFAULT, ...b }, H0, true);
+    fig.hk = (b.height || height) / height;
+  };
   return fig;
 }
 
@@ -1041,8 +1050,8 @@ function addPlanarFingers(mesh) {
 
 // body shape: every change is a function of the vertex position only (around the bones' axes
 // and a few landmarks found on the mesh), so shared edges never split
-function shapePlanar(mesh, b, H) {
-  const g = mesh.geometry = mesh.geometry.clone(), P = g.attributes.position, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+function shapePlanar(mesh, b, H, inPlace = false) {
+  const g = inPlace ? mesh.geometry : (mesh.geometry = mesh.geometry.clone()), P = g.attributes.position, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
   const bindInv = new T.Matrix4().copy(mesh.bindMatrix).invert(); // (bindMatrixInverse follows the mesh around the scene)
   const base = (n) => (n || '').replace(/_\d+$/, '');
   const names = mesh.skeleton.bones.map((bn) => base(bn.userData.name || bn.name));
