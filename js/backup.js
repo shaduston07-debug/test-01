@@ -26,12 +26,16 @@ async function unpack(value, zip) {
   return value;
 }
 
+// your 3D library (Clip Studio poses / body types, downloaded models, saved figures) goes in
+// backups too; the models that ship with the app are left out (they come back with it)
+const myAssets = async () => (await store.listAssets().catch(() => [])).filter((a) => !a.builtin && !a.like);
 // Build a backup zip. onlyIds: just these canvases (docs + meta records, no brushes/prefs).
 export async function buildBackup({ timelapse = false, onlyIds = null, library = false, onProgress } = {}) {
   const JSZip = await zipLib(), zip = new JSZip(), files = [], data = { app: 'inkwell', v: 1, created: Date.now(), stores: {}, prefs: {} };
   if (library) {
     // everything except the canvases: brushes (incl. scanned ibis Paint / imported ones), fonts, palettes, settings
     for (const name of store.STORES) if (!['docs', 'meta', 'timelapse'].includes(name)) data.stores[name] = pack(await store.dumpStore(name), files);
+    data.stores.assets = pack(await myAssets(), files);
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:')) data.prefs[k] = localStorage.getItem(k); }
   } else if (onlyIds) {
     const metas = (await store.dumpStore('meta')).filter((m) => onlyIds.includes(m.id));
@@ -44,6 +48,8 @@ export async function buildBackup({ timelapse = false, onlyIds = null, library =
       onProgress && onProgress('Reading ' + name + '…');
       data.stores[name] = pack(await store.dumpStore(name), files);
     }
+    onProgress && onProgress('Reading the 3D library…');
+    data.stores.assets = pack(await myAssets(), files);
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:')) data.prefs[k] = localStorage.getItem(k); }
   }
   zip.file('backup.json', JSON.stringify(data));
@@ -74,7 +80,7 @@ export async function importBackup(file, { onProgress } = {}) {
   const data = JSON.parse(await json.async('string'));
   if (data.app !== 'inkwell') throw new Error('This isn’t an Inkwell backup');
   let canvases = 0;
-  for (const name of store.STORES) {
+  for (const name of [...store.STORES, 'assets']) {
     const recs = data.stores[name];
     if (!recs || !recs.length) continue;
     onProgress && onProgress('Restoring ' + name + '…');

@@ -28,6 +28,9 @@ export const DEFAULT_BRUSHES = [
   B({ id: 'tech-pen', name: 'Technical Pen', category: 'Inking', size: 6, maxSize: 60, sizePressure: 0, streamline: 0.5, spacing: 0.04, taper: 0 }),
   B({ id: 'brush-pen', name: 'Brush Pen', category: 'Inking', size: 16, maxSize: 120, roundness: 0.55, rotation: 45, sizePressure: 1, streamline: 0.4, spacing: 0.03, taper: 0.5 }),
   B({ id: 'dry-ink', name: 'Dry Ink', category: 'Inking', tip: 'chalk', size: 12, maxSize: 80, sizePressure: 0.8, streamline: 0.3, grain: 'grit', grainDepth: 0.35, spacing: 0.05, angleJitter: 1 }),
+  // Clip Studio's felt pens, with their own settings (pressure minimum, speed, random, start / end)
+  B({ id: 'csp-felt-precise', name: 'Precise Felt Pen', category: 'Inking', size: 10, maxSize: 60, hardness: 1, spacing: 0.1, sizePressure: 0.2, pressureCurve: 3.55, speedSize: 1, streamline: 0.02, taper: 0, fadeStartSize: 0.3, fadeStartLen: 0.225, fadeEndSize: 0.3, fadeEndLen: 0.225, exact: true }),
+  B({ id: 'csp-felt', name: 'Felt Pen', category: 'Inking', size: 20, maxSize: 120, hardness: 1, roundness: 0.8, rotation: 90, spacing: 0.1, sizePressure: 0.3, speedSize: 0.75, sizeJitter: 0.1, speedOpacity: 1, streamline: 0.3, taper: 0, exact: true }),
   B({ id: 'fill-pen', name: 'Fill Pen (solid)', category: 'Inking', size: 60, maxSize: 400, sizePressure: 0, streamline: 0.2, spacing: 0.04, taper: 0 }),
   // Painting
   B({ id: 'round-brush', name: 'Round Brush', category: 'Painting', hardness: 0.7, size: 40, maxSize: 300, sizePressure: 0.6, opacityPressure: 0.4, flow: 0.9, streamline: 0.2 }),

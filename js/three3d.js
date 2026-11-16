@@ -614,7 +614,7 @@ function importBundledModels() {
             const bytes = await g.arrayBuffer();
             let thumb = null; try { const t = await fetch(new URL(m.thumb, base)); if (t.ok) thumb = await t.arrayBuffer(); } catch { /* none */ }
             await store.putAsset({ id: 'sf:model:' + m.uid, kind: 'model', src: 'Sketchfab', name: m.name, author: m.author, license: m.license, page: m.page,
-              ext: 'glb', bytes, thumb, added: Date.now() + n, size: bytes.byteLength, like: m.like || null });
+              ext: 'glb', bytes, thumb, added: Date.now() + n, size: bytes.byteLength, like: m.like || null, builtin: true });
             n++;
           }
           store.prefs.set('lookalikesDone', true);

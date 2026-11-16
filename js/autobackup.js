@@ -172,7 +172,7 @@ export async function cloudBackup(metas, { force = false, onProgress } = {}) {
 // changes whenever a brush, font or palette is added, edited or removed
 async function librarySignature() {
   const parts = [];
-  for (const name of ['brushes', 'fonts']) { const recs = await store.dumpStore(name).catch(() => []); parts.push(name, recs.length, JSON.stringify(recs, (k, v) => (v instanceof Blob ? v.size : v instanceof ArrayBuffer ? v.byteLength : v)).length); }
+  for (const name of ['brushes', 'fonts', 'assets']) { const recs = await store.dumpStore(name).catch(() => []); parts.push(name, recs.length, JSON.stringify(recs, (k, v) => (v instanceof Blob ? v.size : v instanceof ArrayBuffer ? v.byteLength : v)).length); }
   for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('inkwell:') && !/^inkwell:(autobackup|learn\.|color|lastManualBackup|penSeen|penHasPressure|mig\.)/.test(k)) parts.push(k, (localStorage.getItem(k) || '').length); }
   return parts.join('|');
 }

@@ -81,6 +81,36 @@ const pick = (row, ...names) => {
 };
 const isBlobOn = (v) => v instanceof Uint8Array ? v.length > 0 : !!v;
 
+// Clip Studio "effector" blob (how pen pressure / tilt / speed / random change a setting):
+// big-endian ints — [header size][flags][inputs on: 0x10 pressure, 0x20 tilt, 0x40 speed,
+// 0x80 random][minimum % for pressure, tilt, speed, random]…, then the pressure curve as
+// [x, y] doubles. Returns null when nothing is switched on.
+export function cspEffector(blob) {
+  const u8 = blob instanceof Uint8Array ? blob : null;
+  if (!u8 || u8.length < 24) return null;
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), I = (k) => dv.getUint32(k * 4, false);
+  const on = I(2), mins = [I(3), I(4), I(5), I(6)].map((v) => (v > 100 ? 100 : v) / 100);
+  if (!(on & 0xf0)) return null;
+  const e = {};
+  if (on & 0x10) e.pressure = mins[0];
+  if (on & 0x20) e.tilt = mins[1];
+  if (on & 0x40) e.speed = mins[2];
+  if (on & 0x80) e.random = mins[3];
+  // pressure curve: the points after the 0x2c-sized block, as doubles (x, y), from (0,0) to (1,1)
+  try {
+    if (u8.length > 64) {
+      const n = dv.getUint32(48 + 4, false), pts = [];
+      for (let k = 0; k < n && 48 + 28 + 16 * k <= u8.length; k++) {
+        const x = dv.getFloat64(48 + 12 + 16 * k, false), y = dv.getFloat64(48 + 20 + 16 * k, false);
+        if (x >= 0 && x <= 1.0001 && y >= 0 && y <= 1.0001) pts.push([x, y]);
+      }
+      const mid = pts.find(([x, y]) => x > 0.02 && x < 0.98 && Math.abs(x - y) > 0.03);
+      if (mid) e.curve = clamp(Math.log(Math.max(1e-3, mid[1])) / Math.log(Math.max(1e-3, mid[0])), 0.25, 4);
+    }
+  } catch { /* no curve */ }
+  return e;
+}
+
 async function importSut(file, notes) {
   const SQL = await getSql();
   const db = new SQL.Database(new Uint8Array(await file.arrayBuffer()));
@@ -112,7 +142,6 @@ async function importSut(file, notes) {
     const thick = Number(pick(v, 'BrushThickness') ?? 100);
     const rot = Number(pick(v, 'BrushRotation') ?? 0);
     const flow = Number(pick(v, 'BrushFlow', 'BrushDensity') ?? 100);
-    const revision = Number(pick(v, 'BrushRevision', 'BrushRevisionBySpeed') ?? 0);
     const usePattern = !!pick(v, 'BrushUsePatternImage');
     const useSpray = !!pick(v, 'BrushUseSpray');
     const texture = pick(v, 'TextureImage', 'BrushTexture');
@@ -120,6 +149,29 @@ async function importSut(file, notes) {
     const sizeEff = pick(v, 'BrushSizeEffector');
     const flowEff = pick(v, 'BrushFlowEffector', 'OpacityEffector');
 
+    // pressure / speed / random as Clip Studio sets them (minimum % → how much they change things)
+    const eSize = cspEffector(sizeEff), eFlow = cspEffector(flowEff), eOp = cspEffector(pick(v, 'BrushOpacityEffector'));
+    // start / end ("Début et fin" / "Start and end"): length in px and the size at the very end
+    const useIn = !!pick(v, 'BrushUseIn'), useOut = !!pick(v, 'BrushUseOut');
+    const inLen = Number(pick(v, 'BrushInLength') ?? 0), outLen = Number(pick(v, 'BrushOutLength') ?? 0);
+    const inRatio = Number(pick(v, 'BrushInRatio') ?? 100) / 100, outRatio = Number(pick(v, 'BrushOutRatio') ?? 100) / 100;
+    const sz = size > 0 ? size : 20, durOf = (L) => clamp((L - 2) / (8 * sz), 0.03, 3);
+    const stab = Number(pick(v, 'FlickerReduction') ?? 0);
+    const dyn = {
+      sizePressure: eSize && eSize.pressure != null ? clamp(1 - eSize.pressure, 0, 1) : 0,
+      pressureCurve: eSize && eSize.curve ? +eSize.curve.toFixed(2) : undefined,
+      speedSize: eSize && eSize.speed != null ? clamp((1 - eSize.speed) / 0.4, 0, 1) : 0,
+      sizeJitter: eSize && eSize.random != null ? clamp(1 - eSize.random, 0, 1) : (useSpray ? 0.4 : 0),
+      flowPressure: eFlow && eFlow.pressure != null ? clamp(1 - eFlow.pressure, 0, 1) : 0,
+      speedOpacity: eFlow && eFlow.speed != null ? clamp((1 - eFlow.speed) / 0.35, 0, 1) : 0,
+      opacityPressure: eOp && eOp.pressure != null ? clamp(1 - eOp.pressure, 0, 1) : 0,
+      tiltSize: eSize && eSize.tilt != null ? clamp(1 - eSize.tilt, 0, 1) : 0,
+      streamline: clamp(stab / 20, 0.02, 0.9),
+      taper: 0,
+      ...(useIn ? { fadeStartSize: clamp(inRatio, 0, 1), fadeStartLen: +durOf(inLen).toFixed(3) } : {}),
+      ...(useOut ? { fadeEndSize: clamp(outRatio, 0, 1), fadeEndLen: +durOf(outLen).toFixed(3) } : {}),
+    };
+    if (dyn.pressureCurve === undefined) delete dyn.pressureCurve;
     const brush = newBrushFrom(BRUSH_DEFAULTS, {
       name, category: 'Imported', source: 'Clip Studio',
       size: clamp(size > 0 ? size : 20, 1, 500), maxSize: clamp(Math.max(size * 2.5, 60), 20, 1000),
@@ -129,12 +181,9 @@ async function importSut(file, notes) {
       spacing: clamp(interval > 2 ? interval / 100 : interval || 0.1, 0.02, 3),
       roundness: clamp(thick > 1 ? thick / 100 : thick || 1, 0.05, 1),
       rotation: rot,
-      streamline: clamp(revision / 100, 0, 0.9),
-      sizePressure: isBlobOn(sizeEff) ? 0.9 : 0,
-      opacityPressure: isBlobOn(flowEff) ? 0.5 : 0,
       scatter: useSpray ? 0.6 : 0,
-      sizeJitter: useSpray ? 0.4 : 0,
-      taper: 0.2,
+      ...dyn,
+      exact: true, // drawn exactly as Clip Studio sets it (no Steady ink rewrite)
     });
     if ((usePattern || brushImgs.length) && brushImgs.length) {
       // the tip is normally the first non-texture image
