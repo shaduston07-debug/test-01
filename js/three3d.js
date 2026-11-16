@@ -356,6 +356,10 @@ async function reconcile(layer, rt) {
   for (const o of layer.scene3d.objects) if (!rt.objs.has(o.id)) { try { await buildObject(layer, rt, o); } catch (err) { console.warn('rebuild', err); } }
   attachAll(rt); syncAll(rt);
 }
+const ICON_UNDO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
+const ICON_REDO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>';
+const u3dStacks = new WeakMap();
+function u3d(L) { let st = u3dStacks.get(L); if (!st) u3dStacks.set(L, st = { undo: [], redo: [] }); return st; }
 function syncObject(e) {
   const o = e.data;
   e.node.position.set(...o.pos);
@@ -875,9 +879,43 @@ export function tool3d(app) {
         await render3D(L, app.doc, 1); app.changed('active'); app.updateCtxBar && app.updateCtxBar();
         if (this.layer() === L) this.panelRefresh();
       };
-      app.history.push({ label, bytes: after.length, undo: () => restore(before), redo: () => restore(after) });
+      // the 3D layer keeps its own list of model changes too, so the panel's ↶ / ↷ can step
+      // through them even after other work on the canvas
+      const st = u3d(L), rec = { label, before, after };
+      st.undo.push(rec); st.redo.length = 0; if (st.undo.length > 200) st.undo.shift();
+      app.history.push({ label, bytes: after.length,
+        undo: () => { if (st.undo[st.undo.length - 1] === rec) st.redo.push(st.undo.pop()); return restore(before); },
+        redo: () => { if (st.redo[st.redo.length - 1] === rec) st.undo.push(st.redo.pop()); return restore(after); } });
       app.changed('active');
       if (refresh) this.panelRefresh();
+      this.u3dButtons();
+    },
+    restore3d(L, json) {
+      L.scene3d = JSON.parse(json);
+      const rt = runtimes.get(L);
+      return (async () => {
+        if (rt) await reconcile(L, rt);
+        if (this.sel && !L.scene3d.objects.some((o) => o.id === this.sel)) { this.sel = null; this.joint = null; }
+        await render3D(L, app.doc, 1); app.changed('active'); app.updateCtxBar && app.updateCtxBar();
+        if (this.layer() === L) this.panelRefresh();
+        this.u3dButtons();
+      })();
+    },
+    // ↶ / ↷ in the 3D panel: the last change to the models, whatever happened on the canvas since
+    model3dUndo(redo = false) {
+      const L = this.layer(); if (!L) return;
+      const st = u3d(L), from = redo ? st.redo : st.undo, to = redo ? st.undo : st.redo;
+      const rec = from.pop(); if (!rec) { toast(redo ? 'Nothing to redo on the models' : 'Nothing to undo on the models', 1200); return; }
+      to.push(rec);
+      const a = redo ? rec.after : rec.before, b = redo ? rec.before : rec.after;
+      this.restore3d(L, a);
+      // it is an action of its own on the canvas's history too
+      app.history.push({ label: (redo ? 'Redo ' : 'Undo ') + rec.label, bytes: a.length, undo: () => this.restore3d(L, b), redo: () => this.restore3d(L, a) });
+      toast((redo ? 'Redo: ' : 'Undo: ') + rec.label, 1000);
+    },
+    u3dButtons() {
+      const L = this.layer(), st = L && u3d(L);
+      for (const [id, n] of [['u3d-undo', st ? st.undo.length : 0], ['u3d-redo', st ? st.redo.length : 0]]) { const b = document.getElementById(id); if (b) b.disabled = !n; }
     },
     // panel controls: one undo step per gesture (committed once the control rests)
     edit(label, fn, rebuild = false) {
@@ -1261,7 +1299,9 @@ export function tool3d(app) {
     openPanel() {
       if (isFloating('3d')) { this.panelRefresh(); return; }
       this.panelEl = h('div', { class: 'pop-body p3d' });
-      openFloating('3d', '3D', { width: 330, body: this.panelEl, onClose: () => { this.panelEl = null; } });
+      const ub = (id, label, redo) => h('button', { id, class: 'small-btn u3d-btn', title: label, 'aria-label': label, onclick: () => this.model3dUndo(redo), html: redo ? ICON_REDO : ICON_UNDO });
+      openFloating('3d', '3D', { width: 330, head: [ub('u3d-undo', 'Undo the last change to the models', false), ub('u3d-redo', 'Redo', true)], body: this.panelEl, onClose: () => { this.panelEl = null; } });
+      this.u3dButtons();
       this.panelRefresh();
     },
     panelRefresh() {

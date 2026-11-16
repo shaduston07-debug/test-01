@@ -980,3 +980,5 @@ body.zooming #gallery, body.zooming #gallery * { -webkit-backdrop-filter: none !
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 3px 12px rgba(var(--accent-rgb), 0.45); }
 body.right-handed #tabs3d { left: auto; right: 100%; margin: 0 -2px 0 0; align-items: flex-end; }
 body.right-handed .tab3d { border-left: 1px solid var(--glass-edge); border-right: 0; border-radius: 8px 0 0 8px; padding: 0 2px 0 0; }
+.float-head .u3d-btn { width: 32px; height: 30px; padding: 0; display: grid; place-items: center; }
+.float-head .u3d-btn[disabled] { opacity: 0.3; }
