@@ -1551,13 +1551,13 @@ export function tool3d(app) {
         } });
         el.append(b);
       }
-      // the middle tab (4th) is centred on the eyedropper button between the sliders: 3 tabs above, 3 below
+      // the gap between the 3rd and 4th tab sits level with the eyedropper between the sliders
       const place = () => {
         const mk = document.getElementById('btn-modify'), t = el.children;
         if (!mk || t.length < 4 || el.hidden) return;
         const sr = sb.getBoundingClientRect(), mr = mk.getBoundingClientRect();
         if (!mr.height) return;
-        const gap = t[3].offsetTop + t[3].offsetHeight / 2;
+        const gap = (t[2].offsetTop + t[2].offsetHeight + t[3].offsetTop) / 2;
         el.style.transform = 'none'; el.style.top = Math.round(mr.top + mr.height / 2 - sr.top - gap) + 'px';
       };
       requestAnimationFrame(place);
