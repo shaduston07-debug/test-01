@@ -1073,7 +1073,19 @@ function shapePlanar(mesh, b, H) {
     { ax: limb('thigh.' + S, 'calf.' + S), test: (n) => n === 'thigh.' + S, k: 1 + 0.3 * s(b.thighs) + 0.14 * s(b.muscle) + 0.16 * s(b.fat), bulge: 0.1 * s(b.muscle) },
     { ax: limb('calf.' + S, 'footControl.' + S), test: (n) => n === 'calf.' + S, k: 1 + 0.3 * s(b.calves) + 0.12 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.12 * s(b.muscle) });
   const hipY = J['thigh.L'].y, waistY = J.lumbar2.y, chestY = (J.ribcage.y + J.neck1.y) / 2, shY = J['upperArm.L'].y;
-  const c = new T.Vector3(), q = new T.Vector3();
+  const c = new T.Vector3(), q = new T.Vector3(), pec = new T.Vector3(), C = new T.Vector3(), dv = new T.Vector3();
+  // swell (amt > 0) or flatten the surface near L on the side facing dir (+1 front, −1 back):
+  // points move away from a centre inside the body, so the result is round, not a spike;
+  // `drop` moves that centre up, so the bottom fills more than the top
+  const pad = (v, L, dir, r, amt, drop, w) => {
+    if (!amt || (v.z - L.z) * dir < -0.9 * r) return;
+    const dx = v.x - L.x, dy = (v.y - L.y) * 1.1, dz = (v.z - L.z) * 0.6, d2 = (dx * dx + dy * dy + dz * dz) / (r * r);
+    if (d2 >= 1) return;
+    const f = (1 - d2) * (1 - d2);
+    C.set(L.x, L.y + drop * r, L.z - dir * 0.85 * r);
+    dv.copy(v).sub(C); const len = dv.length(); if (len < 1e-6) return;
+    v.addScaledVector(dv, amt * f * Math.min(1, w) / len);
+  };
   for (let i = 0; i < P.count; i++) {
     v.fromBufferAttribute(P, i);
     // limbs: thicker / thinner around their bone, muscles bulge mid-way
@@ -1090,16 +1102,28 @@ function shapePlanar(mesh, b, H) {
       const y = v.y, sz = spineZ(y);
       let kx = 1, kz = 1;
       const gC = gauss(y - chestY, 0.1 * H), gW = gauss(y - waistY, 0.075 * H), gH = gauss(y - hipY, 0.085 * H), gS = gauss(y - shY, 0.06 * H);
-      kx += (0.16 * s(b.chest) + 0.07 * s(b.muscle)) * gC; kz += (0.2 * s(b.chest) + 0.06 * s(b.muscle)) * gC;
+      kx += (0.03 * s(b.chest) + 0.07 * s(b.muscle)) * gC; kz += (0.04 * s(b.chest) + 0.06 * s(b.muscle)) * gC * (v.z > sz ? 1 : 0.3);
       kx += (0.2 * s(b.waist) + 0.16 * s(b.fat) - 0.04 * s(b.muscle)) * gW; kz += (0.2 * s(b.waist) + 0.3 * s(b.fat)) * gW * (v.z > sz ? 1.25 : 0.7);
       kx += (0.22 * s(b.hips) + 0.1 * s(b.fat)) * gH; kz += 0.1 * s(b.fat) * gH;
       kx += (0.14 * s(b.shoulders) + 0.08 * s(b.muscle)) * gS;
       v.x = spineX + (v.x - spineX) * (1 + (kx - 1) * wT); v.z = sz + (v.z - sz) * (1 + (kz - 1) * wT);
-      // chest / breast and seat: pushed out around their landmarks
+    }
+    // breasts, pecs and seat: soft rounded pads that swell from a point inside the body, only
+    // where that fat / muscle sits (not the whole torso), and only on the torso / thighs
+    const wPad = wT + wOf(i, (n) => /^thigh/.test(n));
+    if (wPad > 0.01) {
       for (const sd of ['L', 'R']) {
         const br = lm['breast' + sd], bt = lm['butt' + sd];
-        if (br && v.z > sz) { const d = Math.hypot(v.x - br.x, (v.y - br.y) * 1.15); const amt = (b.sex === 'male' ? 0.035 * s(b.breast) + 0.02 * s(b.muscle) : 0.06 * s(b.breast)) * H; v.z += fwd * amt * gauss(d, 0.062 * H) * wT; if (b.sex !== 'male' && amt > 0) v.y -= amt * 0.2 * gauss(d, 0.062 * H) * wT; }
-        if (bt && v.z < sz) { const d = Math.hypot(v.x - bt.x, v.y - bt.y); v.z -= fwd * (0.07 * s(b.butt) + 0.02 * s(b.fat)) * H * gauss(d, 0.075 * H) * wT; }
+        if (br) {
+          const fem = b.sex !== 'male';
+          // breast: a round mound under the landmark, a little heavier at the bottom
+          pad(v, br, 1, 0.078 * H, (fem ? 0.05 * s(b.breast) : 0.022 * s(b.breast) + 0.012 * s(b.muscle)) * H, fem ? 0.3 : 0, wT);
+          // pecs / upper chest: a flatter pad higher up and toward the middle
+          pec.set(spineX + (br.x - spineX) * 0.75, br.y + 0.05 * H, br.z - 0.012 * H);
+          pad(v, pec, 1, 0.085 * H, (0.022 * s(b.chest) + 0.008 * s(b.muscle)) * H, 0, wT);
+        }
+        // each cheek only on its own side (fading to nothing at the cleft), so the two never stack
+        if (bt) { const side = (v.x - spineX) * (sd === 'L' ? 1 : -1), k = sst(-0.004 * H, 0.03 * H, side); if (k > 0) pad(v, bt, -1, 0.085 * H, (0.03 * s(b.butt) + 0.008 * s(b.fat)) * H, 0.25, wPad * k); }
       }
     }
     // hips and seat carry into the top of the thighs
@@ -1107,7 +1131,6 @@ function shapePlanar(mesh, b, H) {
     if (wTh > 0.01) {
       const gH = gauss(v.y - hipY, 0.085 * H), sd = v.x > spineX ? 'L' : 'R', bt = lm['butt' + sd], hx = J['thigh.' + sd].x;
       if (Math.abs(v.x - spineX) > Math.abs(hx - spineX)) v.x = hx + (v.x - hx) * (1 + 0.45 * s(b.hips) * gH * wTh);
-      if (bt && v.z < J['thigh.' + sd].z) { const d = Math.hypot(v.x - bt.x, v.y - bt.y); v.z -= fwd * 0.07 * s(b.butt) * H * gauss(d, 0.075 * H) * wTh; }
     }
     // neck thickness; head, hands and feet scale about their own joint
     const wN = wOf(i, (n) => /^neck/.test(n)); if (wN > 0.01) { const kk = 1 + (0.3 * s(b.neck) + 0.12 * s(b.muscle)) * wN, sz = J.neck1.z; v.x = spineX + (v.x - spineX) * kk; v.z = sz + (v.z - sz) * kk; }
