@@ -1152,21 +1152,23 @@ function shapePlanar(mesh, b, H, inPlace = false) {
         // nothing at the edge of a cone, so it grows from the front and the side alike. Size =
         // how wide the cone is, Volume = how far it swells. The cone is shallower above the
         // landmark (the upper chest stays) and stops short of the middle (no merging).
-        const fem = b.sex !== 'male', R0 = (fem ? 0.06 : 0.065) * H, sd = Math.sign(br.x - spineX) || 1;
+        const fem = b.sex !== 'male', R0 = (fem ? 0.06 : 0.065) * H, sd = Math.sign(br.x - spineX) || 1, wR = wOf(i, (n) => n === 'ribcage');
         bAx.set(sd * 0.22, -0.12, 1).normalize();
         C.copy(br).addScaledVector(bAx, -0.95 * R0);
         dv.copy(v).sub(C); const len = dv.length();
         if (len > 1e-6 && len < 2.2 * R0) {
           const cos = dv.dot(bAx) / len, up = v.y > br.y;
-          const half = Math.min(1.35, 1.0 * (1 + 0.3 * Math.max(0, s(b.breastSize)))) * (up ? 0.75 : 1.1);
+          const half = Math.min(1.35, 1.0 * (1 + 0.3 * Math.max(0, s(b.breastSize)))) * (up ? 0.75 : 1.0);
           const w0 = sst(Math.cos(half), 1, cos);
           const inner = (v.x - spineX) * sd < Math.abs(br.x - spineX) * 0.18 ? 0 : 1;
           const bv = Math.max(0, s(b.breast)), bs = Math.max(0, s(b.breastSize)); // the model's own breasts are the smallest
           const amt = (fem ? 0.042 * bv + 0.014 * bs : 0.02 * bv + 0.008 * bs + 0.01 * Math.max(0, s(b.muscle))) * H;
-          const w = w0 * w0 * Math.min(1, wB) * onSide(v.x) * inner * (1 - sst(1.4 * R0, 2.2 * R0, len));
+          // nothing below the fold under the breast (the ribs and belly stay), and less toward the middle
+          const below = 1 - sst(0.55 * R0, 1.0 * R0, br.y - v.y), mid = sst(0.18, 0.55, ((v.x - spineX) * sd) / Math.max(1e-4, Math.abs(br.x - spineX)));
+          const w = w0 * w0 * Math.min(1, wR) * onSide(v.x) * inner * below * (v.y < br.y ? mid : 1) * (1 - sst(1.4 * R0, 2.2 * R0, len));
           if (amt && w > 0) {
             v.addScaledVector(dv, amt * w / len);
-            if (fem && amt > 0) v.y -= amt * w * 0.22 * (up ? 0.3 : 1); // weight: fuller underneath
+            if (fem && amt > 0) v.y -= amt * w * 0.15 * (up ? 0.3 : 1); // weight: fuller underneath
           }
         }
       }
