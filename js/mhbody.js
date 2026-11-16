@@ -583,11 +583,11 @@ function armorMH(fig, style) {
 // (height, where the hands and feet are, the body's centre line), a Mixamo-named skeleton is
 // placed on them, and every vertex is skinned to its nearest bones (arms never mix with legs,
 // left never with right). rigImported then poses it like any rigged model.
-export function autoRigHumanoid(node) {
+export function autoRigHumanoid(node, opt = {}) {
   node.updateMatrixWorld(true);
   const inv = new T.Matrix4().copy(node.matrixWorld).invert();
   const meshes = [];
-  node.traverse((o) => { if (o.isMesh && !o.isSkinnedMesh && o.geometry && o.geometry.attributes.position) meshes.push(o); });
+  node.traverse((o) => { if (o.isMesh && (opt.landmarksOnly || !o.isSkinnedMesh) && o.geometry && o.geometry.attributes.position) meshes.push(o); });
   if (!meshes.length) return false;
   // all vertices in the node's space
   const parts = meshes.map((m) => { const g = m.geometry.index ? m.geometry : m.geometry; const mw = new T.Matrix4().multiplyMatrices(inv, m.matrixWorld); const p = g.attributes.position; const a = new Float32Array(p.count * 3); const v = new T.Vector3(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i).applyMatrix4(mw); a[i * 3] = v.x; a[i * 3 + 1] = v.y; a[i * 3 + 2] = v.z; } return { m, mw, a }; });
@@ -639,6 +639,7 @@ export function autoRigHumanoid(node) {
     J['toe' + S] = [fx, Y(0.012), fz + (flip ? -1 : 1) * H * 0.06];
     J['toeTip' + S] = [fx, Y(0.01), fz + (flip ? -1 : 1) * H * 0.1];
   }
+  if (opt.landmarksOnly) return { J, L, H, cx, minY };
   // skeleton (Mixamo names, so rigImported maps it)
   const SPEC = [['pelvis', 'Hips', null], ['spine', 'Spine', 'pelvis'], ['chest', 'Spine2', 'spine'], ['neck', 'Neck', 'chest'], ['head', 'Head', 'neck']];
   for (const [S, side] of [['L', 'Left'], ['R', 'Right']]) SPEC.push(['clav' + S, side + 'Shoulder', 'chest'], ['shoulder' + S, side + 'Arm', 'clav' + S], ['elbow' + S, side + 'ForeArm', 'shoulder' + S], ['hand' + S, side + 'Hand', 'elbow' + S],
@@ -722,4 +723,88 @@ export function autoRigHumanoid(node) {
   skeleton.calculateInverses(); // the bones are in place only now
   for (const o of holder.children) if (o.isSkinnedMesh) o.bind(skeleton, o.matrixWorld.clone());
   return true;
+}
+
+// A rigged model whose bone names mean nothing (joint32_01, Bone.017…): the skeleton's own
+// shape says which bone is which. In the bind pose: the feet are the lowest bones of the two
+// legs, the hips are where legs and spine split, the hands are where the fingers branch, the
+// chest is where the arms split, and elbows / knees sit midway along their limbs. Props held in
+// a hand (a sword with its own bones) just follow that hand. Returns a mapNames function for
+// rigImported, or null.
+export function geometricRigMap(node) {
+  const skins = []; node.traverse((o) => { if (o.isSkinnedMesh) skins.push(o); });
+  if (!skins.length) return null;
+  // the model's own pose, kept for the bones that aren't body joints (a sword in the hand,
+  // a gripping hand's fingers): they go back to it once the body bones are matched
+  const bones = []; node.traverse((o) => { if (o.isBone) bones.push(o); });
+  if (bones.length < 12) return null;
+  const own = new Map(bones.map((b) => [b, [b.position.clone(), b.quaternion.clone(), b.scale.clone()]]));
+  for (const m of skins) m.skeleton.pose(); // bind pose: usually a T- or A-pose
+  node.updateMatrixWorld(true);
+  const inv = new T.Matrix4().copy(node.matrixWorld).invert();
+  const P = new Map(bones.map((b) => [b, b.getWorldPosition(new T.Vector3()).applyMatrix4(inv)]));
+  const kids = (b) => b.children.filter((c) => c.isBone);
+  const desc = (b) => { const out = []; const w = (x) => { for (const c of kids(x)) { out.push(c); w(c); } }; w(b); return out; };
+  const pathTo = (from, to) => { const p = []; for (let q = to; q && q !== from; q = q.parent) p.unshift(q); return p[0] && p[0].parent === from || from === to ? [from, ...p] : [from, ...p]; };
+  const anc = (b) => { const a = []; for (let q = b; q; q = q.parent) a.push(q); return a; };
+  const lca = (a, b) => { const s = new Set(anc(a)); for (let q = b; q; q = q.parent) if (s.has(q)) return q; return null; };
+  let minY = Infinity, maxY = -Infinity; for (const [b, p] of P) { if (kids(b).length > 1 && desc(b).length > bones.length * 0.8) continue; minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  const H = maxY - minY; if (!(H > 0)) return null;
+  // hands: bones with three or more child chains (fingers) above the knees
+  // (finger chains start close to the wrist; a held prop's bones may hang off the hand too)
+  const fingers = (b) => kids(b).filter((c) => P.get(c).distanceTo(P.get(b)) < 0.13 * H && desc(c).length <= 5).length;
+  const hands = bones.filter((b) => fingers(b) >= 3 && P.get(b).y > minY + 0.3 * H);
+  // feet: the lowest leaf-ish bones, one each side of the body's middle
+  const low = bones.filter((b) => P.get(b).y < minY + 0.12 * H && desc(b).length <= 6); // feet / toes, not a root bone on the floor
+  if (low.length < 2) return null;
+  // the body's middle: halfway between the outermost low bones (the two feet); a held prop or a
+  // hand full of finger bones can't pull it sideways
+  const lx = low.map((b) => P.get(b).x), midX = (Math.min(...lx) + Math.max(...lx)) / 2;
+  const lowL = low.filter((b) => P.get(b).x > midX), lowR = low.filter((b) => P.get(b).x <= midX);
+  if (!lowL.length || !lowR.length) return null;
+  const top = bones.reduce((a, b) => (P.get(b).y > P.get(a).y ? b : a));
+  const pelvis = lca(lca(lowL[0], lowR[0]), top); if (!pelvis) return null;
+  const spinePath = pathTo(pelvis, top);
+  // chest: where the two arms split (or 70% up the spine)
+  let handA = null, handB = null;
+  if (hands.length >= 2) { const hs = hands.slice().sort((a, b) => P.get(a).x - P.get(b).x); handA = hs[hs.length - 1]; handB = hs[0]; }
+  const chest = handA && handB ? lca(handA, handB) : spinePath[Math.round(spinePath.length * 0.7)];
+  const along = (path, f) => { // the path bone nearest the point f of the way along it
+    const a = P.get(path[0]), b = P.get(path[path.length - 1]), t = a.clone().lerp(b, f);
+    return path.reduce((x, y) => (P.get(y).distanceTo(t) < P.get(x).distanceTo(t) ? y : x));
+  };
+  const map = {};
+  const put = (k, b) => { if (b) map[k] = { bone: b, name: b.name }; };
+  put('pelvis', pelvis);
+  const sp = pathTo(pelvis, chest); put('chest', chest); if (sp.length > 2) put('spine', sp[Math.floor(sp.length / 2)]);
+  const up = pathTo(chest, top).slice(1);
+  // head: the highest bone that still has a child (the top leaf is usually "head_end"), neck below it
+  const head = up.length > 1 && !kids(top).length ? up[up.length - 2] : up[up.length - 1] || top;
+  put('head', head); const hi = up.indexOf(head); if (hi > 0) put('neck', up[hi - 1]);
+  // facing: toes ahead of ankles → +Z; the figure's left is then +X
+  const legPath = (lows) => { const end = lows.reduce((a, b) => (desc(a).length > desc(b).length ? a : b)); const leaf = [end, ...desc(end)].reduce((a, b) => (P.get(b).y < P.get(a).y ? b : a)); return pathTo(pelvis, leaf).slice(1); };
+  const legA = legPath(lowL), legB = legPath(lowR);
+  const footOf = (leg) => { const yb = minY + 0.035 * H; let f = leg[leg.length - 1]; for (const b of leg) if (P.get(b).y > yb) f = b; return f; };
+  const fA = footOf(legA), tA = legA[legA.indexOf(fA) + 1];
+  const facePlus = !tA || P.get(tA).z >= P.get(fA).z;
+  const leftIsA = facePlus; // A is the +X side
+  const sides = [[leftIsA ? 'L' : 'R', legA, handA], [leftIsA ? 'R' : 'L', legB, handB]];
+  for (const [S, leg, hand] of sides) {
+    const foot = footOf(leg), fi = leg.indexOf(foot);
+    put('hip' + S, leg[0]); put('foot' + S, foot); put('toe' + S, leg[fi + 1]);
+    const thigh = leg.slice(0, fi + 1); put('knee' + S, thigh.length > 2 ? along(thigh, 0.5) : null);
+    if (hand) {
+      const arm = pathTo(chest, hand).slice(1); // clavicle? → shoulder → elbow → hand
+      if (arm.length >= 3) {
+        const first = arm[0], clavLike = P.get(first).distanceTo(P.get(chest)) < 0.12 * H && arm.length >= 4;
+        const sh = clavLike ? arm[1] : arm[0]; if (clavLike) put('clav' + S, first);
+        put('shoulder' + S, sh); put('hand' + S, hand);
+        const seg = arm.slice(arm.indexOf(sh)); put('elbow' + S, seg.length > 2 ? along(seg, 0.5) : null);
+      }
+    }
+  }
+  const body = new Set(Object.values(map).map((x) => x.bone));
+  for (const b of bones) if (!body.has(b) && !b.children.some((c) => body.has(c)) && !desc(b).some((d) => body.has(d))) { const [p, q, sc] = own.get(b); b.position.copy(p); b.quaternion.copy(q); b.scale.copy(sc); }
+  node.updateMatrixWorld(true);
+  return () => map;
 }

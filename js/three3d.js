@@ -213,6 +213,9 @@ function placeGizmo(rt) {
   g.position.copy(c);
   g.scale.setScalar(rt.camera.position.distanceTo(c) * Math.tan(rt.camera.fov * Math.PI / 360) * (tg.joint ? 0.14 : 0.3));
   for (const p of g.children) p.visible = !tg.joint || p.userData.handle[0] === 'r';
+  // a joint's rings follow the bone, like Clip Studio: one twists along it, two bend it
+  const j = tg.joint && e.joints && e.joints[tg.joint];
+  if (j) j.getWorldQuaternion(g.quaternion); else g.quaternion.identity();
 }
 
 const mannequinBlobs = {};
@@ -280,6 +283,8 @@ async function buildObject(layer, rt, o) {
     // a rigged human (Blender, Mixamo, Rigify, VRM…) poses exactly like the drawing figures;
     // an unrigged one gets a skeleton fitted to it when the user asked for it (Make posable)
     let hf = node && MH.rigImported(node, M.mapRigNames);
+    // bones with meaningless names: matched by where they sit on the body instead
+    if (node && !hf) { try { const gm = MH.geometricRigMap(node); if (gm) hf = MH.rigImported(node, gm); } catch (e) { console.warn('bone matching', e); } }
     if (node && !hf && o.autorig) { try { if (MH.autoRigHumanoid(node)) hf = MH.rigImported(node, M.mapRigNames); } catch (e) { console.warn('auto-rig', e); } }
     if (hf) { fig = hf; joints = hf.joints; rig = 'human'; o.pose ||= {}; }
   }
@@ -634,6 +639,7 @@ export function tool3d(app) {
     // for its joint), drag the manipulator, drag a hand / foot of the selected figure (IK), drag
     // empty space to orbit the camera
     mode: 'object', sel: null, joint: null, busy: false, ik: true, gizmoOn: true, off: true, panelOpen: {},
+    fineRot: store.prefs.get('fineRot', false),
     layer() { const it = app.doc && app.doc.activeItem; return it && it.type === '3d' ? it : null; },
     async enter() {
       this.off = false;
@@ -838,7 +844,7 @@ export function tool3d(app) {
         if (!o.isMesh || !o.userData.handle || !o.parent.visible) return;
         const hd = o.userData.handle;
         // a ring seen edge-on is just a line: it can't be turned sensibly and would cover the arrows
-        if (hd[0] === 'r' && Math.abs(view.dot(new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]))) < 0.15) return;
+        if (hd[0] === 'r' && Math.abs(view.dot(new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]).applyQuaternion(rt.gizmo.quaternion))) < 0.15) return;
         picks.push(o);
       });
       const hits = this.rayAt(p, rt.camera).intersectObjects(picks, false);
@@ -849,8 +855,17 @@ export function tool3d(app) {
     startGizmo(handle, p) {
       const rt = runtimes.get(this.layer()), e = this.selEntry(); if (!e || !rt.gizmoTarget) return false;
       const ax = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[handle[1]];
-      this.gz = { handle, e, rt, c: rt.gizmo.position.clone(), axis: handle !== 'sc' && ax && new T.Vector3(...ax), joint: rt.gizmoTarget.joint };
+      const axis = handle !== 'sc' && ax && new T.Vector3(...ax).applyQuaternion(handle[0] === 'r' ? rt.gizmo.quaternion : new T.Quaternion());
+      this.gz = { handle, e, rt, c: rt.gizmo.position.clone(), axis, joint: rt.gizmoTarget.joint, total: 0 };
       this.gz.last = this.gizmoParam(p);
+      // rings turn by how far the pencil moves along the ring where it was grabbed (Clip Studio
+      // style): steady and 1:1 under the pencil, however close to the centre it is
+      if (handle[0] === 'r' && this.gz.last) {
+        const toDoc = (v) => { const q = v.clone().project(rt.camera); return new T.Vector2((q.x + 1) / 2 * app.doc.width, (1 - q.y) / 2 * app.doc.height); };
+        const p0 = this.gz.c.clone().add(this.gz.last), p1 = this.gz.c.clone().add(this.gz.last.clone().applyAxisAngle(axis, 0.01));
+        const ts = toDoc(p1).sub(toDoc(p0)).multiplyScalar(100);
+        if (ts.length() > 1) { this.gz.ts = ts.setLength(Math.max(ts.length(), 60)); this.gz.pp = new T.Vector2(p.x, p.y); }
+      }
       if (handle === 'sc') { this.gz.d0 = this.gz.last; this.gz.s0 = e.data.scale || 1; this.gz.p0 = e.node.getWorldPosition(new T.Vector3()); }
       return true;
     },
@@ -885,8 +900,11 @@ export function tool3d(app) {
         return;
       }
       if (g.handle[0] === 'r') {
-        const ang = now && g.last ? Math.atan2(new T.Vector3().crossVectors(g.last, now).dot(g.axis), g.last.dot(now)) : (dx - dy) * 0.01;
+        let ang;
+        if (g.ts) { const d = new T.Vector2(p.x, p.y).sub(g.pp); g.pp = new T.Vector2(p.x, p.y); ang = d.dot(g.ts) / g.ts.lengthSq() * (this.fineRot ? 0.25 : 1); }
+        else ang = (now && g.last ? Math.atan2(new T.Vector3().crossVectors(g.last, now).dot(g.axis), g.last.dot(now)) : (dx - dy) * 0.01) * (this.fineRot ? 0.25 : 1);
         g.last = now;
+        g.total += ang; app.showHud && app.showHud(`${g.total >= 0 ? '+' : ''}${Math.round(g.total * 180 / Math.PI)}°`, 900);
         const q = new T.Quaternion().setFromAxisAngle(g.axis, ang);
         if (g.joint) {
           const j = g.e.joints[g.joint], pq = j.parent.getWorldQuaternion(new T.Quaternion());
@@ -978,6 +996,7 @@ export function tool3d(app) {
       if (e.joints) {
         out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), human && btn('Clip Studio poses…', () => this.cspPoseMenu()), btn('Reset pose', () => this.resetPose())),
           human && switchRow('IK (drag a hand / foot to move the limb)', this.ik, (v) => { this.ik = v; app.updateCtxBar(); }),
+          switchRow('Fine rotation (¼ speed)', !!this.fineRot, (v) => { this.fineRot = v; store.prefs.set('fineRot', v); }),
           h('p', { class: 'hint' }, this.joint ? `${this.jointLabel(this.joint)}: drag the rings to turn it. Tap it again to go back to the whole model.` : 'Tap a body part of the selected model to turn that joint with the rings.')));
       }
       if (o.kind === 'model' && !e.joints) {
@@ -1145,6 +1164,7 @@ export function tool3d(app) {
       const other = !['object', 'pose'].includes(this.mode);
       const items = [
         cb('Object', () => setMode('object'), this.mode === 'object'), cb('Pose', () => setMode('pose'), this.mode === 'pose'),
+        ...(this.mode === 'pose' ? [cb('Poses…', () => this.poseMenu()), cb('Clip Studio poses…', () => this.cspPoseMenu())] : []),
         cb(other ? this.mode[0].toUpperCase() + this.mode.slice(1) + ' ▾' : 'Modes ▾', (ev) => this.modesMenu(ev.currentTarget, setMode), other), sep(),
         cb('Camera…', () => this.cameraMenu()), cb('Panel', () => (isFloating('3d') ? closeFloat('3d') : this.openPanel()), isFloating('3d')),
       ];
@@ -1288,7 +1308,8 @@ export function tool3d(app) {
       const b = this.snapshot(), lib = e.rig === 'dragon' ? { Dragon: M.DRAGON_POSES } : e.rig === 'creature' ? { [cname]: C.creaturePoses(e.data.gen) } : e.rig === 'human' ? M.HUMAN_POSES : null;
       if (!lib) { toast('This older figure has no pose library — add a new figure'); return; }
       const body = h('div', { class: 'lib3d' });
-      let cur = null;
+      if (e.rig === 'human') body.append(h('button', { class: 'pill primary p3d-wide', style: 'margin-bottom:8px', onclick: () => { dlgP && dlgP.close(); this.cspPoseMenu(); } }, 'Clip Studio poses…'));
+      let cur = null, dlgP = null;
       // your own poses (like registering a pose as a material in Clip Studio)
       const rigKey = e.rig === 'creature' ? 'creature:' + e.data.gen : e.rig;
       const saved = store.prefs.get('savedPoses', []).filter((x) => x.rig === rigKey);
@@ -1318,7 +1339,7 @@ export function tool3d(app) {
         }
         body.append(grid);
       }
-      dialog({ title: (e.rig === 'human' ? 'Figure' : cname) + ' poses', wide: true, body, actions: [
+      dlgP = dialog({ title: (e.rig === 'human' ? 'Figure' : cname) + ' poses', wide: true, body, actions: [
         { label: 'Save current pose…', onClick: async () => {
           const name = await promptDialog('Name for this pose', 'My pose'); if (!name) return false;
           store.prefs.set('savedPoses', [...store.prefs.get('savedPoses', []), { name, rig: rigKey, pose: JSON.parse(JSON.stringify(e.data.pose || {})) }]);
@@ -1391,7 +1412,12 @@ export function tool3d(app) {
     // the Clip Studio pose library, laid out like Clip Studio's Material panel: a folder tree
     // (All poses · your folders · Download › one folder per downloaded set) beside the poses
     async cspPoseMenu() {
-      const e = this.poseTarget(); if (!e || e.rig !== 'human') { toast('Select a figure first'); return; }
+      const e = this.poseTarget();
+      if (!e || e.rig !== 'human') {
+        const sel = this.selEntry();
+        toast(sel && sel.data.kind === 'model' && !sel.joints ? 'This model has no skeleton yet: 3D panel › Pose › Make posable (auto-rig), then try again' : 'Select a figure or a posable model first (＋ Models › Female / Male figure)', 5000);
+        return;
+      }
       const list = await importedCsp('csppose');
       const snap = this.snapshot(), urls = [], thumbs = new Map();
       const thumbUrl = (r) => { if (!r.thumb) return null; if (!thumbs.has(r.id)) { const u = URL.createObjectURL(store.toBlob(r.thumb)); urls.push(u); thumbs.set(r.id, u); } return thumbs.get(r.id); };
