@@ -2,7 +2,8 @@
 import { $, $$, h, clamp, emptyRect, growRect, toast, makeCanvas, rgbToHex, hexToRgb, canvasToBlob, dist, confirmDialog } from './util.js';
 import { ICONS } from './icons.js';
 import { Doc, Layer } from './doc.js';
-import { History, snapshot, pixelCmd, withUndo } from './history.js';
+import { History, snapshot, pixelCmd, withUndo, setOwnerResolver } from './history.js';
+import * as HS from './histstore.js';
 import { StrokeEngine, detectShape, shapePoints } from './engine.js';
 import { DEFAULT_BRUSHES, preloadBrush } from './brushes.js';
 import { IBIS_PRESETS } from './ibis.js';
@@ -57,6 +58,15 @@ class App {
       this.settings.v = SETTINGS_VERSION;
     }
     this.history = new History(() => this.updateUndoButtons());
+    // which layer (or animation cel) a canvas belongs to: pixel steps are saved by layer id
+    setOwnerResolver((canvas) => {
+      const d = this.doc; if (!d) return null;
+      for (const it of d.items) {
+        if (it.canvas === canvas && it.id) return { lid: it.id };
+        if (it.cels) for (const c of it.cels) if (c.canvas === canvas) return { tid: it.id, start: c.start };
+      }
+      return null;
+    });
     this.engine = new StrokeEngine();
     this.view = { x: 0, y: 0, zoom: 1, rot: 0, flip: 1 };
     this.ptrs = new Map();
@@ -331,6 +341,8 @@ class App {
     store.prefs.set('galTab', doc.mode || 'paint');
     this.selection = new Selection(doc.width, doc.height);
     this.history.clear();
+    // the undo history saved with this canvas comes back (after its layers are in place)
+    setTimeout(() => HS.loadHistory(this, doc).catch((e) => console.warn('history', e)), 0);
     this.transform = null;
     $('#gallery').hidden = true; $('#learning').hidden = true; $('#studio').hidden = false;
     setTimeout(() => { UI.dockClassic(this); Classic.syncClassic(this); }, 0); // classic layout: Colours + Layers docked
@@ -429,12 +441,14 @@ class App {
       if (!d) return;
       const L = globalThis.__closeLog ? (k) => console.log('LOG   save ' + k + ' ' + Math.round(performance.now() - t0) + 'ms') : () => {}; const t0 = performance.now();
       await this.tlapse.flush(); L('timelapse');
+      const hu = [...this.history.u], hr = [...this.history.r]; // the history that goes with this state
       const data = await d.serialize(); L('serialize');
       const s = Math.min(1, 420 / Math.max(d.width, d.mode === 'webtoon' ? d.width * 1.4 : d.height));
       const th = d.flatten({ width: Math.max(1, d.width * s), height: Math.max(1, (d.mode === 'webtoon' ? Math.min(d.height, d.width * 1.4) : d.height) * s), frame: d.playhead });
       const thumb = await canvasToBlob(th, 'image/jpeg', 0.8); L('thumb');
       await store.saveDoc(data, { id: d.id, name: d.name, mode: d.mode, width: d.width, height: d.height, updated: Date.now(), created: d.created, folder: d.folder || null, thumb });
       L('stored');
+      if (d === this.doc) { try { await HS.saveHistory(d, hu, hr); } catch (e) { console.warn('history save', e); } L('history'); }
       this.dirtySave = false;
       AutoBackup.noteChange();
     } catch (e) {
@@ -1348,7 +1362,7 @@ class App {
     const S = this.selection, before = S.snapshot();
     fn();
     const after = S.snapshot(), app = this;
-    this.history.push({ label, bytes: S.w * S.h * 8, undo() { S.restore(before); app.selectionChanged(); app.updateCtxBar(); }, redo() { S.restore(after); app.selectionChanged(); app.updateCtxBar(); } });
+    this.history.push({ label, bytes: S.w * S.h * 8, undo() { S.restore(before); app.selectionChanged(); app.updateCtxBar(); }, redo() { S.restore(after); app.selectionChanged(); app.updateCtxBar(); }, ser: async () => ({ k: 'sel' }) });
     this.selectionChanged(); this.updateCtxBar();
     if (hud) this.showHud(hud, 700);
   }

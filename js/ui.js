@@ -971,6 +971,7 @@ export function openActions(app, anchor) {
       menuItem('persp', 'Drawing guide · Perspective', () => { closePopover(); app.setTool('persp'); }, d.persp ? ({ '1pt': '1-point', '2pt': '2-point', '3pt': '3-point', curv4: 'Curved', fish5: 'Fisheye', iso: 'Isometric' }[d.persp.type] || '') : ''),
       h('div', {}, switchRow('Reference', app.reference.open, (v) => app.reference.toggle(v))),
       menuItem('pencil', 'Rename', async () => { const n = await promptDialog('Name', d.name); if (n) { d.name = n; $('#doc-title').textContent = n; app.changed(); } }),
+      menuItem('undo', 'Undo history', () => historyDialog(app), app.history.u.length + app.history.r.length ? (app.history.u.length + app.history.r.length) + ' steps' : ''),
     ],
     share: () => [
       h('div', { class: 'menu-section' }, 'Share Image'),
@@ -1387,6 +1388,32 @@ export function openSettings(app) {
   const dlg = dialog({ title: 'Settings', body, actions: [{ label: 'Done', primary: true }] });
 }
 
+// every step of the undo history (kept with the canvas, even after the app is closed): tap one
+// to go back — or forward — to right after it
+export function historyDialog(app) {
+  const list = h('div', { class: 'hist-list' });
+  const when = (t) => { if (!t) return ''; const d = new Date(t), now = new Date(); const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); return d.toDateString() === now.toDateString() ? hm : d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + hm; };
+  const jump = (n) => {
+    const H = app.history; let guard = 1000;
+    if (app.engine.active) app.flushStroke && app.flushStroke();
+    while (H.u.length > n && guard--) app.stepHistory(() => H.undo());
+    while (H.u.length < n && H.r.length && guard--) app.stepHistory(() => H.redo());
+    app.showHud && app.showHud(n ? 'Back to: ' + (H.u[n - 1].label || 'step') : 'Back to the start', 900);
+    fill();
+  };
+  const fill = () => {
+    const H = app.history, steps = [...H.u, ...[...H.r].reverse()], cur = H.u.length;
+    list.textContent = '';
+    const row = (i, label, t, k) => h('button', { class: 'hist-row' + (i === cur ? ' cur' : '') + (i > cur ? ' undone' : ''), onclick: () => jump(i) },
+      h('span', { class: 'hist-n' }, String(i)), h('span', { class: 'hist-l' }, label), h('small', {}, k === 'start' ? '' : when(t)));
+    list.append(row(0, 'Start of the history', 0, 'start'));
+    steps.forEach((c, i) => list.append(row(i + 1, c.label || 'Step', c.t)));
+    requestAnimationFrame(() => { const el = list.querySelector('.cur'); if (el) el.scrollIntoView({ block: 'center' }); });
+  };
+  fill();
+  dialog({ title: 'Undo history', body: h('div', {}, h('p', { class: 'hint' }, 'Tap a step to go back (or forward) to right after it. Greyed steps are undone; they stay until you do something new. The history is kept with the canvas, also after closing the app — a deleted or merged layer starts it afresh, since its pixels are gone.'), list), actions: [{ label: 'Done', primary: true }] });
+}
+
 function helpDialog() {
   const row = (a, b) => h('div', { class: 'toggle-row' }, h('span', {}, a), h('span', { class: 'hint' }, b));
   dialog({
@@ -1545,7 +1572,7 @@ export function selectTool(app) {
     const s = app.selection, before = s.snapshot();
     fn();
     const after = s.snapshot();
-    app.history.push({ label, bytes: s.w * s.h * 8, undo() { s.restore(before); app.selectionChanged(); app.updateCtxBar(); }, redo() { s.restore(after); app.selectionChanged(); app.updateCtxBar(); } });
+    app.history.push({ label, bytes: s.w * s.h * 8, undo() { s.restore(before); app.selectionChanged(); app.updateCtxBar(); }, redo() { s.restore(after); app.selectionChanged(); app.updateCtxBar(); }, ser: async () => ({ k: 'sel' }) });
     app.selectionChanged(); app.updateCtxBar();
   };
   const saved = (app.savedSelections ||= []);

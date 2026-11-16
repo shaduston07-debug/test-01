@@ -1,5 +1,5 @@
 // IndexedDB persistence: documents (with thumbnails) and user brushes.
-const DB_NAME = 'inkwell', VERSION = 5;
+const DB_NAME = 'inkwell', VERSION = 6;
 let dbp = null;
 
 function open() {
@@ -16,6 +16,8 @@ function open() {
       if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
       // animation cuts saved for offline study (Learning › Cut library)
       if (!db.objectStoreNames.contains('cuts')) db.createObjectStore('cuts', { keyPath: 'id' });
+      // undo history saved with each canvas (one record per step + an index)
+      if (!db.objectStoreNames.contains('history')) db.createObjectStore('history', { keyPath: 'id' });
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -78,7 +80,7 @@ export async function deleteDoc(id) {
     const t = db.transaction(['docs', 'meta'], 'readwrite');
     t.objectStore('docs').delete(id); t.objectStore('meta').delete(id);
     t.oncomplete = res; t.onerror = () => rej(t.error);
-  });
+  }).then(() => histDeleteDoc(id).catch(() => {}));
 }
 // time-lapse frames, stored in chunks: { id: '<docId>:<chunk>', frames: [Blob, …] }
 export async function putTimelapse(rec) {
@@ -118,3 +120,9 @@ export const cutIds = () => tx('cuts', 'readonly', (s) => req(s.getAllKeys()));
 export const dumpStore = (name) => tx(name, 'readonly', (s) => req(s.getAll()));
 export const putAll = (name, records) => tx(name, 'readwrite', (s) => { for (const r of records) s.put(r); });
 export const STORES = ['docs', 'meta', 'brushes', 'fonts', 'timelapse'];
+// undo history records: `${docId}:index` and `${docId}:${stepId}`
+export const histGet = (id) => tx('history', 'readonly', (s) => req(s.get(id)));
+export const histPut = (recs) => tx('history', 'readwrite', (s) => { for (const r of recs) s.put(r); });
+export const histKeys = (docId) => tx('history', 'readonly', (s) => req(s.getAllKeys(IDBKeyRange.bound(docId + ':', docId + ':\uffff'))));
+export const histDelete = (ids) => tx('history', 'readwrite', (s) => { for (const id of ids) s.delete(id); });
+export const histDeleteDoc = (docId) => tx('history', 'readwrite', (s) => req(s.delete(IDBKeyRange.bound(docId + ':', docId + ':\uffff'))));

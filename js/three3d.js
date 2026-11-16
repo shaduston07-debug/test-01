@@ -871,24 +871,22 @@ export function tool3d(app) {
       if (this.grouping) { if (refresh) this.panelRefresh(); return; }
       const L = this.layer(), after = this.snapshot();
       if (before === after) return;
-      const restore = async (json) => {
-        L.scene3d = JSON.parse(json);
-        const rt = runtimes.get(L);
-        if (rt) await reconcile(L, rt);
-        if (this.sel && !L.scene3d.objects.some((o) => o.id === this.sel)) { this.sel = null; this.joint = null; }
-        await render3D(L, app.doc, 1); app.changed('active'); app.updateCtxBar && app.updateCtxBar();
-        if (this.layer() === L) this.panelRefresh();
-      };
       // the 3D layer keeps its own list of model changes too, so the panel's ↶ / ↷ can step
       // through them even after other work on the canvas
-      const st = u3d(L), rec = { label, before, after };
-      st.undo.push(rec); st.redo.length = 0; if (st.undo.length > 200) st.undo.shift();
-      app.history.push({ label, bytes: after.length,
-        undo: () => { if (st.undo[st.undo.length - 1] === rec) st.redo.push(st.undo.pop()); return restore(before); },
-        redo: () => { if (st.redo[st.redo.length - 1] === rec) st.undo.push(st.redo.pop()); return restore(after); } });
+      const st = u3d(L); st.redo.length = 0;
+      app.history.push(this.cmd3d(L, label, before, after, true));
       app.changed('active');
       if (refresh) this.panelRefresh();
       this.u3dButtons();
+    },
+    // a 3D step on the canvas's history; `stack`: also one of the model ↶ / ↷ steps
+    cmd3d(L, label, before, after, stack, undone = false) {
+      const st = u3d(L), rec = { label, before, after };
+      if (stack) { (undone ? st.redo : st.undo).push(rec); if (st.undo.length > 200) st.undo.shift(); }
+      return { label, bytes: after.length,
+        undo: () => { if (stack && st.undo[st.undo.length - 1] === rec) st.redo.push(st.undo.pop()); return this.restore3d(L, before); },
+        redo: () => { if (stack && st.redo[st.redo.length - 1] === rec) st.undo.push(st.redo.pop()); return this.restore3d(L, after); },
+        ser: async () => ({ k: '3d', lid: L.id, label, before, after, stack: !!stack }) };
     },
     restore3d(L, json) {
       L.scene3d = JSON.parse(json);
@@ -910,7 +908,7 @@ export function tool3d(app) {
       const a = redo ? rec.after : rec.before, b = redo ? rec.before : rec.after;
       this.restore3d(L, a);
       // it is an action of its own on the canvas's history too
-      app.history.push({ label: (redo ? 'Redo ' : 'Undo ') + rec.label, bytes: a.length, undo: () => this.restore3d(L, b), redo: () => this.restore3d(L, a) });
+      app.history.push(this.cmd3d(L, (redo ? 'Redo ' : 'Undo ') + rec.label, b, a, false));
       toast((redo ? 'Redo: ' : 'Undo: ') + rec.label, 1000);
     },
     u3dButtons() {

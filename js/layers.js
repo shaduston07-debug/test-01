@@ -23,12 +23,30 @@ function restoreStruct(doc, s) {
   s.items.forEach((it, i) => Object.assign(it, s.props[i]));
   doc.active = s.active;
 }
+// saved form of a layer-structure step: layer ids + their settings (only while every layer it
+// mentions still exists — a deleted layer's pixels are not kept)
+export function structSer(doc, before, after) {
+  return async () => {
+    const ids = (st) => st.items.map((it) => it.id);
+    const all = new Set(doc.items.map((it) => it.id));
+    if (![...ids(before), ...ids(after)].every((id) => id && all.has(id))) return null;
+    const pack = (st) => ({ ids: ids(st), props: JSON.parse(JSON.stringify(st.props)), active: st.active });
+    return { k: 'st', before: pack(before), after: pack(after) };
+  };
+}
+export function structFrom(app, doc, rec, label) {
+  const byId = new Map(doc.items.map((it) => [it.id, it]));
+  const un = (p) => ({ items: p.ids.map((id) => byId.get(id)), props: p.props, active: p.active });
+  const b = un(rec.before), a = un(rec.after);
+  if ([...b.items, ...a.items].some((x) => !x)) return null;
+  return { label, bytes: 1000, undo() { restoreStruct(doc, b); app.changed(); }, redo() { restoreStruct(doc, a); app.changed(); }, ser: async () => rec };
+}
 export function structCmd(app, label, fn) {
   const doc = app.doc;
   const before = captureStruct(doc);
   fn();
   const after = captureStruct(doc);
-  app.history.push({ label, bytes: 1000, undo() { restoreStruct(doc, before); app.changed(); }, redo() { restoreStruct(doc, after); app.changed(); } });
+  app.history.push({ label, bytes: 1000, undo() { restoreStruct(doc, before); app.changed(); }, redo() { restoreStruct(doc, after); app.changed(); }, ser: structSer(doc, before, after) });
   app.changed();
 }
 export function insertLayer(app, layer, index) {
@@ -211,7 +229,7 @@ export function openLayers(app, anchor) {
         d.bg = hex; if (btn.isConnected) btn.style.background = hex; app.changed();
         if (commit && hex !== last) {
           const before = last, after = hex; last = hex;
-          app.history.push({ label: 'Background colour', undo() { d.bg = before; app.changed(); }, redo() { d.bg = after; app.changed(); } });
+          app.history.push({ label: 'Background colour', undo() { d.bg = before; app.changed(); }, redo() { d.bg = after; app.changed(); }, ser: async () => ({ k: 'bg', before, after }) });
         }
       },
       onClose: () => render(),
@@ -510,7 +528,7 @@ function opacityField(app, it, after) {
   const op = field('Opacity', { min: 0, max: 1, step: 0.01, value: it.opacity, fmt: pct, onInput: (v) => { if (!opStart) opStart = captureStruct(d); it.opacity = v; app.requestRender(); } });
   op.querySelector('input').addEventListener('change', () => {
     if (!opStart) return; const before = opStart; opStart = null; const after2 = captureStruct(d);
-    app.history.push({ label: 'Opacity', undo() { restoreStruct(d, before); app.changed(); }, redo() { restoreStruct(d, after2); app.changed(); } });
+    app.history.push({ label: 'Opacity', undo() { restoreStruct(d, before); app.changed(); }, redo() { restoreStruct(d, after2); app.changed(); }, ser: structSer(d, before, after2) });
     app.changed(); after && after();
   });
   return op;

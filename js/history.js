@@ -10,7 +10,7 @@ export class History {
     this.onChange = onChange || (() => {});
   }
   push(cmd) {
-    cmd.bytes ||= 0;
+    cmd.bytes ||= 0; cmd.t ||= Date.now();
     for (const c of this.r) { this.bytes -= c.bytes; c.dispose && c.dispose(); }
     this.r = [];
     this.u.push(cmd); this.bytes += cmd.bytes;
@@ -69,6 +69,11 @@ function putRect(dst, img, x, y) {
   touch(dst);
 }
 
+// which layer / cel owns a canvas (set by the app): lets pixel steps be saved with the canvas
+let ownerOf = () => null;
+export function setOwnerResolver(fn) { ownerOf = fn; }
+const encode = (c) => (c.convertToBlob ? c.convertToBlob({ type: 'image/png' }) : new Promise((res) => c.toBlob(res, 'image/png')));
+
 // `beforeImg` (optional): a rect-sized copy taken before the change; otherwise the
 // shared snapshot() backup is used.
 export function pixelCmd(canvas, rect, label, after, beforeImg) {
@@ -79,14 +84,32 @@ export function pixelCmd(canvas, rect, label, after, beforeImg) {
   touch(canvas);
   if (w <= 0 || hh <= 0) return null;
   const before = beforeImg && beforeImg.width === w && beforeImg.height === hh ? beforeImg : copyRect(backup, x, y, w, hh);
-  let redoImg = null;
-  return {
+  return pixelCmdFrom(canvas, x, y, w, hh, label, before, null, after);
+}
+// a pixel step from its parts (also used to bring saved steps back after the app restarts)
+export function pixelCmdFrom(canvas, x, y, w, hh, label, before, redoImg, after) {
+  let beforeP = null, redoP = null, redoFor = null;
+  const cmd = {
     label, bytes: w * hh * 8,
     pixel: { canvas, x, y, w, h: hh }, // lets the app repaint only this area after undo / redo
     undo() { redoImg = copyRect(canvas, x, y, w, hh); putRect(canvas, before, x, y); after && after(); },
     redo() { if (redoImg) putRect(canvas, redoImg, x, y); after && after(); },
     dispose() { before.width = before.height = 0; if (redoImg) redoImg.width = redoImg.height = 0; },
+    // saved form: the area before the step (and, once undone, after it)
+    async ser(undone) {
+      const own = ownerOf(canvas); if (!own) return null;
+      beforeP ||= encode(before);
+      const rec = { k: 'px', own, x, y, w, h: hh, label, before: await beforeP };
+      if (undone) { if (!redoImg) return null; if (redoFor !== redoImg) { redoFor = redoImg; redoP = encode(redoImg); } rec.redo = await redoP; }
+      return rec;
+    },
   };
+  return cmd;
+}
+export async function imageCanvas(blob) {
+  const bm = await createImageBitmap(blob);
+  const c = makeCanvas(bm.width, bm.height); c.getContext('2d').drawImage(bm, 0, 0); bm.close && bm.close();
+  return c;
 }
 
 // Convenience: run a mutation on a canvas and record it.

@@ -982,3 +982,11 @@ body.right-handed #tabs3d { left: auto; right: 100%; margin: 0 -2px 0 0; align-i
 body.right-handed .tab3d { border-left: 1px solid var(--glass-edge); border-right: 0; border-radius: 8px 0 0 8px; padding: 0 2px 0 0; }
 .float-head .u3d-btn { width: 32px; height: 30px; padding: 0; display: grid; place-items: center; }
 .float-head .u3d-btn[disabled] { opacity: 0.3; }
+.hist-list { max-height: 56vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.hist-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; text-align: left; background: transparent; }
+.hist-row:active { background: var(--fill-2); }
+.hist-row .hist-n { width: 28px; text-align: right; opacity: 0.45; font-variant-numeric: tabular-nums; font-size: 12px; }
+.hist-row .hist-l { flex: 1; }
+.hist-row small { opacity: 0.5; font-variant-numeric: tabular-nums; }
+.hist-row.cur { background: rgba(var(--accent-rgb), 0.22); box-shadow: inset 3px 0 0 var(--accent); }
+.hist-row.undone { opacity: 0.4; }
