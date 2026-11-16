@@ -1510,7 +1510,6 @@ export function tool3d(app) {
       if (this.mode === 'pose') this.mode = 'object';
       const rt = runtimes.get(L), posable = rt && [...rt.objs.values()].some((x) => x.joints);
       const items = [];
-      if (this.mode !== 'object') items.push(cb(this.mode[0].toUpperCase() + this.mode.slice(1) + ' ✕', () => setMode('object'), true), sep());
       if (posable) items.push(cb('Poses', () => this.poseMenu()));
       items.push(cb('Camera', () => this.cameraMenu()), cb('Panel', () => (isFloating('3d') ? closeFloat('3d') : this.openPanel()), isFloating('3d')),
         cb('⋯', (ev) => this.modesMenu(ev.currentTarget, setMode)));
@@ -1526,7 +1525,35 @@ export function tool3d(app) {
       el.style.top = Math.max(8, r.top - el.offsetHeight - 10) + 'px';
       return pop;
     },
+    // the 3D modes as little tabs clinging to the size / opacity sidebar; the one in use is lit
+    // in the accent colour. Tap the lit one again to go back to Normal.
+    modeTabs(on) {
+      let el = document.getElementById('tabs3d');
+      if (!on) { if (el) el.hidden = true; return; }
+      const sb = document.getElementById('sidebar'); if (!sb) return;
+      if (!el) { el = h('div', { id: 'tabs3d' }); sb.append(el); }
+      el.hidden = false; el.textContent = '';
+      const I = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
+      const TABS = [
+        ['object', 'Normal — drag a part to pose, empty space to turn the camera', I('<circle cx="12" cy="4.5" r="2.3"/><path d="M12 7.5v7M6.5 10.5l5.5-1 5.5 1M8.5 21l3.5-6.5 3.5 6.5"/>')],
+        ['orbit', 'Orbit camera', I('<path d="M19.5 13A7.5 7.5 0 1 1 16 5.6"/><path d="M16.5 2v4h4"/>')],
+        ['pan', 'Pan camera', I('<path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>')],
+        ['zoom', 'Zoom camera', I('<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5 21 21M10 7.5v5M7.5 10h5"/>')],
+        ['move', 'Move model', I('<rect x="8" y="8" width="8" height="8" rx="1"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/>')],
+        ['rotate', 'Rotate model', I('<path d="M4.5 12a7.5 7.5 0 0 1 13.4-4.6"/><path d="M18.5 3v4.5H14"/><path d="M19.5 12a7.5 7.5 0 0 1-13.4 4.6"/><path d="M5.5 21v-4.5H10"/>')],
+        ['scale', 'Scale model', I('<rect x="3" y="11" width="10" height="10" rx="1"/><path d="M14 3h7v7M21 3l-8 8"/>')],
+      ];
+      for (const [m, label, svg] of TABS) {
+        const b = h('button', { class: 'tab3d' + (this.mode === m ? ' on' : ''), title: label, 'aria-label': label, html: svg, onclick: () => {
+          const next = this.mode === m && m !== 'object' ? 'object' : m;
+          this.mode = next; if (next !== 'object') { this.joint = null; this.highlight(null); }
+          this.redraw(1); app.updateCtxBar(); toast(TABS.find((t) => t[0] === next)[1].split(' — ')[0], 900);
+        } });
+        el.append(b);
+      }
+    },
     showModelsButton(on) {
+      this.modeTabs(on);
       let b = document.getElementById('btn-3d-models');
       if (!b && on) {
         b = h('button', { id: 'btn-3d-models', class: 'glass', onclick: () => this.modelsMenu(b) }, '＋ Models');
@@ -1542,11 +1569,6 @@ export function tool3d(app) {
       const body = h('div', { class: 'lib3d' },
         h('div', { class: 'row-btns', style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' } },
           this.sel ? act('Delete model', () => this.deleteSel()) : null, act('Rasterize layer', () => this.rasterize())),
-        h('div', { class: 'hint' }, 'Single-purpose drags (tap ✕ on the bar to go back to normal):'),
-        h('div', { class: 'lib3d-grid' },
-          row('object', 'Normal', 'Drag a body part to pose, empty space to turn the camera'),
-          row('orbit', 'Orbit', 'Drag to turn the camera'), row('pan', 'Pan', 'Drag to slide the camera'), row('zoom', 'Zoom', 'Drag up / down'),
-          row('move', 'Move', 'Drag a model'), row('rotate', 'Rotate', 'Drag to turn a model'), row('scale', 'Scale', 'Drag up / down')),
         switchRow('Manipulator (rings & arrows)', this.gizmoOn, (v) => { this.gizmoOn = v; this.redraw(1); }));
       this.popAbove(anchor, { title: '3D', body, width: 420, key: '3d-modes' });
     },

@@ -965,3 +965,13 @@ body.zooming #gallery, body.zooming #gallery * { -webkit-backdrop-filter: none !
 .set-sub { margin: -2px 0 6px 12px; padding-left: 10px; border-left: 2px solid var(--line, rgba(127,127,127,.25)); }
 .set-h { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; opacity: .55; margin: 14px 0 4px; }
 .set-pane .row-btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+/* 3D modes: little tabs clinging to the sidebar */
+#tabs3d { position: absolute; top: 50%; left: 100%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 3px; margin-left: -1px; z-index: -1; }
+#tabs3d[hidden] { display: none; }
+.tab3d { width: 34px; height: 32px; padding: 0 0 0 4px; display: grid; place-items: center; color: rgba(245, 245, 247, 0.85);
+  background: rgba(36, 36, 40, 0.78); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+  border-radius: 0 10px 10px 0; box-shadow: 2px 1px 6px rgba(0, 0, 0, 0.35); transition: background 0.15s, color 0.15s, width 0.15s; }
+.tab3d svg { width: 18px; height: 18px; }
+.tab3d.on { background: var(--accent); color: var(--on-accent); width: 38px; }
+body.right-handed #tabs3d { left: auto; right: 100%; margin: 0 -1px 0 0; align-items: flex-end; }
+body.right-handed .tab3d { border-radius: 10px 0 0 10px; padding: 0 4px 0 0; box-shadow: -2px 1px 6px rgba(0, 0, 0, 0.35); }
