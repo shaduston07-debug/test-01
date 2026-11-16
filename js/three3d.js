@@ -318,7 +318,7 @@ function syncAll(rt) { for (const e of rt.objs.values()) syncObject(e); }
 function attachAll(rt) {
   for (const e of rt.objs.values()) {
     const a = e.data.attach; if (!a) continue;
-    const host = rt.objs.get(a.to), j = host && host.joints && host.joints['hand' + a.side];
+    const host = rt.objs.get(a.to), j = host && host.joints && (host.joints[a.part] || host.joints['hand' + a.side]);
     const parent = j || rt.scene;
     if (e.node.parent !== parent) parent.add(e.node);
   }
@@ -506,8 +506,41 @@ async function loadModel(m) {
   return wrap;
 }
 
+// The camera that sees the scene the way the canvas's perspective guide is drawn: lens from the
+// two vanishing points (they are 90° apart in the world), tilt from the eye level, turn so the
+// world's X axis runs to the first vanishing point. Keeps the camera's target and distance.
+// 1-point: the lens stays, the camera looks down the world's Z to the point. Returns null for
+// guides a normal lens can't match (curved, fisheye, isometric).
+export function cameraFromGuide(doc, cam) {
+  const g = doc.persp; if (!g || !g.vps || !g.vps.length || !['1pt', '2pt', '3pt'].includes(g.type)) return null;
+  const W = doc.width, H = doc.height, cx = W / 2, cy = H / 2, v1 = g.vps[0], v2 = g.vps[1];
+  let f = (H / 2) / Math.tan(((cam.fov || 35) * Math.PI / 180) / 2);
+  if (g.type !== '1pt' && v2) { const d = -((v1.x - cx) * (v2.x - cx) + (v1.y - cy) * (v2.y - cy)); if (d > 1) f = Math.sqrt(d); else return null; }
+  const fov = Math.max(5, Math.min(120, (2 * Math.atan((H / 2) / f) * 180) / Math.PI));
+  // eye level at the middle column → tilt
+  const hy = g.type === '1pt' || !v2 || Math.abs(v2.x - v1.x) < 1e-6 ? v1.y : v1.y + ((cx - v1.x) * (v2.y - v1.y)) / (v2.x - v1.x);
+  const pitch = Math.atan((hy - cy) / f); // eye level below the middle = looking up
+  const tgt = new T.Vector3(...cam.target), dist = Math.max(0.5, new T.Vector3(...cam.pos).distanceTo(tgt));
+  const axis = g.type === '1pt' ? new T.Vector3(0, 0, -1) : new T.Vector3(1, 0, 0);
+  const test = new T.PerspectiveCamera(fov, W / H, 0.01, 1e7);
+  let best = null;
+  const a0 = Math.atan2(v1.x - cx, Math.hypot(f, hy - cy));
+  for (const a of [a0, -a0, Math.PI - a0, Math.PI + a0]) {
+    // forward: the axis turned by a about the vertical, then tilted
+    const fh = axis.clone().applyAxisAngle(new T.Vector3(0, 1, 0), a);
+    const fwd = fh.multiplyScalar(Math.cos(pitch)).add(new T.Vector3(0, Math.sin(pitch), 0)).normalize();
+    const pos = tgt.clone().sub(fwd.clone().multiplyScalar(dist));
+    test.position.copy(pos); test.lookAt(tgt); test.updateMatrixWorld(true);
+    const far = pos.clone().add(axis.clone().multiplyScalar(1e5)).project(test);
+    if (far.z > 1) continue; // behind the camera
+    const err = Math.hypot((far.x + 1) / 2 * W - v1.x, (1 - far.y) / 2 * H - v1.y);
+    if (!best || err < best.err) best = { err, pos: pos.toArray() };
+  }
+  return best ? { pos: best.pos, target: tgt.toArray(), fov: +fov.toFixed(2) } : null;
+}
 function applySceneSettings(layer, rt, doc) {
   const s = layer.scene3d;
+  if (s.followPersp) { const c2 = cameraFromGuide(doc, s.camera); if (c2) s.camera = c2; }
   const c = rt.camera;
   c.fov = s.camera.fov; c.aspect = doc.width / doc.height; c.updateProjectionMatrix();
   c.position.set(...s.camera.pos); c.lookAt(new T.Vector3(...s.camera.target));
@@ -1132,6 +1165,16 @@ export function tool3d(app) {
       const dir = p && p.distanceTo(at) > 1e-4 && !/^head|^neck/.test(name) ? at.clone().sub(p).normalize() : new T.Vector3(0, 1, 0).applyQuaternion(q);
       return at.clone().add(dir.multiplyScalar(len));
     },
+    // 3D layers set to follow the perspective guide are drawn again when the guide moved
+    followGuide() { for (const it of app.doc.items) if (it.type === '3d' && it.scene3d && it.scene3d.followPersp) render3D(it, app.doc, 1).then(() => app.requestRender()).catch(() => {}); },
+    matchPersp(quiet) {
+      const L = this.layer(), d = app.doc;
+      if (!d.persp) { toast('Add a perspective guide first (the perspective tool in the top bar)', 4000); return false; }
+      const c = cameraFromGuide(d, L.scene3d.camera);
+      if (!c) { toast(['1pt', '2pt', '3pt'].includes(d.persp.type) ? 'These vanishing points can’t come from one lens (put the canvas centre between them)' : 'Use a 1-, 2- or 3-point guide: curved, fisheye and isometric guides have no matching 3D lens', 5000); return false; }
+      if (!quiet) { const b = this.snapshot(); L.scene3d.camera = c; this.commit('Match perspective', b); this.redraw(1); this.panelRefresh(); toast('Camera matched to the perspective guide'); }
+      return true;
+    },
     // make another 3D layer the one being edited
     activate(L) {
       const d = app.doc, i = d.items.indexOf(L); if (i < 0) return;
@@ -1208,7 +1251,10 @@ export function tool3d(app) {
       // camera
       out.push(sec('Camera', grid(...CAM_ANGLES.map(([label, ...a]) => btn(label, () => this.camAngle(...a)))),
         field('Lens (field of view)', { min: 10, max: 90, step: 1, value: s.camera.fov, fmt: (v) => v + '°', onInput: (v) => this.edit('Lens', () => { s.camera.fov = v; }) }),
-        grid(btn('Reset camera', () => { const b = this.snapshot(); L.scene3d.camera = defaultScene().camera; this.commit('Reset camera', b); this.redraw(1); }))));
+        grid(btn('Reset camera', () => { const b = this.snapshot(); L.scene3d.camera = defaultScene().camera; s.followPersp = false; this.commit('Reset camera', b); this.redraw(1); this.panelRefresh(); }),
+          btn('Match perspective guide', () => this.matchPersp())),
+        switchRow('Follow the perspective guide', !!s.followPersp, (v) => { if (v && !this.matchPersp(true)) { this.panelRefresh(); return; } const b = this.snapshot(); s.followPersp = v; this.commit('Follow perspective', b); this.redraw(1); }),
+        h('p', { class: 'hint' }, 'The 3D camera takes the lens, eye level and direction of the canvas’s 1-, 2- or 3-point perspective guide, so models sit in the same space as your drawing. With Follow on, moving the guide moves the camera.')));
       out.push(h('button', { class: 'pill primary p3d-wide', onclick: () => this.rasterize() }, 'Rasterize (make it paintable)'));
       return out;
     },
@@ -1254,7 +1300,7 @@ export function tool3d(app) {
         field('Size', { min: 0.05, max: 10, step: 0.01, value: o.scale, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => this.edit('Scale object', () => { o.scale = v; syncObject(e); }) }),
         grid(btn('Stand on floor', () => { const b = this.snapshot(); o.pos = [o.pos[0], 0, o.pos[2]]; syncObject(e); this.commit('Move object', b); this.redraw(1); }),
           btn('Reset rotation', () => { const b = this.snapshot(); o.quat = [0, 0, 0, 1]; syncObject(e); this.commit('Rotate object', b); this.redraw(1); }),
-          btn('Frame in view', () => this.frameObject(o.id, o.gen)), btn('Save as my model…', () => this.savePreset(e)), o.kind === 'weapon' && btn('Hold…', () => this.holdMenu()), btn('Material…', () => this.materialDialog())),
+          btn('Frame in view', () => this.frameObject(o.id, o.gen)), btn('Save as my model…', () => this.savePreset(e)), !e.joints && o.kind !== 'figure' && btn(o.attach ? 'Attached…' : 'Attach to body…', () => this.holdMenu()), btn('Material…', () => this.materialDialog())),
         h('div', { class: 'toggle-row' }, h('span', {}, 'Colour'), color)));
       return out;
     },
@@ -1797,19 +1843,48 @@ export function tool3d(app) {
       }
       await this.addObject(o, 'Add ' + def.label);
     },
+    // lock an object (weapon, prop, any model) onto a body part of a figure: it then follows that
+    // part through every pose, pointing the way the part points. Hands grip weapons properly.
     holdMenu() {
-      const e = this.selEntry(); if (!e || e.data.kind !== 'weapon') return;
-      const L = this.layer(), rt = runtimes.get(L), def = WD.WEAPONS[e.data.weapon];
-      const fig = (e.data.attach && rt.objs.get(e.data.attach.to)) || [...rt.objs.values()].find((x) => x.rig === 'human');
-      const hold = (side) => {
+      const e = this.selEntry(); if (!e || e.joints) return;
+      const L = this.layer(), rt = runtimes.get(L), def = e.data.kind === 'weapon' ? WD.WEAPONS[e.data.weapon] : null;
+      const figs = [...rt.objs.values()].filter((x) => x.rig === 'human' && x.joints);
+      let fig = (e.data.attach && rt.objs.get(e.data.attach.to)) || figs[0];
+      const PARTS = [['handR', 'Right hand'], ['handL', 'Left hand'], ['elbowR', 'Right forearm'], ['elbowL', 'Left forearm'], ['shoulderR', 'Right upper arm'], ['shoulderL', 'Left upper arm'],
+        ['head', 'Head'], ['neck', 'Neck'], ['chest', 'Chest / back'], ['spine', 'Waist'], ['pelvis', 'Hips'], ['hipR', 'Right thigh'], ['hipL', 'Left thigh'], ['kneeR', 'Right lower leg'], ['kneeL', 'Left lower leg'], ['footR', 'Right foot'], ['footL', 'Left foot']];
+      let dlg = null;
+      const put = (part) => {
         const b = this.snapshot();
-        if (!side || !fig) { const wp = e.node.getWorldPosition(new T.Vector3()); delete e.data.attach; e.data.pos = [wp.x, wp.y, wp.z]; e.data.quat = [0, 0, 0, 1]; }
-        else { Object.assign(e.data, { attach: { to: fig.data.id, side } }, WD.gripTransform(side, def.grip, fig.fig.H * 0.105)); fig.data.pose = { ...fig.data.pose, ...M.poseFromDegrees(M.handPose('Grip', side)) }; }
-        attachAll(rt); syncAll(rt); this.commit('Hold weapon', b); this.redraw(1);
+        if (!part || !fig) {
+          // let go: stays where it is in the scene
+          const wp = e.node.getWorldPosition(new T.Vector3()), wq = e.node.getWorldQuaternion(new T.Quaternion());
+          delete e.data.attach; e.data.pos = wp.toArray(); e.data.quat = wq.toArray();
+        } else {
+          const m = /^hand([LR])$/.exec(part), j = fig.joints[part];
+          if (!j) { toast('This figure has no such part'); return; }
+          e.data.attach = { to: fig.data.id, part, side: m ? m[1] : undefined };
+          if (m && def) { Object.assign(e.data, WD.gripTransform(m[1], def.grip, fig.fig.H * 0.105)); fig.data.pose = { ...fig.data.pose, ...M.poseFromDegrees(M.handPose('Grip', m[1])) }; }
+          else if (m) { e.data.pos = [(m[1] === 'L' ? 1 : -1) * fig.fig.H * 0.045, 0, 0]; e.data.quat = [0, 0, 0, 1]; } // in the palm, pointing with the hand
+          else {
+            // on the part, a little outside it, keeping the way it is turned in the scene
+            const wq = e.node.getWorldQuaternion(new T.Quaternion()), jq = j.getWorldQuaternion(new T.Quaternion());
+            e.data.pos = part === 'chest' ? [0, fig.fig.H * 0.08, -fig.fig.H * 0.08] : part === 'head' ? [0, fig.fig.H * 0.07, 0] : part === 'pelvis' ? [fig.fig.H * 0.09, 0, 0] : [0, 0, 0];
+            e.data.quat = jq.invert().multiply(wq).toArray();
+          }
+          e.data.scale = (e.data.scale || 1) / (e.node.parent && e.node.parent !== rt.scene ? 1 : (fig.node.scale.x || 1));
+        }
+        attachAll(rt); syncAll(rt); this.commit(part ? 'Attach to body' : 'Detach', b); this.redraw(1); this.panelRefresh();
+        dlg && dlg.close();
+        if (part) toast('Locked to ' + PARTS.find((x) => x[0] === part)[1].toLowerCase() + ' — Move / Rotate adjust how it sits', 3500);
       };
-      dialog({ title: def.label, body: h('p', { class: 'hint' }, fig ? 'Put it in a hand of ' + (fig.data.name || 'the figure') + ' — it follows every pose. Move / Rotate adjust how it sits.' : 'Add a figure to hold it.'), actions: [
-        ...(fig ? [{ label: 'Right hand', onClick: () => hold('R') }, { label: 'Left hand', onClick: () => hold('L') }] : []), { label: 'Not held', onClick: () => hold(null) }, { label: 'Cancel', primary: true },
-      ] });
+      const body = h('div', {});
+      if (!figs.length) body.append(h('p', { class: 'hint' }, 'Add a figure first: the object locks onto one of its body parts.'));
+      else {
+        if (figs.length > 1) body.append(h('div', { class: 'stack' }, h('label', {}, 'Figure'), seg(figs.map((f) => [f.data.id, (f.data.name || 'Figure').slice(0, 18)]), fig.data.id, (v) => { fig = rt.objs.get(v); })));
+        body.append(h('p', { class: 'hint' }, 'Pick the body part. The object follows it through every pose and turns with it.'),
+          h('div', { class: 'p3d-chips' }, ...PARTS.filter(([k]) => fig.joints[k]).map(([k, l]) => h('button', { class: e.data.attach && (e.data.attach.part || 'hand' + e.data.attach.side) === k ? 'on' : '', onclick: () => put(k) }, l))));
+      }
+      dlg = dialog({ title: 'Attach ' + (e.data.name || 'object'), body, actions: [...(e.data.attach ? [{ label: 'Detach', onClick: () => put(null) }] : []), { label: 'Cancel', primary: true }] });
     },
     async addObject(o, label) {
       const L = this.layer(); const b = this.snapshot();

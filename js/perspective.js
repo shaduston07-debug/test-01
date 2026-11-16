@@ -286,7 +286,7 @@ export function perspTool(app) {
       }
       app.requestRender('view');
     },
-    up() { if (this.drag) { this.drag = null; app.changed(); } },
+    up() { if (this.drag) { this.drag = null; app.changed(); app.tools['3d'] && app.tools['3d'].followGuide && app.tools['3d'].followGuide(); } },
     cancel() { this.drag = null; },
     // a short bar: type · snap · hide · more · help · done
     bar() {
