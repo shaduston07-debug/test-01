@@ -866,7 +866,7 @@ export function geometricRigMap(node) {
 let planarBuf = null;
 const PLANAR_MAP = { pelvis: 'pelvis_torsoControl', spine: 'lumbar2', chest: 'ribcage', neck: 'neck1', head: 'head',
   clav: 'clavicle', shoulder: 'upperArm', elbow: 'foreArm', hand: 'hand', hip: 'thigh', knee: 'calf', foot: 'footControl', toe: 'footToes' };
-export const PLANAR_DEFAULT = { muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, shoulders: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
+export const PLANAR_DEFAULT = { muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
 export async function buildPlanar(body = {}, color = '#c9c6c1') {
   planarBuf ||= fetch(new URL('../vendor/models/planar-humans.glb', import.meta.url)).then((r) => { if (!r.ok) throw new Error('figure model missing'); return r.arrayBuffer(); });
   const gltf = await new Promise(async (res, rej) => new T.GLTFLoader().parse((await planarBuf).slice(0), '', res, rej));
@@ -1110,20 +1110,26 @@ function shapePlanar(mesh, b, H) {
     }
     // breasts, pecs and seat: soft rounded pads that swell from a point inside the body, only
     // where that fat / muscle sits (not the whole torso), and only on the torso / thighs
-    const wPad = wT + wOf(i, (n) => /^thigh/.test(n));
-    if (wPad > 0.01) {
-      for (const sd of ['L', 'R']) {
-        const br = lm['breast' + sd], bt = lm['butt' + sd];
-        if (br) {
-          const fem = b.sex !== 'male';
-          // breast: a round mound under the landmark, a little heavier at the bottom
-          pad(v, br, 1, 0.078 * H, (fem ? 0.05 * s(b.breast) : 0.022 * s(b.breast) + 0.012 * s(b.muscle)) * H, fem ? 0.3 : 0, wT);
-          // pecs / upper chest: a flatter pad higher up and toward the middle
-          pec.set(spineX + (br.x - spineX) * 0.75, br.y + 0.05 * H, br.z - 0.012 * H);
-          pad(v, pec, 1, 0.085 * H, (0.022 * s(b.chest) + 0.008 * s(b.muscle)) * H, 0, wT);
-        }
-        // each cheek only on its own side (fading to nothing at the cleft), so the two never stack
-        if (bt) { const side = (v.x - spineX) * (sd === 'L' ? 1 : -1), k = sst(-0.004 * H, 0.03 * H, side); if (k > 0) pad(v, bt, -1, 0.085 * H, (0.03 * s(b.butt) + 0.008 * s(b.fat)) * H, 0.25, wPad * k); }
+    // breasts: only the ribcage's own skin (never the shoulders, arms or collar), and only inside
+    // the breast's own footprint. Size = how wide the breast is, volume = how far it stands out.
+    const wB = wOf(i, (n) => /^(ribcage|lumbar)/.test(n)), wSeat = wOf(i, (n) => /^(pelvis|lumbar1|thigh)/.test(n));
+    for (const sd of ['L', 'R']) {
+      const br = lm['breast' + sd], bt = lm['butt' + sd];
+      const onSide = (x) => sst(-0.004 * H, 0.03 * H, (x - spineX) * (sd === 'L' ? 1 : -1));
+      if (br && wB > 0.01) {
+        const fem = b.sex !== 'male', r = (fem ? 0.066 : 0.07) * H * (1 + 0.4 * s(b.breastSize));
+        const amt = (fem ? 0.045 * s(b.breast) : 0.02 * s(b.breast) + 0.01 * s(b.muscle)) * H + (fem ? 0.012 * s(b.breastSize) * H : 0);
+        // nothing above the top of the breast or out past its side (the armpit / shoulder)
+        const m = onSide(v.x) * (1 - sst(br.y + 0.45 * r, br.y + 0.8 * r, v.y)) * (1 - sst(0.75 * r, 1.0 * r, Math.abs(v.x - br.x) * (Math.abs(v.x - spineX) > Math.abs(br.x - spineX) ? 1.3 : 1)));
+        if (m > 0) pad(v, br, 1, r, amt, fem ? 0.3 : 0, wB * m);
+      }
+      // pecs / upper chest (the Chest slider): a flatter pad higher up and toward the middle
+      if (br && wT > 0.01) { pec.set(spineX + (br.x - spineX) * 0.75, br.y + 0.05 * H, br.z - 0.012 * H); pad(v, pec, 1, 0.085 * H, (0.022 * s(b.chest) + 0.008 * s(b.muscle)) * H, 0, wT * onSide(v.x)); }
+      // seat: each cheek only on its own side (fading to nothing at the cleft); size and volume
+      if (bt && wSeat > 0.01) {
+        const r = 0.08 * H * (1 + 0.4 * s(b.buttSize)), amt = (0.03 * s(b.butt) + 0.008 * s(b.fat) + 0.008 * s(b.buttSize)) * H;
+        const m = onSide(v.x) * (1 - sst(bt.y + 0.55 * r, bt.y + 0.9 * r, v.y));
+        if (m > 0) pad(v, bt, -1, r, amt, 0.25, wSeat * m);
       }
     }
     // hips and seat carry into the top of the thighs
