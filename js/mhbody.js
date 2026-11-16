@@ -504,7 +504,7 @@ export function rigImported(node, mapNames) {
     pelvisBone.position.copy(pelvisRest).add(dp.applyQuaternion(pelvisBone.parent.getWorldQuaternion(new T.Quaternion()).invert().multiply(node.getWorldQuaternion(new T.Quaternion()))).divideScalar(parentScale || 1));
     node.updateMatrixWorld(true);
   };
-  return { root: node, joints, world, H: H || 1.7, rest: MH_REST, drive, imported: true, mapped: Object.keys(map).length };
+  return { root: node, joints, world, H: H || 1.7, rest: MH_REST, drive, imported: true, mapped: Object.keys(map).length, bindQ };
 }
 
 // rest pose: arms relaxed down, fingers as sculpted (no extra curl)
@@ -927,6 +927,12 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
     }
     node.updateMatrixWorld(true);
   };
+  // at rest the figure stands the way it was modelled (arms relaxed, palms in), not in the
+  // generic rest pose, which twisted its forearms
+  const rest = {};
+  const R2D = 180 / Math.PI;
+  for (const [n, q] of Object.entries(fig.bindQ || {})) { const e = new T.Euler().setFromQuaternion(q); rest[n] = [e.x * R2D, e.y * R2D, e.z * R2D]; }
+  fig.rest = rest;
   fig.mat = mat; fig.planar = true; fig.H = height;
   return fig;
 }

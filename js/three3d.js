@@ -920,7 +920,7 @@ export function tool3d(app) {
     down(p, ev) {
       const L = this.layer(); if (!L) { toast('Select a 3D layer'); return false; }
       if (!runtimes.get(L)) { this.enter(); return false; }
-      this.p0 = p; this.last = p; this.moved = false; this.before = this.snapshot(); this.jointBefore = this.joint; this.dragIK = false;
+      this.p0 = p; this.last = p; this.moved = false; this.before = this.snapshot(); this.jointBefore = this.joint; this.dragIK = false; this.dragPose = false;
       // the camera hand (Settings › 3D camera): fingers (or the pencil) always turn the camera,
       // in any mode; a tap still selects
       const camWith = app.settings.cam3d || 'touch', pt = ev && ev.pointerType;
@@ -934,6 +934,9 @@ export function tool3d(app) {
         // the selected figure: drag a hand / foot (or its fingers / toes) and the arm / leg follows (IK)
         const eff = hit && hit.joint && (hit.joint.replace(/^(thumb|index|middle|ring|pinky)([LR])\d$/, 'hand$2').replace(/^toe([LR])$/, 'foot$1'));
         if (e && hit.objId === this.sel && e.rig === 'human' && this.ik && M.IK_CHAINS[eff]) { this.joint = eff; this.dragIK = true; this.highlight(this.joint); }
+        // any other part of the selected figure: drag it to pose it (no need to switch to Pose);
+        // the hips / root and empty space turn the camera
+        else if (e && hit.objId === this.sel && e.joints && hit.joint && !/^(hips|root|pelvis)$/i.test(hit.joint) && app.settings.dragPose3d !== false) { this.joint = hit.joint; this.dragPose = true; this.highlight(this.joint); }
         this.dragging = true; return;
       }
       if (this.mode === 'pose' || this.mode === 'move' || this.mode === 'rotate' || this.mode === 'scale') {
@@ -942,7 +945,8 @@ export function tool3d(app) {
           this.sel = hit.objId;
           if (this.mode === 'pose') { const e = runtimes.get(L).objs.get(hit.objId); this.joint = e && e.joints && hit.joint ? hit.joint : null; this.highlight(this.joint); }
           this.dragging = true;
-        } else this.dragging = !!this.sel && this.mode !== 'pose';
+        } else if (this.mode === 'pose') { this.tapHit = null; this.camDrag = true; this.dragging = true; return; } // empty space turns the camera
+        else this.dragging = !!this.sel;
         app.updateCtxBar();
       } else this.dragging = true;
     },
@@ -957,17 +961,17 @@ export function tool3d(app) {
         if (!this.moved) return;
         const pos = new T.Vector3(...s.camera.pos), tgt = new T.Vector3(...s.camera.target);
         const off = pos.clone().sub(tgt), sph = new T.Spherical().setFromVector3(off);
-        sph.theta -= dx * 0.006; sph.phi = clamp(sph.phi - dy * 0.006, 0.05, Math.PI - 0.05);
+        const ka = 0.006 * this.gain(); sph.theta -= this.scr(dx) * ka; sph.phi = clamp(sph.phi - this.scr(dy) * ka, 0.05, Math.PI - 0.05);
         off.setFromSpherical(sph); s.camera.pos = tgt.clone().add(off).toArray();
         this.redraw(this.previewScale()); return;
       }
       const pos = new T.Vector3(...s.camera.pos), tgt = new T.Vector3(...s.camera.target);
       const right = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 0), up = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
       const unit = (dist) => (2 * Math.tan((cam.fov * Math.PI / 180) / 2) * dist) / app.doc.height;
-      if (this.mode === 'orbit' || (this.mode === 'object' && !this.dragIK)) {
+      if (this.mode === 'orbit' || (this.mode === 'object' && !this.dragIK && !this.dragPose)) {
         if (this.mode === 'object' && !this.moved) return; // a tap selects (on release)
         const off = pos.clone().sub(tgt), sph = new T.Spherical().setFromVector3(off);
-        sph.theta -= dx * 0.006; sph.phi = clamp(sph.phi - dy * 0.006, 0.05, Math.PI - 0.05);
+        const ka = 0.006 * this.gain(); sph.theta -= this.scr(dx) * ka; sph.phi = clamp(sph.phi - this.scr(dy) * ka, 0.05, Math.PI - 0.05);
         off.setFromSpherical(sph); s.camera.pos = tgt.clone().add(off).toArray();
       } else if (this.mode === 'pan') {
         const k = unit(pos.distanceTo(tgt)), d = right.multiplyScalar(-dx * k).add(up.multiplyScalar(dy * k));
@@ -978,7 +982,7 @@ export function tool3d(app) {
       } else {
         const e = rt.objs.get(this.sel); if (!e) return;
         const o = e.data;
-        const qd = new T.Quaternion().setFromAxisAngle(up, dx * 0.01).multiply(new T.Quaternion().setFromAxisAngle(right, dy * 0.01));
+        const ka = 0.008 * this.gain(), qd = new T.Quaternion().setFromAxisAngle(up, this.scr(dx) * ka).multiply(new T.Quaternion().setFromAxisAngle(right, this.scr(dy) * ka));
         if (this.mode === 'move') {
           const k = unit(cam.position.distanceTo(e.node.position));
           o.pos = e.node.position.clone().add(right.clone().multiplyScalar(dx * k)).add(up.clone().multiplyScalar(-dy * k)).toArray();
@@ -990,9 +994,9 @@ export function tool3d(app) {
           // drag a hand / foot: the arm / leg follows (two-bone IK), like Clip Studio
           const j = e.joints[this.joint], at = j.getWorldPosition(new T.Vector3());
           const k = unit(cam.position.distanceTo(at));
-          const target = at.add(right.clone().multiplyScalar(dx * k)).add(up.clone().multiplyScalar(-dy * k));
+          const g = this.pg(); const target = at.add(right.clone().multiplyScalar(dx * k * g)).add(up.clone().multiplyScalar(-dy * k * g));
           for (const n of M.solveIK(e.joints, this.joint, target)) o.pose[n] = e.joints[n].quaternion.toArray();
-        } else if (this.mode === 'pose' && this.joint && e.joints) {
+        } else if ((this.mode === 'pose' || this.dragPose) && this.joint && e.joints) {
           // Clip Studio-style: the dragged part follows the pencil — the joint turns so the end of
           // its bone (the next joint along) stays under the pencil, 1:1 at any zoom / distance
           const j = e.joints[this.joint];
@@ -1000,13 +1004,18 @@ export function tool3d(app) {
           const pq = j.parent.getWorldQuaternion(new T.Quaternion());
           let local = null;
           if (tip) {
+            // relative: the bone's end moves by how far the pencil moved (no jump to the pencil),
+            // scaled by the sensitivity
             const at = j.getWorldPosition(new T.Vector3());
             const plane = new T.Plane().setFromNormalAndCoplanarPoint(cam.getWorldDirection(new T.Vector3()), tip);
-            const hit = this.rayAt(p, cam).ray.intersectPlane(plane, new T.Vector3());
-            if (hit && hit.distanceTo(at) > 1e-4 && tip.distanceTo(at) > 1e-4) {
-              let w = new T.Quaternion().setFromUnitVectors(tip.clone().sub(at).normalize(), hit.clone().sub(at).normalize());
-              if (this.fineRot) w = new T.Quaternion().slerp(w, 0.25);
-              local = pq.clone().invert().multiply(w).multiply(pq).multiply(j.quaternion);
+            const h1 = this.rayAt(p, cam).ray.intersectPlane(plane, new T.Vector3());
+            const h0 = this.rayAt({ x: p.x - dx, y: p.y - dy }, cam).ray.intersectPlane(plane, new T.Vector3());
+            if (h1 && h0 && tip.distanceTo(at) > 1e-4) {
+              const to = tip.clone().add(h1.sub(h0).multiplyScalar(this.pg()));
+              if (to.distanceTo(at) > 1e-4) {
+                const w = new T.Quaternion().setFromUnitVectors(tip.clone().sub(at).normalize(), to.sub(at).normalize());
+                local = pq.clone().invert().multiply(w).multiply(pq).multiply(j.quaternion);
+              }
             }
           }
           if (!local) local = pq.clone().invert().multiply(qd).multiply(pq).multiply(j.quaternion);
@@ -1038,8 +1047,8 @@ export function tool3d(app) {
       if (this.mode === 'object') {
         if (!this.moved && !this.tapHit && this.p0) { const p0 = this.p0; this.tapOtherLayer(p0).then((ok) => { if (!ok) this.tapSelect(null); }); this.commit('Orbit camera', this.before); this.redraw(1); return; }
         if (!this.moved) this.tapSelect(this.tapHit);
-        this.commit(this.dragIK ? 'Pose' : 'Orbit camera', this.before);
-        this.dragIK = false; this.redraw(1); return;
+        this.commit(this.dragIK || this.dragPose ? 'Pose' : 'Orbit camera', this.before);
+        this.dragIK = false; this.dragPose = false; this.redraw(1); return;
       }
       if (!this.moved && (this.mode === 'move' || this.mode === 'rotate' || this.mode === 'scale') && !this.pick(this.p0)) { this.sel = null; app.updateCtxBar(); }
       this.commit({ orbit: 'Orbit camera', pan: 'Pan camera', zoom: 'Zoom camera', move: 'Move object', rotate: 'Rotate object', scale: 'Scale object', pose: 'Pose' }[this.mode], this.before);
@@ -1125,8 +1134,8 @@ export function tool3d(app) {
       }
       if (g.handle[0] === 'r') {
         let ang;
-        if (g.ts) { const d = new T.Vector2(p.x, p.y).sub(g.pp); g.pp = new T.Vector2(p.x, p.y); ang = d.dot(g.ts) / g.ts.lengthSq() * (this.fineRot ? 0.25 : 1); }
-        else ang = (now && g.last ? Math.atan2(new T.Vector3().crossVectors(g.last, now).dot(g.axis), g.last.dot(now)) : (dx - dy) * 0.01) * (this.fineRot ? 0.25 : 1);
+        if (g.ts) { const d = new T.Vector2(p.x, p.y).sub(g.pp); g.pp = new T.Vector2(p.x, p.y); ang = d.dot(g.ts) / g.ts.lengthSq() * this.pg(); }
+        else ang = (now && g.last ? Math.atan2(new T.Vector3().crossVectors(g.last, now).dot(g.axis), g.last.dot(now)) : (dx - dy) * 0.01) * this.pg();
         g.last = now;
         g.total += ang; app.showHud && app.showHud(`${g.total >= 0 ? '+' : ''}${Math.round(g.total * 180 / Math.PI)}°`, 900);
         const q = new T.Quaternion().setFromAxisAngle(g.axis, ang);
@@ -1165,6 +1174,12 @@ export function tool3d(app) {
     // where a joint's bone ends (the point that follows the pencil when it's dragged): the next
     // joint along the body (spine → chest → neck → head, shoulder → elbow → hand…), or for an
     // end joint (head, hand without fingers, toe) a point along its own axis
+    // how strongly a drag turns / poses things (Settings › 3D › Sensitivity, Fine rotation)
+    gain() { const g = app.settings.sens3d ?? 0.6; return g * (this.fineRot ? 0.25 : 1); },
+    // posing / rings: ¾ of the pencil's movement at the default sensitivity
+    pg() { return Math.min(1.25, this.gain() / 0.8); },
+    // a drag of doc px in screen px (so turning the model feels the same at any canvas zoom)
+    scr(v) { return v * ((app.view && app.view.zoom) || 1); },
     poseTip(e, name) {
       const j = e.joints[name]; if (!j) return null;
       const kids = j.children.filter((c) => c.name && e.joints[c.name] === c);
@@ -1300,8 +1315,9 @@ export function tool3d(app) {
       if (e.joints) {
         out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), human && btn('Clip Studio poses…', () => this.cspPoseMenu()), btn('Reset pose', () => this.resetPose())),
           human && switchRow('IK (drag a hand / foot to move the limb)', this.ik, (v) => { this.ik = v; app.updateCtxBar(); }),
+          field('Sensitivity', { min: 0.2, max: 1.5, step: 0.05, value: app.settings.sens3d ?? 0.6, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { app.settings.sens3d = v; app.applySettings(); } }),
           switchRow('Fine rotation (¼ speed)', !!this.fineRot, (v) => { this.fineRot = v; store.prefs.set('fineRot', v); }),
-          h('p', { class: 'hint' }, this.joint ? `${this.jointLabel(this.joint)}: drag the rings to turn it. Tap it again to go back to the whole model.` : 'Tap a body part of the selected model to turn that joint with the rings.')));
+          h('p', { class: 'hint' }, this.joint ? `${this.jointLabel(this.joint)}: drag it or its rings to turn it. Drag empty space to turn the camera.` : 'Drag a body part of the selected model to pose it, empty space to turn the camera. Tap a part for its rings.')));
       }
       if (o.kind === 'model' && !e.joints) {
         out.push(sec('Pose', h('p', { class: 'hint' }, o.autorig ? 'Auto-rig couldn’t fit a skeleton to this model.' : 'This model has no skeleton. If it’s one standing person (arms out or down, like a base mesh), Inkwell can fit one so it poses like the drawing figure: poses, Clip Studio poses, IK. Works best on plain bodies; capes and very wide clothes may stretch in big poses.'),

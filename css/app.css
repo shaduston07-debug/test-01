@@ -962,3 +962,6 @@ body.zooming #gallery, body.zooming #gallery * { -webkit-backdrop-filter: none !
 .csp-node .csp-name small { display: block; font-size: 11px; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; }
 .asset-card .asset-pose { display: inline-block; margin-top: 3px; padding: 1px 7px; border-radius: 8px; font-size: 11px; font-style: normal; background: #2f9e5a; color: #fff; }
 .asset-card .asset-pose.no { background: var(--fill-1); color: inherit; opacity: 0.75; }
+.set-sub { margin: -2px 0 6px 12px; padding-left: 10px; border-left: 2px solid var(--line, rgba(127,127,127,.25)); }
+.set-h { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; opacity: .55; margin: 14px 0 4px; }
+.set-pane .row-btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
