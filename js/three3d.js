@@ -1551,6 +1551,17 @@ export function tool3d(app) {
         } });
         el.append(b);
       }
+      // the gap between the 3rd and 4th tab sits level with the saved-sizes (bookmark) button
+      const place = () => {
+        const mk = document.getElementById('btn-points'), t = el.children;
+        if (!mk || t.length < 4 || el.hidden) return;
+        const sr = sb.getBoundingClientRect(), mr = mk.getBoundingClientRect();
+        if (!mr.height) return;
+        const gap = (t[2].offsetTop + t[2].offsetHeight + t[3].offsetTop) / 2;
+        el.style.transform = 'none'; el.style.top = Math.round(mr.top + mr.height / 2 - sr.top - gap) + 'px';
+      };
+      requestAnimationFrame(place);
+      if (!this._tabsResize) { this._tabsResize = true; addEventListener('resize', () => { const e2 = document.getElementById('tabs3d'); if (e2 && !e2.hidden) this.modeTabs(true); }); }
     },
     showModelsButton(on) {
       this.modeTabs(on);
