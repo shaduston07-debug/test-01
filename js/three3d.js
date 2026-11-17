@@ -1169,7 +1169,12 @@ export function tool3d(app) {
       const at = (q) => {
         const hits = this.rayAt(q, rt.camera).intersectObjects(picks, false);
         // arrows, the floor square and the ball win over the rings they cross
-        const hit = hits.find((x) => x.object.userData.handle[0] === 'm' || x.object.userData.handle === 'sc') || hits[0];
+        let hit = hits.find((x) => x.object.userData.handle[0] === 'm' || x.object.userData.handle === 'sc');
+        if (!hit && hits.length) {
+          // rings crossing each other: the one most facing you is the one meant
+          const face = (hd) => Math.abs(view.dot(new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]).applyQuaternion(rt.gizmo.quaternion)));
+          hit = hits.slice().sort((u, w) => face(w.object.userData.handle) - face(u.object.userData.handle))[0];
+        }
         return hit ? hit.object.userData.handle : null;
       };
       let h0 = at(p); if (h0) return h0;
@@ -1194,6 +1199,10 @@ export function tool3d(app) {
         const p0 = this.gz.c.clone().add(this.gz.last), p1 = this.gz.c.clone().add(this.gz.last.clone().applyAxisAngle(axis, 0.01));
         const ts = toDoc(p1).sub(toDoc(p0)).multiplyScalar(100);
         if (ts.length() > 1) { this.gz.ts = ts.setLength(Math.max(ts.length(), 60)); this.gz.pp = new T.Vector2(p.x, p.y); }
+        // a ring that faces you (the blue one, seen from the front) is turned by going round it:
+        // the turn follows the pencil round the ring's centre on screen, 1:1
+        const facing = axis.dot(rt.camera.getWorldDirection(new T.Vector3()));
+        if (Math.abs(facing) > 0.55) { this.gz.round = { c: toDoc(this.gz.c), sign: facing < 0 ? -1 : 1 }; this.gz.pp = new T.Vector2(p.x, p.y); }
       }
       if (handle === 'sc') { this.gz.d0 = this.gz.last; this.gz.s0 = e.data.scale || 1; this.gz.p0 = e.node.getWorldPosition(new T.Vector3()); }
       return true;
@@ -1230,7 +1239,10 @@ export function tool3d(app) {
       }
       if (g.handle[0] === 'r') {
         let ang;
-        if (g.ts) { const d = new T.Vector2(p.x, p.y).sub(g.pp); g.pp = new T.Vector2(p.x, p.y); ang = d.dot(g.ts) / g.ts.lengthSq() * this.pg(); }
+        if (g.round) {
+          const a = g.pp.clone().sub(g.round.c), b = new T.Vector2(p.x, p.y).sub(g.round.c); g.pp = new T.Vector2(p.x, p.y);
+          ang = a.length() < 2 || b.length() < 2 ? 0 : Math.atan2(a.x * b.y - a.y * b.x, a.dot(b)) * g.round.sign * (this.fineRot ? 0.25 : 1);
+        } else if (g.ts) { const d = new T.Vector2(p.x, p.y).sub(g.pp); g.pp = new T.Vector2(p.x, p.y); ang = d.dot(g.ts) / g.ts.lengthSq() * this.pg(); }
         else ang = (now && g.last ? Math.atan2(new T.Vector3().crossVectors(g.last, now).dot(g.axis), g.last.dot(now)) : (dx - dy) * 0.01) * this.pg();
         g.last = now;
         g.total += ang; app.showHud && app.showHud(`${g.total >= 0 ? '+' : ''}${Math.round(g.total * 180 / Math.PI)}°`, 900);
