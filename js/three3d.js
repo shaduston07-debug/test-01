@@ -346,7 +346,7 @@ async function reconcile(layer, rt) {
     const o = want.get(id);
     const diff = o ? Object.keys({ ...o, ...e.data }).filter((k) => !LIGHT_KEYS.has(k) && JSON.stringify(o[k]) !== JSON.stringify(e.data[k])) : [];
     // only a planar figure's body changed (same sex): reshape in place, no rebuild
-    if (o && diff.length && diff.every((k) => k === 'body' || k === 'name') && e.fig && e.fig.reshape && o.body && o.body.sex === e.fig.sex) {
+    if (o && diff.length && diff.every((k) => k === 'body' || k === 'name') && liveOK(e, o.body)) {
       e.data = o; try { e.fig.reshape(bodyOf(o)); } catch (err) { console.warn('reshape', err); } syncObject(e); continue;
     }
     const heavy = diff.length > 0;
@@ -361,15 +361,19 @@ const ICON_REDO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" s
 // sliders that start at the model's own shape (they only add, never cave it in): the breast
 // ones always, every body slider while "Sliders only add" is on (the default)
 const BASE0 = new Set(['breast', 'breastSize']);
+const BIG = new Set(['breast', 'breastSize']); // these go up to +200%
 let APP = null; // the app, once the 3D tool is made
 const noShrink = () => !APP || APP.settings.bodyNoShrink !== false;
 const bodyOf = (o) => ({ ...o.body, noShrink: noShrink() });
+// arm / leg length change the skeleton: those need the figure built again, the rest reshapes live
+const limbsOf = (b) => (b.armLen ?? 0.5) + '|' + (b.legLen ?? 0.5) + '|' + noShrink();
+const liveOK = (e, b) => e && e.fig && e.fig.reshape && b && b.sex === e.fig.sex && limbsOf(b) === e.fig.limbs;
 // after the switch changes: every planar figure on every 3D layer takes the new rule
 export function refreshBodies() {
   const app = APP; if (!app) return;
   for (const L of (app.doc ? app.doc.items : [])) {
     const rt = L.type === '3d' && runtimes.get(L); if (!rt) continue;
-    for (const e of rt.objs.values()) if (e.fig && e.fig.reshape && e.data.body) { try { e.fig.reshape(bodyOf(e.data)); syncObject(e); } catch (err) { console.warn('reshape', err); } }
+    for (const e of rt.objs.values()) if (e.fig && e.fig.reshape && e.data.body && liveOK(e, e.data.body)) { try { e.fig.reshape(bodyOf(e.data)); syncObject(e); } catch (err) { console.warn('reshape', err); } }
     render3D(L, app.doc, 1).then(() => app.requestRender()).catch(() => {});
   }
 }
@@ -937,7 +941,7 @@ export function tool3d(app) {
       fn();
       // planar figures reshape live while a slider moves (once per frame), no rebuild
       const le = rebuild && this.selEntry();
-      if (le && le.fig && le.fig.reshape && le.data.body && le.data.body.sex === le.fig.sex) {
+      if (le && liveOK(le, le.data.body)) {
         if (!this.bodyRaf) this.bodyRaf = requestAnimationFrame(() => {
           this.bodyRaf = 0; const e2 = this.selEntry(); if (!e2 || !e2.fig || !e2.fig.reshape) return;
           try { e2.fig.reshape(bodyOf(e2.data)); } catch (err) { console.warn('reshape', err); }
@@ -1364,12 +1368,12 @@ export function tool3d(app) {
       out.push(h('div', { class: 'p3d-title' }, o.name || o.kind));
       if (o.kind === 'figure' && o.rig === 3) {
         const b = o.body, re = (fn) => this.edit('Body', fn, true);
-        const sl = (label, key) => { const b0 = BASE0.has(key) || noShrink(); return field(label, { min: b0 ? 50 : 0, max: 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
+        const sl = (label, key) => { const b0 = BASE0.has(key) || noShrink(); return field(label, { min: b0 ? 50 : 0, max: BIG.has(key) ? 150 : 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
         out.push(sec('Body',
           h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => re(() => { b.sex = v; b.height = v === 'male' ? 1.75 : 1.62; o.name = o.name.replace(/\((fe)?male\)/, '(' + v + ')'); }))),
           h('div', { class: 'p3d-lab' }, 'Physique — tap or drag'), this.shapePad(o),
           field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => re(() => { b.height = v; }) }),
-          sl('Musculature', 'muscle'), sl('Shoulder width', 'shoulders'), sl('Traps', 'traps'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
+          sl('Musculature', 'muscle'), sl('Arm length', 'armLen'), sl('Leg length', 'legLen'), sl('Shoulder width', 'shoulders'), sl('Traps', 'traps'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
           switchRow('Sliders only add (0 = the model\'s own shape)', noShrink(), (v) => { app.settings.bodyNoShrink = v; app.applySettings(); refreshBodies(); this.panelRefresh(); }),
           grid(btn('More…', () => this.bodyMore(o)), btn('My bodies…', () => this.bodiesMenu(o)), btn('Save body…', () => this.saveBody(o)), btn('Reset body', () => re(() => { Object.assign(b, MH.PLANAR_DEFAULT, { height: b.sex === 'male' ? 1.75 : 1.62 }); setTimeout(() => this.panelRefresh(), 400); })))));
       }
@@ -1520,14 +1524,14 @@ export function tool3d(app) {
     },
     bodyMore(o) {
       const b = o.body, re = (fn) => this.edit('Body', fn, true);
-      const sl = (label, key) => { const b0 = BASE0.has(key) || noShrink(); return field(label, { min: b0 ? 50 : 0, max: 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
+      const sl = (label, key) => { const b0 = BASE0.has(key) || noShrink(); return field(label, { min: b0 ? 50 : 0, max: BIG.has(key) ? 150 : 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
       const group = (t, ...kids) => h('div', {}, h('div', { class: 'menu-section' }, t), ...kids);
       const body = h('div', { class: 'p3d' },
         group('Build', sl('Musculature', 'muscle'), sl('Body fat', 'fat')),
         group('Torso', sl('Shoulder width', 'shoulders'), sl('Traps', 'traps'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize')),
         group('Head & neck', sl('Head size', 'head'), sl('Neck', 'neck')),
-        group('Arms', sl('Upper arms', 'arms'), sl('Forearms', 'forearms'), sl('Hands', 'hands')),
-        group('Legs', sl('Thighs', 'thighs'), sl('Lower legs', 'calves'), sl('Feet', 'feet')));
+        group('Arms', sl('Arm length', 'armLen'), sl('Upper arms', 'arms'), sl('Forearms', 'forearms'), sl('Hands', 'hands')),
+        group('Legs', sl('Leg length', 'legLen'), sl('Thighs', 'thighs'), sl('Lower legs', 'calves'), sl('Feet', 'feet')));
       // a side window instead of a dialog over the middle: the canvas slides left so the figure
       // sits in the free space and every change can be watched; it slides back on close
       if (isFloating('3dbody')) closeFloat('3dbody');

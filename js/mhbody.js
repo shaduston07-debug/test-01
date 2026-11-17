@@ -866,7 +866,7 @@ export function geometricRigMap(node) {
 let planarBuf = null;
 const PLANAR_MAP = { pelvis: 'pelvis_torsoControl', spine: 'lumbar2', chest: 'ribcage', neck: 'neck1', head: 'head',
   clav: 'clavicle', shoulder: 'upperArm', elbow: 'foreArm', hand: 'hand', hip: 'thigh', knee: 'calf', foot: 'footControl', toe: 'footToes' };
-export const PLANAR_DEFAULT = { muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, traps: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
+export const PLANAR_DEFAULT = { armLen: 0.5, legLen: 0.5, muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, traps: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
 export async function buildPlanar(body = {}, color = '#c9c6c1') {
   planarBuf ||= fetch(new URL('../vendor/models/planar-humans.glb', import.meta.url)).then((r) => { if (!r.ok) throw new Error('figure model missing'); return r.arrayBuffer(); });
   const gltf = await new Promise(async (res, rej) => new T.GLTFLoader().parse((await planarBuf).slice(0), '', res, rej));
@@ -882,6 +882,11 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   for (const b of mesh.skeleton.bones) { for (let o = b; o; o = o.parent) keep.add(o); b.traverse((c) => keep.add(c)); }
   const drop = []; gltf.scene.traverse((o) => { if (!keep.has(o)) drop.push(o); });
   for (const o of drop) if (o.parent) o.parent.remove(o);
+  // arm / leg length: the skeleton itself is lengthened (elbows, knees, hands, feet move), so
+  // posing still bends in the right places
+  const nsk = (x) => { const r = ((x ?? 0.5) - 0.5) * 2; return body.noShrink ? Math.max(0, r) : r; };
+  const armK = 1 + 0.3 * nsk(body.armLen), legK = 1 + 0.3 * nsk(body.legLen);
+  if (armK !== 1 || legK !== 1) { gltf.scene.updateMatrixWorld(true); try { lengthenLimbs(mesh, armK, legK); } catch (e) { console.warn("limb length", e); } mesh.boundingBox = null; mesh.boundingSphere = null; gltf.scene.updateMatrixWorld(true); }
   // centred on the floor, at the body's height
   const box = new T.Box3().setFromObject(mesh), H0 = box.max.y - box.min.y, cxm = (box.min.x + box.max.x) / 2;
   const height = body.height || (male ? 1.75 : 1.62), k = height / H0;
@@ -940,13 +945,67 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   fig.mat = mat; fig.planar = true; fig.H = height;
   // live body edits: the shape is worked out again on this same mesh (no reload of the model),
   // height scales the whole figure; only a change of sex needs a new build
-  fig.sex = male ? 'male' : 'female'; fig.builtHeight = height; fig.hk = 1;
+  fig.sex = male ? 'male' : 'female'; fig.limbs = (body.armLen ?? 0.5) + '|' + (body.legLen ?? 0.5) + '|' + !!body.noShrink; fig.builtHeight = height; fig.hk = 1;
   fig.reshape = (b) => {
     const g = mesh.geometry; g.attributes.position.array.set(basePos); g.attributes.normal.array.set(baseNrm);
     shapePlanar(mesh, { ...PLANAR_DEFAULT, ...b }, H0, true);
     fig.hk = (b.height || height) / height;
   };
   return fig;
+}
+
+// Longer / shorter arms and legs: each limb's two segments are stretched along their own line
+// (thickness kept), and everything past them (hand and fingers, foot) moves along. Done on the
+// bind pose — the bones and the skin together — before the figure is rigged.
+function lengthenLimbs(mesh, armK, legK) {
+  const sk = mesh.skeleton, bones = sk.bones, names = bones.map((bn) => (bn.userData.name || bn.name || '').replace(/_\d+$/, ''));
+  const bindInv = new T.Matrix4().copy(mesh.bindMatrix).invert();
+  const world = bones.map((_, k) => sk.boneInverses[k].clone().invert());
+  const head = (k) => new T.Vector3().setFromMatrixPosition(world[k]).applyMatrix4(bindInv);
+  const at = (nm) => { const k = names.indexOf(nm); return k < 0 ? null : head(k); };
+  const chains = [];
+  for (const S of ['L', 'R']) {
+    if (armK !== 1) { const A = at('upperArm.' + S), B = at('foreArm.' + S), C = at('hand.' + S); if (A && B && C) chains.push({ k: armK, A, B, C, seg: (n) => n.endsWith('.' + S) ? (/^upperArm/.test(n) ? 1 : /^foreArm/.test(n) ? 2 : /^(hand|thumb|index|middle|ring|pinky)/.test(n) ? 3 : 0) : 0 }); }
+    if (legK !== 1) { const A = at('thigh.' + S), B = at('calf.' + S), C = at('footControl.' + S) || at('foot.' + S); if (A && B && C) chains.push({ k: legK, A, B, C, seg: (n) => n.endsWith('.' + S) ? (/^thigh/.test(n) ? 1 : /^calf/.test(n) ? 2 : /^(foot|toe)/.test(n) ? 3 : 0) : 0 }); }
+  }
+  if (!chains.length) return;
+  for (const c of chains) { c.B2 = c.A.clone().add(c.B.clone().sub(c.A).multiplyScalar(c.k)); c.C2 = c.B2.clone().add(c.C.clone().sub(c.B).multiplyScalar(c.k)); }
+  // where a point of a segment goes: stretched along the segment, the rest of it kept
+  const mapPt = (c, seg, p) => {
+    if (seg === 3) return p.clone().add(c.C2).sub(c.C);
+    const P0 = seg === 1 ? c.A : c.B, P1 = seg === 1 ? c.B : c.C, Q0 = seg === 1 ? c.A : c.B2;
+    const ax = P1.clone().sub(P0), L = ax.length(); ax.divideScalar(L || 1);
+    const rel = p.clone().sub(P0), t = rel.dot(ax);
+    return Q0.clone().add(ax.clone().multiplyScalar(t * c.k)).add(rel.sub(ax.clone().multiplyScalar(t)));
+  };
+  const mapBone = (k, p) => { for (const c of chains) { const sg = c.seg(names[k]); if (sg) return mapPt(c, sg, p); } return null; };
+  // the skin: each point moved by its bones' share
+  const g = mesh.geometry = mesh.geometry.clone(), P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight;
+  const v = new T.Vector3(), acc = new T.Vector3();
+  for (let i = 0; i < P.count; i++) {
+    v.fromBufferAttribute(P, i); acc.set(0, 0, 0); let wsum = 0, moved = false;
+    for (let j = 0; j < 4; j++) {
+      const w = SW.getComponent(i, j); if (w <= 0) continue;
+      const m = mapBone(SI.getComponent(i, j), v);
+      if (m) moved = true;
+      acc.addScaledVector(m || v, w); wsum += w;
+    }
+    if (moved && wsum > 0) { acc.divideScalar(wsum); P.setXYZ(i, acc.x, acc.y, acc.z); }
+  }
+  P.needsUpdate = true; g.computeBoundingBox(); g.computeBoundingSphere();
+  // the bones: new bind positions, then their own transforms and inverses to match
+  const newWorld = world.map((W, k) => {
+    const m = mapBone(k, head(k)); if (!m) return W.clone();
+    const out = W.clone(); out.setPosition(m.applyMatrix4(mesh.bindMatrix)); return out;
+  });
+  const order = [...bones].sort((a, b) => { let da = 0, db = 0; for (let o = a; o.parent; o = o.parent) da++; for (let o = b; o.parent; o = o.parent) db++; return da - db; });
+  for (const bn of order) {
+    const k = bones.indexOf(bn), pw = bn.parent ? bn.parent.matrixWorld : new T.Matrix4();
+    const local = new T.Matrix4().copy(pw).invert().multiply(newWorld[k]);
+    local.decompose(bn.position, bn.quaternion, bn.scale);
+    bn.updateMatrixWorld(true);
+  }
+  for (let k = 0; k < bones.length; k++) sk.boneInverses[k].copy(newWorld[k]).invert();
 }
 
 // Finger joints for a hand that came with a single bone. Cut across at 60 % of its length the
@@ -1111,7 +1170,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     const r = (base * base + proj * proj) / (2 * proj);          // sphere through base circle and apex
     const ax = new T.Vector3(sd * 0.28, -0.12, 1).normalize();   // breasts point a little out and down
     const apex = new T.Vector3(br.x + sd * 0.1 * base, br.y - 0.15 * base * (bv + bs) / 2, zc).addScaledVector(ax, proj);
-    balloons[sd0] = { sd, r, C: apex.clone().addScaledVector(ax, -r), ax, br, base };
+    balloons[sd0] = { sd, r, C: apex.clone().addScaledVector(ax, -r), B0: apex.clone().addScaledVector(ax, -proj), ax, br, base };
   }
   const limb = (a, c) => { const A = J[a], B = J[c]; if (!A || !B) return null; const d = B.clone().sub(A), L = d.length(); return { A, d: d.divideScalar(L || 1), L }; };
   const LIMBS = [];
@@ -1180,18 +1239,26 @@ function shapePlanar(mesh, b, H, inPlace = false) {
         // the breast's surface: a round shape a little fuller and lower at the bottom (a soft
         // teardrop, not a ball). Points inside it move out onto it; points just outside are lifted
         // a little too, so it blends into the chest instead of sitting on it with a hard edge.
-        dv.copy(v).sub(bal.C);
-        if ((v.x - spineX) * bal.sd > Math.abs(bal.br.x - spineX) * 0.12 && dv.dot(bal.ax) > -0.35 * dv.length()) {
-          const ky = dv.y < 0 ? 0.82 : 1.08;                     // lower half reaches further down
-          q3.copy(dv); q3.y *= ky;
-          const len = q3.length(), r = bal.r, f = 0.16 * r, d = r - len;
-          if (len > 1e-6 && d > -3 * f) {
-            const sp = (x) => 0.5 * (x + Math.sqrt(x * x + f * f)); // smooth max(x, 0)
-            const push = sp(d) - sp(-3 * f) * (1 - Math.max(0, Math.min(1, (d + 3 * f) / (6 * f))));
-            const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n))) * onSide(v.x);
-            const k = Math.max(0, push) / len;
-            q3.multiplyScalar(1 + k * W); q3.y /= ky;
-            v.copy(bal.C).add(q3);
+        if ((v.x - spineX) * bal.sd > Math.abs(bal.br.x - spineX) * 0.12 && q3.copy(v).sub(bal.B0).dot(bal.ax) > -0.6 * bal.base) {
+          // worked out in a space squashed a little at the bottom (so the real shape hangs lower)
+          const sq = (p3, out) => { out.copy(p3).sub(bal.C); out.y *= out.y < 0 ? 0.82 : 1.08; return out; };
+          const ps = sq(v, dv), bs3 = sq(bal.B0, q3);
+          // from the base of the breast on the chest, out through this point to the balloon's skin
+          const dir = ps.clone().sub(bs3), dist = dir.length();
+          if (dist > 1e-6) {
+            dir.divideScalar(dist);
+            const bb = bs3.dot(dir), cc = bs3.lengthSq() - bal.r * bal.r, disc = bb * bb - cc;
+            if (disc > 0) {
+              const t = -bb + Math.sqrt(disc), r = bal.r, f = 0.16 * r, d = t - dist;
+              if (t > 0 && d > -3 * f) {
+                const sp = (x) => 0.5 * (x + Math.sqrt(x * x + f * f)); // smooth max(x, 0)
+                const push = sp(d) - sp(-3 * f) * (1 - Math.max(0, Math.min(1, (d + 3 * f) / (6 * f))));
+                const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n))) * onSide(v.x);
+                ps.addScaledVector(dir, Math.max(0, push) * W);
+                ps.y /= ps.y < 0 ? 0.82 : 1.08;
+                v.copy(bal.C).add(ps);
+              }
+            }
           }
         }
       } else if (br && wB > 0.01 && v.z > br.z - 0.1 * H && b.sex === 'male') {
