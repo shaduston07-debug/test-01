@@ -993,7 +993,7 @@ export function tool3d(app) {
     down(p, ev) {
       const L = this.layer(); if (!L) { toast('Select a 3D layer'); return false; }
       if (!runtimes.get(L)) { this.enter(); return false; }
-      this.p0 = p; this.last = p; this.moved = false; this.before = this.snapshot(); this.jointBefore = this.joint; this.dragIK = false; this.dragPose = false;
+      this.p0 = p; this.last = p; this.moved = false; this.before = this.snapshot(); this.jointBefore = this.joint; this.selBefore = this.sel; this.dragIK = false; this.dragPose = false; this.dragTurn = false;
       // the camera hand (Settings › 3D camera): fingers (or the pencil) always turn the camera,
       // in any mode; a tap still selects
       const camWith = app.settings.cam3d || 'touch', pt = ev && ev.pointerType;
@@ -1012,6 +1012,9 @@ export function tool3d(app) {
         // any other part of the selected figure: drag it to pose it (no need to switch to Pose);
         // the hips / root and empty space turn the camera
         else if (e && hit.objId === this.sel && e.joints && hit.joint && !/^(hips|root|pelvis)$/i.test(hit.joint) && app.settings.dragPose3d !== false) { this.joint = hit.joint; this.dragPose = true; this.highlight(this.joint); }
+        // the selected model's hips / body (or a selected prop): drag to turn it — sideways spins
+        // it round, up / down tilts it (only the model touched)
+        else if (e && hit.objId === this.selBefore) { this.dragTurn = true; }
         this.dragging = true; return;
       }
       if (this.mode === 'pose' || this.mode === 'move' || this.mode === 'rotate' || this.mode === 'scale') {
@@ -1043,7 +1046,15 @@ export function tool3d(app) {
       const pos = new T.Vector3(...s.camera.pos), tgt = new T.Vector3(...s.camera.target);
       const right = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 0), up = new T.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
       const unit = (dist) => (2 * Math.tan((cam.fov * Math.PI / 180) / 2) * dist) / app.doc.height;
-      if (this.mode === 'orbit' || (this.mode === 'object' && !this.dragIK && !this.dragPose)) {
+      if (this.mode === 'object' && this.dragTurn) {
+        if (!this.moved) return;
+        const e = rt.objs.get(this.sel); if (!e) return;
+        const ka = 0.008 * this.gain(), o = e.data;
+        const qy = new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), this.scr(dx) * ka);
+        const qx = new T.Quaternion().setFromAxisAngle(right, this.scr(dy) * ka);
+        o.quat = qy.multiply(qx).multiply(e.node.quaternion).toArray();
+        syncObject(e);
+      } else if (this.mode === 'orbit' || (this.mode === 'object' && !this.dragIK && !this.dragPose)) {
         if (this.mode === 'object' && !this.moved) return; // a tap selects (on release)
         const off = pos.clone().sub(tgt), sph = new T.Spherical().setFromVector3(off);
         const ka = 0.006 * this.gain(); sph.theta -= this.scr(dx) * ka; sph.phi = clamp(sph.phi - this.scr(dy) * ka, 0.05, Math.PI - 0.05);
@@ -1122,8 +1133,8 @@ export function tool3d(app) {
       if (this.mode === 'object') {
         if (!this.moved && !this.tapHit && this.p0) { const p0 = this.p0; this.tapOtherLayer(p0).then((ok) => { if (!ok) this.tapSelect(null); }); this.commit('Orbit camera', this.before); this.redraw(1); return; }
         if (!this.moved) this.tapSelect(this.tapHit);
-        this.commit(this.dragIK || this.dragPose ? 'Pose' : 'Orbit camera', this.before);
-        this.dragIK = false; this.dragPose = false; this.redraw(1); return;
+        this.commit(this.dragIK || this.dragPose ? 'Pose' : this.dragTurn ? 'Rotate object' : 'Orbit camera', this.before);
+        this.dragIK = false; this.dragPose = false; this.dragTurn = false; this.redraw(1); return;
       }
       if (!this.moved && (this.mode === 'move' || this.mode === 'rotate' || this.mode === 'scale') && !this.pick(this.p0)) { this.sel = null; app.updateCtxBar(); }
       this.commit({ orbit: 'Orbit camera', pan: 'Pan camera', zoom: 'Zoom camera', move: 'Move object', rotate: 'Rotate object', scale: 'Scale object', pose: 'Pose' }[this.mode], this.before);
@@ -1309,7 +1320,7 @@ export function tool3d(app) {
     tapSelect(hit) {
       const rt = runtimes.get(this.layer());
       if (!hit) { this.sel = null; this.joint = null; }
-      else if (hit.objId === this.sel) { const e = rt.objs.get(hit.objId); this.joint = e && e.joints && hit.joint && hit.joint !== this.jointBefore ? hit.joint : null; }
+      else if (hit.objId === this.sel && this.selBefore === hit.objId) { const e = rt.objs.get(hit.objId); this.joint = e && e.joints && hit.joint && hit.joint !== this.jointBefore ? hit.joint : null; }
       else { this.sel = hit.objId; this.joint = null; }
       this.highlight(this.joint); app.updateCtxBar(); this.panelRefresh();
     },
@@ -2338,6 +2349,25 @@ export function tool3d(app) {
     },
   };
   return t;
+}
+
+// a 3D layer's picture (colours, shading, outlines; no manipulator) as a normal paint layer: in its
+// place, or as a copy above it with the 3D layer kept
+export async function rasterizeLayer(app, L, keep) {
+  const d = app.doc, i = d.items.indexOf(L); if (i < 0) return;
+  const tool = app.tools && app.tools['3d'];
+  if (tool) { tool.joint = null; tool.highlight && tool.highlight(null); const off = tool.off; tool.off = true; tool.syncGizmo && tool.syncGizmo(); try { await render3D(L, d, 1); } finally { tool.off = off; } }
+  else await render3D(L, d, 1);
+  if (!keep) {
+    structCmd(app, 'Rasterize 3D', () => { L.type = 'raster'; });
+    if (app.tool === '3d') app.setTool('brush');
+    toast('Now a normal paint layer — draw over it'); return;
+  }
+  if (!app.canAddRaster()) return;
+  const l = new Layer(d.width, d.height, { name: L.name + ' (shaded)', groupId: L.groupId });
+  l.canvas.getContext('2d').drawImage(L.canvas, 0, 0); touch(l.canvas);
+  insertLayer(app, l, i + 1);
+  toast('Shaded copy added above the 3D layer');
 }
 
 export async function add3DLayer(app) {

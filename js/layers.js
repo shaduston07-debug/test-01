@@ -552,6 +552,10 @@ function sheetBody(app, it, i, rerender, close, openBlend) {
     h('small', { class: 'sheet-val' }, (it.type === 'raster' || it.type === 'track' ? bm + ' · ' : '') + pct(it.opacity) + ' ›')));
 
   if (it.type === '3d') box.append(section('Layer'), toggle('Lock Layer', 'locked', rerender), toggle('Private (hidden from time-lapse)', 'private', rerender));
+  // the 3D picture, with all its colours and shading, as a normal paint layer
+  if (it.type === '3d') box.append(section('Rasterize'),
+    item('layers', 'Rasterize (shaded) — becomes a paint layer', () => { closeSheet(); import('./three3d.js').then((m) => m.rasterizeLayer(app, it, false)); }),
+    item('layers', 'Shaded copy as a new paint layer (keep the 3D)', () => { closeSheet(); import('./three3d.js').then((m) => m.rasterizeLayer(app, it, true)); }));
   if (it.type === 'raster' || it.type === 'track') {
     box.append(section('Layer'));
     box.append(toggle('Alpha Lock', 'alphaLock', rerender), toggle('Clipping Mask', 'clip', rerender), toggle('Reference', 'reference', rerender), toggle('Lock Layer', 'locked', rerender), toggle('Private (hidden from time-lapse)', 'private', rerender));
