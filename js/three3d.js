@@ -2394,20 +2394,30 @@ export function tool3d(app) {
 // a 3D layer's picture (colours, shading, outlines; no manipulator) as a normal paint layer: in its
 // place, or as a copy above it with the 3D layer kept
 export async function rasterizeLayer(app, L, keep) {
-  const d = app.doc, i = d.items.indexOf(L); if (i < 0) return;
-  const tool = app.tools && app.tools['3d'];
-  if (tool) { tool.joint = null; tool.highlight && tool.highlight(null); const off = tool.off; tool.off = true; tool.syncGizmo && tool.syncGizmo(); try { await render3D(L, d, 1); } finally { tool.off = off; } }
-  else await render3D(L, d, 1);
-  if (!keep) {
-    structCmd(app, 'Rasterize 3D', () => { L.type = 'raster'; });
-    if (app.tool === '3d') app.setTool('brush');
-    toast('Now a normal paint layer — draw over it'); return;
-  }
-  if (!app.canAddRaster()) return;
-  const l = new Layer(d.width, d.height, { name: L.name + ' (shaded)', groupId: L.groupId });
-  l.canvas.getContext('2d').drawImage(L.canvas, 0, 0); touch(l.canvas);
-  insertLayer(app, l, i + 1);
-  toast('Shaded copy added above the 3D layer');
+  const d = app.doc, i = d.items.indexOf(L); if (i < 0 || !L || L.type !== '3d') { toast('Pick a 3D layer'); return; }
+  toast(keep ? 'Making a shaded copy…' : 'Rasterizing…', 4000);
+  try {
+    // a clean, full-size picture (no rings / highlight); if that can't be made, what's on screen
+    const tool = app.tools && app.tools['3d'];
+    const off = tool ? tool.off : null;
+    try {
+      if (tool) { tool.joint = null; tool.highlight && tool.highlight(null); tool.off = true; tool.syncGizmo && tool.syncGizmo(); }
+      await render3D(L, d, 1);
+    } catch (err) { console.warn('3D render for rasterize', err); }
+    finally { if (tool) tool.off = off; }
+    if (!L.canvas) throw new Error('the 3D layer has no picture yet');
+    if (!keep) {
+      structCmd(app, 'Rasterize 3D', () => { L.type = 'raster'; });
+      if (app.tool === '3d') app.setTool('brush');
+      app.changed(); toast('Now a normal paint layer — draw over it'); return;
+    }
+    if (!app.canAddRaster()) return;
+    const l = new Layer(d.width, d.height, { name: L.name + ' (shaded)', groupId: L.groupId });
+    l.canvas.getContext('2d').drawImage(L.canvas, 0, 0, d.width, d.height); touch(l.canvas);
+    insertLayer(app, l, i + 1);
+    app.changed(); app.requestRender();
+    toast('Shaded copy added above the 3D layer');
+  } catch (err) { console.error(err); toast('Could not rasterize: ' + (err.message || err), 5000); }
 }
 
 export async function add3DLayer(app) {

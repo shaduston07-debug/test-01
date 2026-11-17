@@ -97,6 +97,8 @@ function menus() {
       ['Lock layer', () => { const it = active(); if (!it) return; structCmd(app, it.locked ? 'Unlock layer' : 'Lock layer', () => { it.locked = !it.locked; }); rerenderLayers(); }, active() && active().locked ? 'on' : ''],
       ['Lock transparent pixels', () => { const it = active(); if (!it) return; structCmd(app, 'Alpha lock', () => { it.alphaLock = !it.alphaLock; }); rerenderLayers(); }, active() && active().alphaLock ? 'on' : ''],
       ['Reference layer', () => { const it = active(); if (!it) return; structCmd(app, 'Reference', () => { it.reference = !it.reference; }); rerenderLayers(); }, active() && active().reference ? 'on' : ''],
+      ['Rasterize 3D layer (shaded)', () => { const it = active(); if (it && it.type === '3d') import('./three3d.js').then((m) => m.rasterizeLayer(app, it, false)); }, '', !(active() && active().type === '3d')],
+      ['Shaded copy of 3D layer (keep the 3D)', () => { const it = active(); if (it && it.type === '3d') import('./three3d.js').then((m) => m.rasterizeLayer(app, it, true)); }, '', !(active() && active().type === '3d')],
       ['Hide from time-lapse (private)', () => { const it = active(); if (!it) return; structCmd(app, 'Private', () => { it.private = !it.private; }); if (it.private && app.tlapse) app.tlapse.privatized(it); rerenderLayers(); }, active() && active().private ? 'on' : ''],
     ],
     Select: [
