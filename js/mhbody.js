@@ -902,6 +902,7 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   mesh.geometry = mesh.geometry.clone();
   const basePos = mesh.geometry.attributes.position.array.slice(), baseNrm = mesh.geometry.attributes.normal.array.slice();
   mesh.geometry.userData.basePos = basePos;
+  mesh.geometry.userData.adj = pointGraph(mesh.geometry);
   shapePlanar(mesh, { ...PLANAR_DEFAULT, ...body }, H0, true);
   const base = (n) => (n || '').replace(/_\d+$/, '');
   const mapNames = (list) => {
@@ -1206,6 +1207,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     dv.copy(v).sub(C); const len = dv.length(); if (len < 1e-6) return;
     v.addScaledVector(dv, amt * f * Math.min(1, w) / len);
   };
+  const roundPts = new Uint8Array(P.count);
   for (let i = 0; i < P.count; i++) {
     v.fromBufferAttribute(P, i);
     // limbs: thicker / thinner around their bone, muscles bulge mid-way
@@ -1266,7 +1268,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
                 const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n))) * onSide(v.x);
                 ps.addScaledVector(dir, Math.max(0, push) * W);
                 ps.y /= ps.y < 0 ? 0.82 : 1.08;
-                v.copy(bal.C).add(ps);
+                v.copy(bal.C).add(ps); roundPts[i] = 1;
               }
             }
           }
@@ -1338,34 +1340,78 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     }
     P.setXYZ(i, v.x, v.y, v.z);
   }
+  // musculature: more defined — the model's own muscle forms (the difference between its
+  // surface and a smoothed copy of it) are deepened; the head, hands and feet are left alone
+  const def = s(b.muscle);
+  if (def && g.userData.adj) {
+    const { keyOf, adj, members } = g.userData.adj, K = members.length;
+    let detail = g.userData.detail;
+    if (!detail) {
+      const base = g.userData.basePos, cur = new Float32Array(K * 3);
+      for (let k = 0; k < K; k++) { const i = members[k][0]; cur[k * 3] = base[i * 3]; cur[k * 3 + 1] = base[i * 3 + 1]; cur[k * 3 + 2] = base[i * 3 + 2]; }
+      let sm = cur.slice();
+      for (let it = 0; it < 3; it++) {
+        const nx = sm.slice();
+        for (let k = 0; k < K; k++) { const nb = adj[k]; if (!nb.length) continue; let ax = 0, ay = 0, az = 0; for (const q2 of nb) { ax += sm[q2 * 3]; ay += sm[q2 * 3 + 1]; az += sm[q2 * 3 + 2]; } const m = nb.length; nx[k * 3] = (sm[k * 3] + ax / m) / 2; nx[k * 3 + 1] = (sm[k * 3 + 1] + ay / m) / 2; nx[k * 3 + 2] = (sm[k * 3 + 2] + az / m) / 2; }
+        sm = nx;
+      }
+      detail = new Float32Array(K * 3); for (let j = 0; j < K * 3; j++) detail[j] = cur[j] - sm[j];
+      // only the gentle forms: big jumps (open edges, seams, tips) would turn into spikes
+      const cap = 0.006 * H;
+      for (let k = 0; k < K; k++) { const l = Math.hypot(detail[k * 3], detail[k * 3 + 1], detail[k * 3 + 2]); const f = l > cap ? Math.max(0, 2 * cap - l) / l : 1; detail[k * 3] *= f; detail[k * 3 + 1] *= f; detail[k * 3 + 2] *= f; }
+      g.userData.detail = detail;
+    }
+    const kD = def > 0 ? 0.65 * def : 0.5 * def; // negative: softer (when shrinking is allowed)
+    for (let i = 0; i < P.count; i++) {
+      const wSkip = wOf(i, (n) => /^(head|neck|hand|thumb|index|middle|ring|pinky|foot|toe)/.test(n));
+      let w = (1 - Math.min(1, wSkip)) * (roundPts[i] ? 0 : 1);
+      if (b.sex !== 'male' && w > 0) { v.fromBufferAttribute(P, i); for (const sd2 of ['L', 'R']) { const brp = lm['breast' + sd2]; if (brp) { const dd = Math.hypot(v.x - brp.x, v.y - brp.y); w *= sst(0.06 * H, 0.085 * H, dd); if (dd < 0.075 * H && v.z > brp.z - 0.06 * H) roundPts[i] = 1; } } } // breasts stay smooth
+      if (w < 0.01) continue;
+      const k = keyOf[i];
+      P.setXYZ(i, P.getX(i) + detail[k * 3] * kD * w, P.getY(i) + detail[k * 3 + 1] * kD * w, P.getZ(i) + detail[k * 3 + 2] * kD * w);
+    }
+  }
   P.needsUpdate = true; g.computeBoundingBox(); g.computeBoundingSphere();
-  smoothMovedNormals(g, null, H);
+  smoothMovedNormals(g, roundPts, H);
 }
+// the mesh as points (copies of a corner merged) and which points are joined by an edge
+function pointGraph(g) {
+  const P = g.attributes.position, idx = g.index.array, n = P.count, ids = new Map(), keyOf = new Int32Array(n), members = [];
+  for (let i = 0; i < n; i++) {
+    const k = Math.round(P.getX(i) * 1e5) + ',' + Math.round(P.getY(i) * 1e5) + ',' + Math.round(P.getZ(i) * 1e5);
+    let id = ids.get(k); if (id == null) { id = members.length; ids.set(k, id); members.push([]); }
+    keyOf[i] = id; members[id].push(i);
+  }
+  const sets = members.map(() => new Set());
+  for (let t = 0; t < idx.length; t += 3) for (let j = 0; j < 3; j++) { const a = keyOf[idx[t + j]], b = keyOf[idx[t + (j + 1) % 3]]; if (a !== b) { sets[a].add(b); sets[b].add(a); } }
+  return { keyOf, members, adj: sets.map((x) => [...x]) };
+}
+
 // the model keeps its own (planar) normals; where the shape was changed a lot (bigger breasts…)
 // they no longer fit, so there the normals are worked out again from the new surface, smooth
 function smoothMovedNormals(g, smw, H) {
   const P = g.attributes.position, Nr = g.attributes.normal, idx = g.index && g.index.array, base = g.userData.basePos;
   if (!idx || !base) return;
   const n = P.count, moved = new Float32Array(n); let any = false;
-  for (let i = 0; i < n; i++) { let d = Math.hypot(P.getX(i) - base[i * 3], P.getY(i) - base[i * 3 + 1], P.getZ(i) - base[i * 3 + 2]); if (smw && smw[i] > 0.01) d = Math.max(d, 0.002 * H + smw[i] * 0.012 * H); moved[i] = d; if (d > 0.002 * H) any = true; }
+  for (let i = 0; i < n; i++) { const d = Math.hypot(P.getX(i) - base[i * 3], P.getY(i) - base[i * 3 + 1], P.getZ(i) - base[i * 3 + 2]); moved[i] = d; if (d > 0.0005 * H) any = true; }
   if (!any) return;
   const kOf = g.userData.adj && g.userData.adj.keyOf;
-  const key = kOf ? (i) => kOf[i] : (i) => Math.round(base[i * 3] * 1e4) + ',' + Math.round(base[i * 3 + 1] * 1e4) + ',' + Math.round(base[i * 3 + 2] * 1e4);
+  // rounded breasts: shared across the copies of a corner (smooth); everywhere else per corner
+  // copy, so the model's planes and hard edges stay crisp
+  const key = (i) => (smw && smw[i] && kOf ? 'k' + kOf[i] : i);
   const acc = new Map(), a = new T.Vector3(), b = new T.Vector3(), c = new T.Vector3(), fn = new T.Vector3();
   for (let t = 0; t < idx.length; t += 3) {
     const i0 = idx[t], i1 = idx[t + 1], i2 = idx[t + 2];
-    if (moved[i0] < 0.001 * H && moved[i1] < 0.001 * H && moved[i2] < 0.001 * H) continue;
+    if (moved[i0] < 0.0003 * H && moved[i1] < 0.0003 * H && moved[i2] < 0.0003 * H) continue;
     a.fromBufferAttribute(P, i0); b.fromBufferAttribute(P, i1); c.fromBufferAttribute(P, i2);
     fn.subVectors(c, b).cross(a.sub(b)); // area-weighted
     for (const i of [i0, i1, i2]) { const k = key(i); let s = acc.get(k); if (!s) acc.set(k, s = [0, 0, 0]); s[0] += fn.x; s[1] += fn.y; s[2] += fn.z; }
   }
   const o = new T.Vector3(), m = new T.Vector3();
   for (let i = 0; i < n; i++) {
-    if (moved[i] < 0.002 * H) continue;
+    if (moved[i] < 0.0005 * H) continue;
     const s = acc.get(key(i)); if (!s) continue;
-    m.set(s[0], s[1], s[2]).normalize(); o.fromBufferAttribute(Nr, i);
-    const k = Math.min(1, (moved[i] - 0.002 * H) / (0.012 * H));
-    o.lerp(m, k).normalize(); Nr.setXYZ(i, o.x, o.y, o.z);
+    m.set(s[0], s[1], s[2]).normalize(); Nr.setXYZ(i, m.x, m.y, m.z);
   }
   Nr.needsUpdate = true;
 }

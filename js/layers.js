@@ -541,7 +541,7 @@ function sheetBody(app, it, i, rerender, close, openBlend) {
   const item = (icon, label, fn, cls = '') => h('button', { class: 'sheet-item ' + cls, onclick: () => fn() }, h('span', { html: ICONS[icon] || '' }), label);
   const toggle = (label, key, after) => {
     const sw = h('span', { class: 'switch' + (it[key] ? ' on' : '') });
-    return h('button', { class: 'sheet-item', onclick: () => { structCmd(app, label, () => { it[key] = !it[key]; }); sw.classList.toggle('on', it[key]); after && after(); app.requestRender(); } }, h('span', { html: ICONS.check }), label, sw);
+    return h('button', { class: 'sheet-item', onclick: () => { structCmd(app, label, () => { it[key] = !it[key]; }); sw.classList.toggle('on', it[key]); if (key === 'private' && it.private && app.tlapse) app.tlapse.privatized(it); after && after(); app.requestRender(); } }, h('span', { html: ICONS.check }), label, sw);
   };
   const section = (t) => h('div', { class: 'sheet-section' }, t);
 

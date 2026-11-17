@@ -1,7 +1,7 @@
 // Time-lapse: after every change a small frame of the canvas (without private layers) is
 // captured in the background, JPEG-encoded on a worker and stored in IndexedDB in chunks.
 // Replay it in the app, or export full length / 30 seconds as MP4.
-import { h, toast, dialog, makeCanvas, download, clamp } from './util.js';
+import { h, toast, dialog, makeCanvas, download, clamp, seg } from './util.js';
 import { encodeImage } from './pool.js';
 import { encodeVideo } from './video.js';
 import * as store from './storage.js';
@@ -43,6 +43,9 @@ export class Timelapse {
       x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height);
       x.scale(k, k);
       d.composite(x, { frame: d.playhead, bg: d.bgVisible, filter: (it) => !it.private });
+      // which layers have been in the recording (so making one private later knows it's in there)
+      const seen = new Set(i.seen || []); for (const it of d.items) if (!it.private && it.visible !== false && it.id) seen.add(it.id);
+      i.seen = [...seen];
       const blob = await encodeImage(c, 'image/jpeg', 0.82);
       if (d !== this.doc) return;
       this.buf.push(blob); i.count++;
@@ -58,6 +61,23 @@ export class Timelapse {
     if (full || frames.length >= CHUNK) { this.bufChunk++; this.buf = []; }
     try { await store.putTimelapse({ id, frames }); } catch (e) { console.warn('time-lapse save', e); }
   }
+  // parts: a new part starts when a layer that's already in the recording is made private (the
+  // frames already made are pictures — the layer can't be taken out of them afterwards)
+  parts() {
+    const i = this.info(), ps = (i.parts && i.parts.length ? i.parts : [{ start: 0 }]).filter((p) => p.start < Math.max(1, i.count));
+    return ps.map((p, k) => ({ ...p, end: k + 1 < ps.length ? ps[k + 1].start : i.count, n: k + 1 }));
+  }
+  privatized(it) {
+    const i = this.info(); if (!i || !i.on || !i.count || !it) return;
+    if (!(i.seen || []).includes(it.id)) return; // never recorded: nothing to hide
+    if (it.canvas && it.type === 'raster') { try { const c = it.canvas, x = c.getContext('2d'), dd = x.getImageData(0, 0, c.width, c.height).data; let any = false; for (let k = 3; k < dd.length; k += 64) if (dd[k]) { any = true; break; } if (!any) return; } catch { /* keep going */ } }
+    const parts = i.parts && i.parts.length ? i.parts : [{ start: 0 }];
+    if (parts[parts.length - 1].start === i.count) { parts[parts.length - 1].note = `after “${it.name}” was made private`; i.parts = parts; return; }
+    i.parts = [...parts, { start: i.count, note: `after “${it.name}” was made private`, at: Date.now() }];
+    i.seen = (i.seen || []).filter((x) => x !== it.id);
+    this.app.dirtySave = true;
+    toast(`New time-lapse part started without “${it.name}”. The earlier part still shows it (recorded frames can't be changed); pick the part when you replay or export.`, 6000);
+  }
   async frame(n) {
     const c = Math.floor(n / CHUNK);
     if (!this.cache.has(c)) {
@@ -70,7 +90,7 @@ export class Timelapse {
   async reset() {
     const d = this.doc; if (!d) return;
     await store.deleteTimelapse(d.id);
-    this.info().count = 0; this.buf = []; this.bufChunk = 0; this.cache.clear();
+    Object.assign(this.info(), { count: 0, parts: [], seen: [] }); this.buf = []; this.bufChunk = 0; this.cache.clear();
     this.app.dirtySave = true; this.schedule(0);
   }
 
@@ -79,44 +99,54 @@ export class Timelapse {
     await this.flush();
     const i = this.info();
     if (!i.count) { toast('Nothing recorded yet — the time-lapse records as you draw'); return; }
+    const parts = this.parts(); let part = parts[parts.length - 1];
     const cv = h('canvas', { class: 'tl-player' }); cv.width = i.w || 1280; cv.height = i.h || 720;
     const x = cv.getContext('2d');
-    const scrub = h('input', { type: 'range', min: 0, max: i.count - 1, step: 1, value: '0' });
+    const scrub = h('input', { type: 'range', min: 0, max: part.end - part.start - 1, step: 1, value: '0' });
     const label = h('span', { class: 'hint' });
     const playBtn = h('button', { class: 'pill primary' }, 'Pause');
     let n = 0, playing = true, alive = true;
     const show = async (k) => {
-      const b = await this.frame(k); if (!b || !alive) return;
+      const b = await this.frame(part.start + k); if (!b || !alive) return;
       const bm = await createImageBitmap(b);
       if (cv.width !== bm.width || cv.height !== bm.height) { cv.width = bm.width; cv.height = bm.height; }
       x.drawImage(bm, 0, 0); bm.close && bm.close();
-      label.textContent = `${k + 1} / ${i.count}`; scrub.value = k;
+      label.textContent = `${k + 1} / ${part.end - part.start}`; scrub.value = k;
     };
     scrub.oninput = () => { playing = false; playBtn.textContent = 'Play'; n = +scrub.value; show(n); };
-    playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? 'Pause' : 'Play'; if (playing && n >= i.count - 1) n = 0; loop(); };
-    const fps = Math.min(60, Math.max(12, i.count / 20)); // whole replay ≈ 20 s, 12–60 fps
+    const len = () => part.end - part.start;
+    playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? 'Pause' : 'Play'; if (playing && n >= len() - 1) n = 0; loop(); };
+    const fps = () => Math.min(60, Math.max(12, len() / 20)); // whole replay ≈ 20 s, 12–60 fps
     const loop = async () => {
-      while (alive && playing && n < i.count) { const t = performance.now(); await show(n); n++; await new Promise((r) => setTimeout(r, Math.max(0, 1000 / fps - (performance.now() - t)))); }
-      if (n >= i.count) { playing = false; playBtn.textContent = 'Replay'; n = i.count - 1; }
+      while (alive && playing && n < len()) { const t = performance.now(); await show(n); n++; await new Promise((r) => setTimeout(r, Math.max(0, 1000 / fps() - (performance.now() - t)))); }
+      if (n >= len()) { playing = false; playBtn.textContent = 'Replay'; n = len() - 1; }
     };
-    dialog({ title: 'Time-lapse Replay', wide: true, body: h('div', {}, cv, h('div', { class: 'tl-controls' }, playBtn, scrub, label)),
-      actions: [{ label: 'Export…', onClick: () => { alive = false; setTimeout(() => this.exportDialog(), 0); } }, { label: 'Done', primary: true }], onClose: () => { alive = false; } });
+    const chooser = parts.length > 1 ? h('div', { class: 'stack' }, seg(parts.map((p) => [String(p.n), 'Part ' + p.n]), String(part.n), (v) => { part = parts[+v - 1]; scrub.max = len() - 1; n = 0; playing = true; playBtn.textContent = 'Pause'; loop(); }),
+      h('p', { class: 'hint' }, parts.slice(1).map((p) => `Part ${p.n} starts ${p.note || ''}`).join(' · '))) : null;
+    dialog({ title: 'Time-lapse Replay', wide: true, body: h('div', {}, chooser, cv, h('div', { class: 'tl-controls' }, playBtn, scrub, label)),
+      actions: [{ label: 'Export…', onClick: () => { alive = false; setTimeout(() => this.exportDialog(part.n), 0); } }, { label: 'Done', primary: true }], onClose: () => { alive = false; } });
     loop();
   }
 
   // ───────── export ─────────
-  exportDialog() {
+  exportDialog(partN) {
     const i = this.info();
     if (!i.count) { toast('Nothing recorded yet'); return; }
-    dialog({ title: 'Export Time-lapse', body: h('p', {}, `${i.count} frames recorded at ${i.w}×${i.h}. Private layers are never included.`),
-      actions: [{ label: 'Cancel' }, { label: '30 seconds', onClick: () => this.export(true) }, { label: 'Full length', primary: true, onClick: () => this.export(false) }] });
+    const parts = this.parts(); let part = parts.find((p) => p.n === partN) || parts[parts.length - 1];
+    const info = h('p', {}); const say = () => { info.textContent = `${part.end - part.start} frames at ${i.w}×${i.h}. Private layers are never included.`; }; say();
+    const chooser = parts.length > 1 ? h('div', { class: 'stack' }, h('label', {}, 'Part'), seg(parts.map((p) => [String(p.n), 'Part ' + p.n]), String(part.n), (v) => { part = parts[+v - 1]; say(); }),
+      h('p', { class: 'hint' }, parts.slice(1).map((p) => `Part ${p.n} starts ${p.note || ''}`).join(' · ') + '. A layer made private after it was recorded is only left out from the part that starts then.')) : null;
+    dialog({ title: 'Export Time-lapse', body: h('div', {}, chooser, info),
+      actions: [{ label: 'Cancel' }, { label: '30 seconds', onClick: () => this.export(true, part) }, { label: 'Full length', primary: true, onClick: () => this.export(false, part) }] });
   }
-  async export(short) {
+  async export(short, part) {
     await this.flush();
     const i = this.info(), fps = 30;
-    let count = i.count;
-    if (short) count = Math.min(i.count, fps * 30);
-    const pick = (k) => (count === i.count ? k : Math.round((k * (i.count - 1)) / Math.max(1, count - 1)));
+    part ||= { start: 0, end: i.count };
+    const total = part.end - part.start;
+    let count = total;
+    if (short) count = Math.min(total, fps * 30);
+    const pick = (k) => part.start + (count === total ? k : Math.round((k * (total - 1)) / Math.max(1, count - 1)));
     const frames = count + fps; // hold the finished artwork for a second
     toast('Exporting time-lapse…', 120000);
     try {
@@ -129,7 +159,7 @@ export class Timelapse {
         },
         onProgress: (p) => toast(`Exporting time-lapse… ${Math.round(p * 100)}%`, 120000),
       });
-      download(blob, `${(this.doc.name || 'artwork').replace(/[^\w\- ]+/g, '')} time-lapse${short ? ' 30s' : ''}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`);
+      download(blob, `${(this.doc.name || 'artwork').replace(/[^\w\- ]+/g, '')} time-lapse${part.n && this.parts().length > 1 ? ' part ' + part.n : ''}${short ? ' 30s' : ''}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`);
       toast('Time-lapse exported');
     } catch (e) { console.error(e); toast('Time-lapse export failed: ' + e.message, 5000); }
   }

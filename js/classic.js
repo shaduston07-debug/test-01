@@ -97,7 +97,7 @@ function menus() {
       ['Lock layer', () => { const it = active(); if (!it) return; structCmd(app, it.locked ? 'Unlock layer' : 'Lock layer', () => { it.locked = !it.locked; }); rerenderLayers(); }, active() && active().locked ? 'on' : ''],
       ['Lock transparent pixels', () => { const it = active(); if (!it) return; structCmd(app, 'Alpha lock', () => { it.alphaLock = !it.alphaLock; }); rerenderLayers(); }, active() && active().alphaLock ? 'on' : ''],
       ['Reference layer', () => { const it = active(); if (!it) return; structCmd(app, 'Reference', () => { it.reference = !it.reference; }); rerenderLayers(); }, active() && active().reference ? 'on' : ''],
-      ['Hide from time-lapse (private)', () => { const it = active(); if (!it) return; structCmd(app, 'Private', () => { it.private = !it.private; }); rerenderLayers(); }, active() && active().private ? 'on' : ''],
+      ['Hide from time-lapse (private)', () => { const it = active(); if (!it) return; structCmd(app, 'Private', () => { it.private = !it.private; }); if (it.private && app.tlapse) app.tlapse.privatized(it); rerenderLayers(); }, active() && active().private ? 'on' : ''],
     ],
     Select: [
       ['Select all', () => selCmd('Select all', () => sel.selectAll(), 'All')],
