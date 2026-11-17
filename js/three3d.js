@@ -893,6 +893,9 @@ export function tool3d(app) {
       if (before === after) return;
       // the 3D layer keeps its own list of model changes too, so the panel's ↶ / ↷ can step
       // through them even after other work on the canvas
+      // just looking around (turning / sliding / zooming the camera) isn't an undo step — like
+      // moving the canvas view; undo goes straight to the last change to the models
+      if (/^(Orbit|Pan|Zoom) camera$/.test(label)) { app.changed('active'); return; }
       const st = u3d(L); st.redo.length = 0;
       app.history.push(this.cmd3d(L, label, before, after, true));
       app.changed('active');
@@ -901,15 +904,18 @@ export function tool3d(app) {
     },
     // a 3D step on the canvas's history; `stack`: also one of the model ↶ / ↷ steps
     cmd3d(L, label, before, after, stack, undone = false) {
-      const st = u3d(L), rec = { label, before, after };
+      const st = u3d(L), rec = { label, before, after }, camStep = /camera|perspective/i.test(label);
       if (stack) { (undone ? st.redo : st.undo).push(rec); if (st.undo.length > 200) st.undo.shift(); }
       return { label, bytes: after.length,
-        undo: () => { if (stack && st.undo[st.undo.length - 1] === rec) st.redo.push(st.undo.pop()); return this.restore3d(L, before); },
-        redo: () => { if (stack && st.redo[st.redo.length - 1] === rec) st.undo.push(st.redo.pop()); return this.restore3d(L, after); },
+        undo: () => { if (stack && st.undo[st.undo.length - 1] === rec) st.redo.push(st.undo.pop()); return this.restore3d(L, before, camStep); },
+        redo: () => { if (stack && st.redo[st.redo.length - 1] === rec) st.undo.push(st.redo.pop()); return this.restore3d(L, after, camStep); },
         ser: async () => ({ k: '3d', lid: L.id, label, before, after, stack: !!stack }) };
     },
-    restore3d(L, json) {
+    restore3d(L, json, withCamera = false) {
+      // a model step leaves the camera where you're looking from now
+      const cam = L.scene3d && L.scene3d.camera;
       L.scene3d = JSON.parse(json);
+      if (!withCamera && cam) L.scene3d.camera = JSON.parse(JSON.stringify(cam));
       const rt = runtimes.get(L);
       return (async () => {
         if (rt) await reconcile(L, rt);
@@ -926,7 +932,7 @@ export function tool3d(app) {
       const rec = from.pop(); if (!rec) { toast(redo ? 'Nothing to redo on the models' : 'Nothing to undo on the models', 1200); return; }
       to.push(rec);
       const a = redo ? rec.after : rec.before, b = redo ? rec.before : rec.after;
-      this.restore3d(L, a);
+      this.restore3d(L, a, /camera|perspective/i.test(rec.label));
       // it is an action of its own on the canvas's history too
       app.history.push(this.cmd3d(L, (redo ? 'Redo ' : 'Undo ') + rec.label, b, a, false));
       toast((redo ? 'Redo: ' : 'Undo: ') + rec.label, 1000);
