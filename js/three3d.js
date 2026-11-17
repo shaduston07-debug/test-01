@@ -1165,8 +1165,8 @@ export function tool3d(app) {
       rt.gizmo.traverse((o) => {
         if (!o.isMesh || !o.userData.handle || !o.parent.visible) return;
         const hd = o.userData.handle;
-        // a ring seen edge-on is just a line: it can't be turned sensibly and would cover the arrows
-        if (hd[0] === 'r' && Math.abs(view.dot(new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]).applyQuaternion(rt.gizmo.quaternion))) < 0.15) return;
+        // a ring seen side-on (a straight line) can still be grabbed: dragging along the line
+        // turns it. Where it crosses other handles, they come first (see below)
         picks.push(o);
       });
       const at = (q) => {
@@ -1174,9 +1174,12 @@ export function tool3d(app) {
         // arrows, the floor square and the ball win over the rings they cross
         let hit = hits.find((x) => x.object.userData.handle[0] === 'm' || x.object.userData.handle === 'sc');
         if (!hit && hits.length) {
-          // rings crossing each other: the one most facing you is the one meant
-          const face = (hd) => Math.abs(view.dot(new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]).applyQuaternion(rt.gizmo.quaternion)));
-          hit = hits.slice().sort((u, w) => face(w.object.userData.handle) - face(u.object.userData.handle))[0];
+          // rings crossing each other: the one whose line is closest to where you touched (the
+          // one facing you wins a tie)
+          const axOf = (hd) => new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]).applyQuaternion(rt.gizmo.quaternion);
+          const R = rt.gizmo.scale.x, c0 = rt.gizmo.position;
+          const near = (x) => { const a3 = axOf(x.object.userData.handle), l = x.point.clone().sub(c0), h3 = l.dot(a3), pl = l.sub(a3.clone().multiplyScalar(h3)).length(); return Math.hypot(pl - R, h3) - 0.02 * R * Math.abs(view.dot(a3)); };
+          hit = hits.slice().sort((u, w) => near(u) - near(w))[0];
         }
         return hit ? hit.object.userData.handle : null;
       };
@@ -1197,13 +1200,21 @@ export function tool3d(app) {
       this.gz.last = this.gizmoParam(p);
       // rings turn by how far the pencil moves along the ring where it was grabbed (Clip Studio
       // style): steady and 1:1 under the pencil, however close to the centre it is
-      if (handle[0] === 'r' && this.gz.last) {
+      if (handle[0] === 'r') {
         const toDoc = (v) => { const q = v.clone().project(rt.camera); return new T.Vector2((q.x + 1) / 2 * app.doc.width, (1 - q.y) / 2 * app.doc.height); };
-        const p0 = this.gz.c.clone().add(this.gz.last), p1 = this.gz.c.clone().add(this.gz.last.clone().applyAxisAngle(axis, 0.01));
-        const ts = toDoc(p1).sub(toDoc(p0)).multiplyScalar(100);
-        if (ts.length() > 1) { this.gz.ts = ts.setLength(Math.max(ts.length(), 60)); this.gz.pp = new T.Vector2(p.x, p.y); }
+        if (this.gz.last) {
+          const p0 = this.gz.c.clone().add(this.gz.last), p1 = this.gz.c.clone().add(this.gz.last.clone().applyAxisAngle(axis, 0.01));
+          const ts = toDoc(p1).sub(toDoc(p0)).multiplyScalar(100);
+          if (ts.length() > 1) { this.gz.ts = ts.setLength(Math.max(ts.length(), 60)); this.gz.pp = new T.Vector2(p.x, p.y); }
+        }
         // a ring that faces you (the blue one, seen from the front) is turned by going round it:
         // the turn follows the pencil round the ring's centre on screen, 1:1
+        // seen side-on and grabbed near its ends (no usable direction there): drag along the line
+        if (!this.gz.ts) {
+          const a2 = toDoc(this.gz.c.clone().add(axis.clone().multiplyScalar(0.05 * rt.gizmo.scale.x))).sub(toDoc(this.gz.c));
+          if (a2.length() > 1e-3) { this.gz.ts = new T.Vector2(-a2.y, a2.x).setLength(120); this.gz.pp = new T.Vector2(p.x, p.y); }
+          else { this.gz.ts = new T.Vector2(1, 0).setLength(120); this.gz.pp = new T.Vector2(p.x, p.y); }
+        }
         const facing = axis.dot(rt.camera.getWorldDirection(new T.Vector3()));
         if (Math.abs(facing) > 0.55) { this.gz.round = { c: toDoc(this.gz.c), sign: facing < 0 ? -1 : 1 }; this.gz.pp = new T.Vector2(p.x, p.y); }
       }
