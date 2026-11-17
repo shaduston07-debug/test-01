@@ -1000,10 +1000,11 @@ export function tool3d(app) {
       // the camera hand (Settings › 3D camera): fingers (or the pencil) always turn the camera,
       // in any mode; a tap still selects
       const camWith = app.settings.cam3d || 'touch', pt = ev && ev.pointerType;
+      // the rings / arrows come first, whichever hand (pencil or finger) touches them
+      const gh = this.gizmoHit(p);
+      if (gh && this.startGizmo(gh, p)) { this.camDrag = false; this.dragging = true; return; }
       this.camDrag = camWith !== 'none' && ((camWith === 'touch' && pt === 'touch') || (camWith === 'pen' && (pt === 'pen' || pt === 'mouse')));
       if (this.camDrag) { this.tapHit = this.pick(p); this.dragging = true; return; }
-      const gh = this.gizmoHit(p);
-      if (gh && this.startGizmo(gh, p)) { this.dragging = true; return; }
       if (this.mode === 'object') {
         const hit = this.pick(p), e = hit && runtimes.get(L).objs.get(hit.objId);
         this.tapHit = hit;
