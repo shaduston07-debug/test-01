@@ -963,6 +963,9 @@ export function tool3d(app) {
     pick(p) {
       const rt = runtimes.get(this.layer()); if (!rt) return null;
       const ray = new T.Raycaster(); ray.setFromCamera(this.ndc(p), rt.camera);
+      // posed / resized figures: their bounds are measured again (a stale bound from the rest pose
+      // made raised or outstretched limbs impossible to tap)
+      rt.scene.traverse((o) => { if (o.isSkinnedMesh && !o.userData.outline) { o.boundingSphere = null; o.boundingBox = null; } });
       const hit = ray.intersectObjects(rt.scene.children, true).find((i) => i.object.visible && !i.object.userData.outline && !i.object.userData.handle && i.object.userData.objId != null);
       if (!hit) return null;
       // one skinned body: the joint is the one that vertex follows most
