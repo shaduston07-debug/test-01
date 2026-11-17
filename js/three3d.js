@@ -2400,7 +2400,9 @@ export async function rasterizeLayer(app, L, keep) {
       await render3D(L, d, 1);
     } catch (err) { console.warn('3D render for rasterize', err); }
     finally { if (tool) tool.off = off; }
-    const shaded = makeCanvas(d.width, d.height); shaded.getContext('2d').drawImage(L.canvas, 0, 0, d.width, d.height);
+    let shaded = makeCanvas(d.width, d.height); shaded.getContext('2d').drawImage(L.canvas, 0, 0, d.width, d.height);
+    // painted rather than rendered (Settings › 3D › Rasterize style)
+    if ((app.settings.rasterStyle || 'paint') === 'paint') { try { shaded = (await import('./painterly.js')).painterly(shaded); } catch (err) { console.warn('painterly', err); } }
     sc3.outline = hadLines;
     if (!L.canvas) throw new Error('the 3D layer has no picture yet');
     if (!keep) {

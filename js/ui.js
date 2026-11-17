@@ -1368,6 +1368,7 @@ export function openSettings(app) {
     field('Pose drag sensitivity', { min: 0.25, max: 2, step: 0.05, value: s.sensPose ?? 1, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { s.sensPose = v; save(); } }),
     h('p', { class: 'hint' }, 'How far a body part follows when you drag it into a pose (like Clip Studio). Lower = finer posing.'),
     switchRow('Drag a body part to pose it (no need to switch to Pose)', s.dragPose3d !== false, (v) => { s.dragPose3d = v; save(); }),
+    h('div', { class: 'stack' }, h('label', {}, 'Rasterize 3D layers as'), seg([['paint', 'Painterly'], ['clean', 'Clean 3D shading']], s.rasterStyle || 'paint', (v) => { s.rasterStyle = v; save(); })),
     switchRow('Body sliders only add (0 = the model\'s own shape, nothing caves in)', s.bodyNoShrink !== false, (v) => { s.bodyNoShrink = v; save(); import('./three3d.js').then((m) => m.refreshBodies && m.refreshBodies()); }),
 
     h('div', { class: 'menu-section' }, 'Look'),
