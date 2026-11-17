@@ -2378,15 +2378,7 @@ export function tool3d(app) {
         e ? h('div', { class: 'toggle-row' }, h('span', {}, 'Selected object colour'), color) : h('p', { class: 'hint' }, 'Select an object (Move / Rotate / Scale, then tap it) to change its colour.')),
         actions: [{ label: 'Done', primary: true }], onClose: () => { this.live = false; if (e) { const o = s.objects.find((x) => x.id === e.data.id); if (o) o.color = e.data.color; } this.commit('3D style', b); this.redraw(1); } });
     },
-    async rasterize() {
-      const L = this.layer();
-      // a clean render: no manipulator, no joint highlight
-      this.joint = null; this.highlight(null); this.off = true; this.syncGizmo();
-      await render3D(L, app.doc, 1);
-      structCmd(app, 'Rasterize 3D', () => { L.type = 'raster'; });
-      toast('Converted to a normal layer — draw over it');
-      app.setTool('brush');
-    },
+    async rasterize() { return rasterizeLayer(app, this.layer(), false); },
   };
   return t;
 }
@@ -2400,21 +2392,28 @@ export async function rasterizeLayer(app, L, keep) {
     // a clean, full-size picture (no rings / highlight); if that can't be made, what's on screen
     const tool = app.tools && app.tools['3d'];
     const off = tool ? tool.off : null;
+    // only the shaded models: no outlines, no rings / highlight
+    const sc3 = L.scene3d || {}, hadLines = sc3.outline;
+    sc3.outline = false;
     try {
       if (tool) { tool.joint = null; tool.highlight && tool.highlight(null); tool.off = true; tool.syncGizmo && tool.syncGizmo(); }
       await render3D(L, d, 1);
     } catch (err) { console.warn('3D render for rasterize', err); }
     finally { if (tool) tool.off = off; }
+    const shaded = makeCanvas(d.width, d.height); shaded.getContext('2d').drawImage(L.canvas, 0, 0, d.width, d.height);
+    sc3.outline = hadLines;
     if (!L.canvas) throw new Error('the 3D layer has no picture yet');
     if (!keep) {
+      L.canvas.getContext('2d').clearRect(0, 0, L.canvas.width, L.canvas.height); L.canvas.getContext('2d').drawImage(shaded, 0, 0); touch(L.canvas);
       structCmd(app, 'Rasterize 3D', () => { L.type = 'raster'; });
       if (app.tool === '3d') app.setTool('brush');
       app.changed(); toast('Now a normal paint layer — draw over it'); return;
     }
     if (!app.canAddRaster()) return;
     const l = new Layer(d.width, d.height, { name: L.name + ' (shaded)', groupId: L.groupId });
-    l.canvas.getContext('2d').drawImage(L.canvas, 0, 0, d.width, d.height); touch(l.canvas);
+    l.canvas.getContext('2d').drawImage(shaded, 0, 0); touch(l.canvas);
     insertLayer(app, l, i + 1);
+    render3D(L, d, 1).then(() => app.requestRender()).catch(() => {}); // the 3D layer gets its outlines back
     app.changed(); app.requestRender();
     toast('Shaded copy added above the 3D layer');
   } catch (err) { console.error(err); toast('Could not rasterize: ' + (err.message || err), 5000); }
