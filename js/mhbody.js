@@ -866,6 +866,7 @@ export function geometricRigMap(node) {
 let planarBuf = null;
 const PLANAR_MAP = { pelvis: 'pelvis_torsoControl', spine: 'lumbar2', chest: 'ribcage', neck: 'neck1', head: 'head',
   clav: 'clavicle', shoulder: 'upperArm', elbow: 'foreArm', hand: 'hand', hip: 'thigh', knee: 'calf', foot: 'footControl', toe: 'footToes' };
+export const CAVE_IN = ['breast', 'breastSize', 'butt', 'buttSize', 'chest', 'traps', 'muscle'];
 export const PLANAR_DEFAULT = { armLen: 0.5, legLen: 0.5, muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, traps: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, wrist: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
 export async function buildPlanar(body = {}, color = '#c9c6c1') {
   planarBuf ||= fetch(new URL('../vendor/models/planar-humans.glb', import.meta.url)).then((r) => { if (!r.ok) throw new Error('figure model missing'); return r.arrayBuffer(); });
@@ -884,7 +885,7 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
   for (const o of drop) if (o.parent) o.parent.remove(o);
   // arm / leg length: the skeleton itself is lengthened (elbows, knees, hands, feet move), so
   // posing still bends in the right places
-  const nsk = (x) => { const r = ((x ?? 0.5) - 0.5) * 2; return body.noShrink ? Math.max(0, r) : r; };
+  const nsk = (x) => ((x ?? 0.5) - 0.5) * 2; // lengths can go shorter too
   const armK = 1 + 0.3 * nsk(body.armLen), legK = 1 + 0.3 * nsk(body.legLen);
   if (armK !== 1 || legK !== 1) { gltf.scene.updateMatrixWorld(true); try { lengthenLimbs(mesh, armK, legK); } catch (e) { console.warn("limb length", e); } mesh.boundingBox = null; mesh.boundingSphere = null; gltf.scene.updateMatrixWorld(true); }
   // centred on the floor, at the body's height
@@ -1140,8 +1141,11 @@ function shapePlanar(mesh, b, H, inPlace = false) {
   // a bone's place in the mesh's own (bind) space: from its bind matrix, not its place in the scene
   const at = (name) => { const k = names.indexOf(name); return k < 0 ? null : new T.Vector3().setFromMatrixPosition(mesh.skeleton.boneInverses[k].clone().invert()).applyMatrix4(bindInv); };
   const wOf = (v, test) => { let w = 0; for (let k = 0; k < 4; k++) { const n = names[si.getComponent(v, k)]; if (n && test(n)) w += sw.getComponent(v, k); } return w; };
-  // slider 0…1 → −1…1; with "sliders only add" (the default) nothing goes below the model's own shape
-  const s = (x) => { const r = (x - 0.5) * 2; return b.noShrink ? Math.max(0, r) : r; };
+  // slider 0…1 → −1…1. With "sliders only add" (the default) the stats that would cave the body
+  // in (breasts, butt, chest, traps, muscles) don't go below the model's own shape; sizes and
+  // proportions (head, hands, limb length…) still can
+  if (b.noShrink) { b = { ...b }; for (const k of CAVE_IN) b[k] = Math.max(0.5, b[k] ?? 0.5); }
+  const s = (x) => (x - 0.5) * 2;
   const gauss = (d, r) => Math.exp(-(d * d) / (r * r));
   const sst = (a, c, x) => { const t = Math.max(0, Math.min(1, (x - a) / (c - a))); return t * t * (3 - 2 * t); };
   const J = {}; for (const n of ['pelvis_torsoControl', 'lumbar1', 'lumbar2', 'ribcage', 'neck1', 'neck2', 'head', 'thigh.L', 'thigh.R', 'calf.L', 'calf.R', 'footControl.L', 'footControl.R', 'upperArm.L', 'upperArm.R', 'foreArm.L', 'foreArm.R', 'hand.L', 'hand.R', 'clavicle.L', 'clavicle.R']) J[n] = at(n);

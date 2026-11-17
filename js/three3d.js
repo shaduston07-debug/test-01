@@ -1424,13 +1424,13 @@ export function tool3d(app) {
       out.push(h('div', { class: 'p3d-title' }, o.name || o.kind));
       if (o.kind === 'figure' && o.rig === 3) {
         const b = o.body, re = (fn) => this.edit('Body', fn, true);
-        const sl = (label, key) => { const b0 = BASE0.has(key) || noShrink(); return field(label, { min: b0 ? 50 : 0, max: BIG.has(key) ? 150 : 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
+        const sl = (label, key) => { const b0 = BASE0.has(key) || (noShrink() && MH.CAVE_IN.includes(key)); return field(label, { min: b0 ? 50 : 0, max: BIG.has(key) ? 150 : 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
         out.push(sec('Body',
           h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => re(() => { b.sex = v; b.height = v === 'male' ? 1.75 : 1.62; o.name = o.name.replace(/\((fe)?male\)/, '(' + v + ')'); }))),
           h('div', { class: 'p3d-lab' }, 'Physique — tap or drag'), this.shapePad(o),
           field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => re(() => { b.height = v; }) }),
           sl('Musculature', 'muscle'), sl('Arm length', 'armLen'), sl('Wrist width', 'wrist'), sl('Leg length', 'legLen'), sl('Shoulder width', 'shoulders'), sl('Traps', 'traps'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
-          switchRow('Sliders only add (0 = the model\'s own shape)', noShrink(), (v) => { app.settings.bodyNoShrink = v; app.applySettings(); refreshBodies(); this.panelRefresh(); }),
+          switchRow('Nothing caves in (breasts, butt, chest, traps, muscles start at the model\'s shape)', noShrink(), (v) => { app.settings.bodyNoShrink = v; app.applySettings(); refreshBodies(); this.panelRefresh(); }),
           grid(btn('More…', () => this.bodyMore(o)), btn('My bodies…', () => this.bodiesMenu(o)), btn('Save body…', () => this.saveBody(o)), btn('Reset body', () => re(() => { Object.assign(b, MH.PLANAR_DEFAULT, { height: b.sex === 'male' ? 1.75 : 1.62 }); setTimeout(() => this.panelRefresh(), 400); })))));
       }
       if (o.kind === 'figure' && o.rig === 2) {
@@ -1581,7 +1581,7 @@ export function tool3d(app) {
     },
     bodyMore(o) {
       const b = o.body, re = (fn) => this.edit('Body', fn, true);
-      const sl = (label, key) => { const b0 = BASE0.has(key) || noShrink(); return field(label, { min: b0 ? 50 : 0, max: BIG.has(key) ? 150 : 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
+      const sl = (label, key) => { const b0 = BASE0.has(key) || (noShrink() && MH.CAVE_IN.includes(key)); return field(label, { min: b0 ? 50 : 0, max: BIG.has(key) ? 150 : 100, step: 1, value: Math.max(b0 ? 50 : 0, Math.round((b[key] ?? 0.5) * 100)), fmt: (v) => (v === 50 ? (b0 ? 'base' : 'standard') : (v > 50 ? '+' : '−') + Math.abs(v - 50) * 2 + '%'), onInput: (v) => re(() => { b[key] = v / 100; }) }); };
       const group = (t, ...kids) => h('div', {}, h('div', { class: 'menu-section' }, t), ...kids);
       const body = h('div', { class: 'p3d' },
         group('Build', sl('Musculature', 'muscle'), sl('Body fat', 'fat')),
