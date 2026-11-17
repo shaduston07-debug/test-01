@@ -1408,7 +1408,7 @@ export function tool3d(app) {
           h('div', { class: 'stack' }, seg([['female', 'Female'], ['male', 'Male']], b.sex, (v) => re(() => { b.sex = v; b.height = v === 'male' ? 1.75 : 1.62; o.name = o.name.replace(/\((fe)?male\)/, '(' + v + ')'); }))),
           h('div', { class: 'p3d-lab' }, 'Physique — tap or drag'), this.shapePad(o),
           field('Height', { min: 1.2, max: 2.1, step: 0.01, value: b.height, fmt: (v) => v.toFixed(2) + ' m', onInput: (v) => re(() => { b.height = v; }) }),
-          sl('Musculature', 'muscle'), sl('Arm length', 'armLen'), sl('Leg length', 'legLen'), sl('Shoulder width', 'shoulders'), sl('Traps', 'traps'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
+          sl('Musculature', 'muscle'), sl('Arm length', 'armLen'), sl('Wrist width', 'wrist'), sl('Leg length', 'legLen'), sl('Shoulder width', 'shoulders'), sl('Traps', 'traps'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize'),
           switchRow('Sliders only add (0 = the model\'s own shape)', noShrink(), (v) => { app.settings.bodyNoShrink = v; app.applySettings(); refreshBodies(); this.panelRefresh(); }),
           grid(btn('More…', () => this.bodyMore(o)), btn('My bodies…', () => this.bodiesMenu(o)), btn('Save body…', () => this.saveBody(o)), btn('Reset body', () => re(() => { Object.assign(b, MH.PLANAR_DEFAULT, { height: b.sex === 'male' ? 1.75 : 1.62 }); setTimeout(() => this.panelRefresh(), 400); })))));
       }
@@ -1566,7 +1566,7 @@ export function tool3d(app) {
         group('Build', sl('Musculature', 'muscle'), sl('Body fat', 'fat')),
         group('Torso', sl('Shoulder width', 'shoulders'), sl('Traps', 'traps'), sl('Chest', 'chest'), sl(b.sex === 'male' ? 'Pec volume' : 'Breast volume', 'breast'), sl(b.sex === 'male' ? 'Pec size' : 'Breast size', 'breastSize'), sl('Waist', 'waist'), sl('Hips', 'hips'), sl('Butt volume', 'butt'), sl('Butt size', 'buttSize')),
         group('Head & neck', sl('Head size', 'head'), sl('Neck', 'neck')),
-        group('Arms', sl('Arm length', 'armLen'), sl('Upper arms', 'arms'), sl('Forearms', 'forearms'), sl('Hands', 'hands')),
+        group('Arms', sl('Arm length', 'armLen'), sl('Upper arms', 'arms'), sl('Forearms', 'forearms'), sl('Wrist width', 'wrist'), sl('Hands', 'hands')),
         group('Legs', sl('Leg length', 'legLen'), sl('Thighs', 'thighs'), sl('Lower legs', 'calves'), sl('Feet', 'feet')));
       // a side window instead of a dialog over the middle: the canvas slides left so the figure
       // sits in the free space and every change can be watched; it slides back on close

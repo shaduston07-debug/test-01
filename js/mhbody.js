@@ -866,7 +866,7 @@ export function geometricRigMap(node) {
 let planarBuf = null;
 const PLANAR_MAP = { pelvis: 'pelvis_torsoControl', spine: 'lumbar2', chest: 'ribcage', neck: 'neck1', head: 'head',
   clav: 'clavicle', shoulder: 'upperArm', elbow: 'foreArm', hand: 'hand', hip: 'thigh', knee: 'calf', foot: 'footControl', toe: 'footToes' };
-export const PLANAR_DEFAULT = { armLen: 0.5, legLen: 0.5, muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, traps: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
+export const PLANAR_DEFAULT = { armLen: 0.5, legLen: 0.5, muscle: 0.5, fat: 0.5, chest: 0.5, breast: 0.5, breastSize: 0.5, waist: 0.5, hips: 0.5, butt: 0.5, buttSize: 0.5, shoulders: 0.5, traps: 0.5, neck: 0.5, head: 0.5, arms: 0.5, forearms: 0.5, wrist: 0.5, hands: 0.5, thighs: 0.5, calves: 0.5, feet: 0.5 };
 export async function buildPlanar(body = {}, color = '#c9c6c1') {
   planarBuf ||= fetch(new URL('../vendor/models/planar-humans.glb', import.meta.url)).then((r) => { if (!r.ok) throw new Error('figure model missing'); return r.arrayBuffer(); });
   const gltf = await new Promise(async (res, rej) => new T.GLTFLoader().parse((await planarBuf).slice(0), '', res, rej));
@@ -1176,7 +1176,9 @@ function shapePlanar(mesh, b, H, inPlace = false) {
   const LIMBS = [];
   for (const S of ['L', 'R']) LIMBS.push(
     { ax: limb('upperArm.' + S, 'foreArm.' + S), test: (n) => n === 'upperArm.' + S || n === 'upperArm_rotate.' + S, k: 1 + 0.3 * s(b.arms) + 0.2 * s(b.muscle) + 0.12 * s(b.fat), bulge: 0.16 * s(b.muscle) },
-    { ax: limb('foreArm.' + S, 'hand.' + S), test: (n) => n === 'foreArm.' + S || n === 'foreArm_rotate.' + S, k: 1 + 0.3 * s(b.forearms) + 0.14 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.08 * s(b.muscle) },
+    { ax: limb('foreArm.' + S, 'hand.' + S), test: (n) => n === 'foreArm.' + S || n === 'foreArm_rotate.' + S, k: 1 + 0.3 * s(b.forearms) + 0.14 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.08 * s(b.muscle),
+      // wrist width: the end of the forearm by the hand gets thicker / thinner (and the heel of the hand with it)
+      prof: (u) => 0.45 * s(b.wrist ?? 0.5) * sst(0.5, 1.0, u), wristS: S },
     { ax: limb('thigh.' + S, 'calf.' + S), test: (n) => n === 'thigh.' + S, k: 1 + 0.3 * s(b.thighs) + 0.14 * s(b.muscle) + 0.16 * s(b.fat), bulge: 0.1 * s(b.muscle) },
     { ax: limb('calf.' + S, 'footControl.' + S), test: (n) => n === 'calf.' + S, k: 1 + 0.3 * s(b.calves) + 0.12 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.12 * s(b.muscle) });
   const hipY = J['thigh.L'].y, waistY = J.lumbar2.y, chestY = (J.ribcage.y + J.neck1.y) / 2, shY = J['upperArm.L'].y;
@@ -1208,10 +1210,18 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     v.fromBufferAttribute(P, i);
     // limbs: thicker / thinner around their bone, muscles bulge mid-way
     for (const Lm of LIMBS) {
+      if (Lm.wristS && Lm.ax) {
+        const wH = wOf(i, (n) => n === 'hand.' + Lm.wristS);
+        if (wH > 0.01) {
+          const t2 = q.copy(v).sub(Lm.ax.A).dot(Lm.ax.d) - Lm.ax.L; // past the wrist, along the forearm's line
+          const f = 0.45 * s(b.wrist ?? 0.5) * (1 - sst(0, 0.35 * Lm.ax.L, t2)) * (t2 > -0.1 * Lm.ax.L ? 1 : 0);
+          if (f) { c.copy(Lm.ax.d).multiplyScalar(Lm.ax.L + Math.max(0, t2)).add(Lm.ax.A); v.sub(c).multiplyScalar(1 + f * wH).add(c); }
+        }
+      }
       if (!Lm.ax) continue; const w = wOf(i, Lm.test); if (w < 0.01) continue;
       const t = Math.max(0, Math.min(Lm.ax.L, q.copy(v).sub(Lm.ax.A).dot(Lm.ax.d)));
       c.copy(Lm.ax.d).multiplyScalar(t).add(Lm.ax.A);
-      const kk = 1 + (Lm.k - 1 + Lm.bulge * Math.sin(Math.PI * t / Lm.ax.L)) * w;
+      const kk = 1 + (Lm.k - 1 + Lm.bulge * Math.sin(Math.PI * t / Lm.ax.L) + (Lm.prof ? Lm.prof(t / Lm.ax.L) : 0)) * w;
       v.sub(c).multiplyScalar(kk).add(c);
     }
     // torso: around the spine line
