@@ -22,7 +22,7 @@ export function painterly(src, { strength = 1 } = {}) {
     }
   }
   const box = (S, x0, y0, x1, y1) => S[y1 * W1 + x1] - S[y0 * W1 + x1] - S[y1 * W1 + x0] + S[y0 * W1 + x0];
-  const R = Math.max(2, Math.round(Math.max(w, h) / 380 * strength));
+  const R = Math.max(1, Math.round(Math.max(w, h) / 600 * strength));
   const out = sx.createImageData(w, h), o = out.data;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const q = (y * w + x) * 4; if (!d[q + 3]) continue;
@@ -38,9 +38,9 @@ export function painterly(src, { strength = 1 } = {}) {
     // softly stepped tones (5 steps, blended so it isn't hard cel shading)
     const lum = 0.3 * br + 0.59 * bg + 0.11 * bb, steps = 5, t = lum / 255 * steps, fl = Math.floor(t), fr = t - fl;
     const st = (fl + (fr < 0.5 ? 0.5 * Math.pow(2 * fr, 3) : 1 - 0.5 * Math.pow(2 * (1 - fr), 3))) / steps * 255;
-    const kk = lum > 1 ? (lum * 0.45 + st * 0.55) / lum : 1;
+    const kk = lum > 1 ? (lum * 0.85 + st * 0.15) / lum : 1; // tones barely stepped (stepping made it blotchy)
     // light canvas grain
-    const gr = 1 + 0.035 * (grain(x * 0.9, y * 0.9) - 0.5) + 0.02 * (grain(x * 0.23 + 7, y * 0.23 + 3) - 0.5);
+    const gr = 1 + 0.018 * (grain(x * 0.9, y * 0.9) - 0.5) + 0.01 * (grain(x * 0.23 + 7, y * 0.23 + 3) - 0.5);
     o[q] = Math.min(255, br * kk * gr); o[q + 1] = Math.min(255, bg * kk * gr); o[q + 2] = Math.min(255, bb * kk * gr); o[q + 3] = d[q + 3];
   }
   sx.putImageData(out, 0, 0);
@@ -49,7 +49,7 @@ export function painterly(src, { strength = 1 } = {}) {
   const pc = makeCanvas(w, h), px = pc.getContext('2d');
   px.filter = 'blur(' + Math.max(1, R * 0.6) + 'px)'; px.drawImage(small, 0, 0); px.filter = 'none';
   const lumAt = (x, y) => { const q = (Math.min(h - 1, Math.max(0, y)) * w + Math.min(w - 1, Math.max(0, x))) * 4; return 0.3 * o[q] + 0.59 * o[q + 1] + 0.11 * o[q + 2]; };
-  const r = Math.max(1.5, Math.max(w, h) / 240 * strength), step = r * 0.85, dabs = [];
+  const r = Math.max(1.2, Math.max(w, h) / 340 * strength), step = r * 0.8, dabs = [];
   for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) {
     const xi = Math.round(x + (hash(x, y) - 0.5) * step), yi = Math.round(y + (hash(y, x) - 0.5) * step);
     if (xi < 0 || yi < 0 || xi >= w || yi >= h || o[(yi * w + xi) * 4 + 3] < 40) continue;
@@ -59,9 +59,9 @@ export function painterly(src, { strength = 1 } = {}) {
   for (const [x, y] of dabs) {
     const q = (y * w + x) * 4, gx = lumAt(x + 2, y) - lumAt(x - 2, y), gy = lumAt(x, y + 2) - lumAt(x, y - 2);
     const ang = Math.atan2(gy, gx) + Math.PI / 2 + (hash(x, y * 1.3) - 0.5) * 0.5;
-    const jit = 1 + (hash(x * 1.7, y) - 0.5) * 0.05, len = r * (1.6 + hash(y, x * 0.7) * 1.4);
+    const jit = 1 + (hash(x * 1.7, y) - 0.5) * 0.025, len = r * (1.8 + hash(y, x * 0.7) * 0.8);
     px.save(); px.translate(x, y); px.rotate(ang);
-    px.fillStyle = `rgba(${Math.min(255, o[q] * jit) | 0},${Math.min(255, o[q + 1] * jit) | 0},${Math.min(255, o[q + 2] * jit) | 0},0.55)`;
+    px.fillStyle = `rgba(${Math.min(255, o[q] * jit) | 0},${Math.min(255, o[q + 1] * jit) | 0},${Math.min(255, o[q + 2] * jit) | 0},0.32)`;
     px.beginPath(); px.ellipse(0, 0, len, r * 0.7, 0, 0, Math.PI * 2); px.fill(); px.restore();
   }
   // the figure's own outline (softened a touch), so strokes don't spill past it
