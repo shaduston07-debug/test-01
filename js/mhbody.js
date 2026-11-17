@@ -929,6 +929,14 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
     if (bone && joint) feet.push({ bone, joint, off: new T.Matrix4().copy(joint.matrixWorld).invert().multiply(bone.matrixWorld) });
   }
   const drive0 = fig.drive, tmp = new T.Matrix4(), sc = new T.Vector3();
+  // a raised arm takes its collarbone along (as a real shoulder does): past ~50° the collarbone
+  // bone lifts part of the way and the upper arm keeps its direction, so the top of the shoulder
+  // doesn't fold onto itself. Done on the skin's bones only — the pose itself is untouched.
+  const boneBy = (nm) => mesh.skeleton.bones.find((bn) => base(bn.userData.name || bn.name) === nm);
+  const arms = ['L', 'R'].map((S) => ({ cl: boneBy('clavicle.' + S), up: boneBy('upperArm.' + S), fo: boneBy('foreArm.' + S) })).filter((a) => a.cl && a.up && a.fo && a.cl.parent);
+  node.updateMatrixWorld(true);
+  const armDir = (a, out) => out.copy(a.fo.getWorldPosition(new T.Vector3())).sub(a.up.getWorldPosition(new T.Vector3())).normalize().applyQuaternion(a.cl.parent.getWorldQuaternion(new T.Quaternion()).invert());
+  for (const a of arms) a.rest = armDir(a, new T.Vector3()); // the model's own arms (relaxed, down)
   fig.drive = () => {
     drive0();
     for (const f of feet) {
@@ -936,6 +944,17 @@ export async function buildPlanar(body = {}, color = '#c9c6c1') {
       tmp.decompose(f.bone.position, f.bone.quaternion, sc);
     }
     node.updateMatrixWorld(true);
+    for (const a of arms) {
+      const now = armDir(a, new T.Vector3()), elev = Math.acos(Math.max(-1, Math.min(1, a.rest.dot(now))));
+      const start = 50 * Math.PI / 180; if (elev <= start) continue;
+      const axis = new T.Vector3().crossVectors(a.rest, now); if (axis.lengthSq() < 1e-8) continue; axis.normalize();
+      const lift = Math.min(30 * Math.PI / 180, (elev - start) * 0.4);
+      const upW = a.up.getWorldQuaternion(new T.Quaternion());
+      a.cl.quaternion.premultiply(new T.Quaternion().setFromAxisAngle(axis, lift)); // in the chest's frame
+      a.cl.updateMatrixWorld(true);
+      a.up.quaternion.copy(a.up.parent.getWorldQuaternion(new T.Quaternion()).invert().multiply(upW));
+      a.up.updateMatrixWorld(true);
+    }
   };
   // at rest the figure stands the way it was modelled (arms relaxed, palms in), not in the
   // generic rest pose, which twisted its forearms
