@@ -1366,6 +1366,7 @@ export function openSettings(app) {
     field('Sensitivity', { min: 0.2, max: 1.5, step: 0.05, value: s.sens3d ?? 0.6, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { s.sens3d = v; save(); } }),
     h('p', { class: 'hint' }, 'How fast dragging turns the camera and bends joints. Lower = calmer.'),
     switchRow('Drag a body part to pose it (no need to switch to Pose)', s.dragPose3d !== false, (v) => { s.dragPose3d = v; save(); }),
+    switchRow('Body sliders only add (0 = the model\'s own shape, nothing caves in)', s.bodyNoShrink !== false, (v) => { s.bodyNoShrink = v; save(); import('./three3d.js').then((m) => m.refreshBodies && m.refreshBodies()); }),
 
     h('div', { class: 'menu-section' }, 'Look'),
     h('div', { class: 'stack' }, h('label', {}, 'Style'),

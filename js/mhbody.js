@@ -1061,7 +1061,8 @@ function shapePlanar(mesh, b, H, inPlace = false) {
   // a bone's place in the mesh's own (bind) space: from its bind matrix, not its place in the scene
   const at = (name) => { const k = names.indexOf(name); return k < 0 ? null : new T.Vector3().setFromMatrixPosition(mesh.skeleton.boneInverses[k].clone().invert()).applyMatrix4(bindInv); };
   const wOf = (v, test) => { let w = 0; for (let k = 0; k < 4; k++) { const n = names[si.getComponent(v, k)]; if (n && test(n)) w += sw.getComponent(v, k); } return w; };
-  const s = (x) => (x - 0.5) * 2; // slider 0…1 → −1…1
+  // slider 0…1 → −1…1; with "sliders only add" (the default) nothing goes below the model's own shape
+  const s = (x) => { const r = (x - 0.5) * 2; return b.noShrink ? Math.max(0, r) : r; };
   const gauss = (d, r) => Math.exp(-(d * d) / (r * r));
   const sst = (a, c, x) => { const t = Math.max(0, Math.min(1, (x - a) / (c - a))); return t * t * (3 - 2 * t); };
   const J = {}; for (const n of ['pelvis_torsoControl', 'lumbar1', 'lumbar2', 'ribcage', 'neck1', 'neck2', 'head', 'thigh.L', 'thigh.R', 'calf.L', 'calf.R', 'footControl.L', 'footControl.R', 'upperArm.L', 'upperArm.R', 'foreArm.L', 'foreArm.R', 'hand.L', 'hand.R', 'clavicle.L', 'clavicle.R']) J[n] = at(n);
@@ -1134,7 +1135,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     v.addScaledVector(dv, amt * f * Math.min(1, w) / len);
   };
   // like pad, swelling along any direction N (unit vector)
-  const N = new T.Vector3(), bAx = new T.Vector3();
+  const N = new T.Vector3(), bAx = new T.Vector3(), q3 = new T.Vector3();
   const padV = (v, L, n, r, amt, w) => {
     if (!amt || w <= 0) return;
     dv.copy(v).sub(L); const along = dv.dot(n); if (along < -0.9 * r) return;
@@ -1176,13 +1177,22 @@ function shapePlanar(mesh, b, H, inPlace = false) {
       const onSide = (x) => sst(-0.004 * H, 0.03 * H, (x - spineX) * (sd === 'L' ? 1 : -1));
       const bal = balloons[sd];
       if (bal && wB > 0.01) {
-        // inside the balloon: out onto its surface (with a soft edge where it meets the chest)
-        dv.copy(v).sub(bal.C); const len = dv.length();
-        if (len > 1e-6 && len < bal.r && dv.dot(bal.ax) > -0.35 * len && (v.x - spineX) * bal.sd > Math.abs(bal.br.x - spineX) * 0.12) {
-          const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n))) * onSide(v.x);
-          const depth = (bal.r - len) / bal.r;                  // 0 at the balloon's skin
-          const soft = sst(0, 0.12, depth + 0.02);               // a little fillet at the base
-          v.addScaledVector(dv, (bal.r - len) / len * W * soft);
+        // the breast's surface: a round shape a little fuller and lower at the bottom (a soft
+        // teardrop, not a ball). Points inside it move out onto it; points just outside are lifted
+        // a little too, so it blends into the chest instead of sitting on it with a hard edge.
+        dv.copy(v).sub(bal.C);
+        if ((v.x - spineX) * bal.sd > Math.abs(bal.br.x - spineX) * 0.12 && dv.dot(bal.ax) > -0.35 * dv.length()) {
+          const ky = dv.y < 0 ? 0.82 : 1.08;                     // lower half reaches further down
+          q3.copy(dv); q3.y *= ky;
+          const len = q3.length(), r = bal.r, f = 0.16 * r, d = r - len;
+          if (len > 1e-6 && d > -3 * f) {
+            const sp = (x) => 0.5 * (x + Math.sqrt(x * x + f * f)); // smooth max(x, 0)
+            const push = sp(d) - sp(-3 * f) * (1 - Math.max(0, Math.min(1, (d + 3 * f) / (6 * f))));
+            const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n))) * onSide(v.x);
+            const k = Math.max(0, push) / len;
+            q3.multiplyScalar(1 + k * W); q3.y /= ky;
+            v.copy(bal.C).add(q3);
+          }
         }
       } else if (br && wB > 0.01 && v.z > br.z - 0.1 * H && b.sex === 'male') {
         // a breast is swollen like a dome around its own axis (pointing forward, a bit out and
