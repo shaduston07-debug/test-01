@@ -1365,6 +1365,8 @@ export function openSettings(app) {
       h('p', { class: 'hint' }, 'Works in every 3D mode; the other hand poses. Dragging empty space also turns the camera.')),
     field('Sensitivity', { min: 0.2, max: 1.5, step: 0.05, value: s.sens3d ?? 0.6, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { s.sens3d = v; save(); } }),
     h('p', { class: 'hint' }, 'How fast dragging turns the camera and bends joints. Lower = calmer.'),
+    field('Pose drag sensitivity', { min: 0.25, max: 2, step: 0.05, value: s.sensPose ?? 1, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { s.sensPose = v; save(); } }),
+    h('p', { class: 'hint' }, 'How far a body part follows when you drag it into a pose (like Clip Studio). Lower = finer posing.'),
     switchRow('Drag a body part to pose it (no need to switch to Pose)', s.dragPose3d !== false, (v) => { s.dragPose3d = v; save(); }),
     switchRow('Body sliders only add (0 = the model\'s own shape, nothing caves in)', s.bodyNoShrink !== false, (v) => { s.bodyNoShrink = v; save(); import('./three3d.js').then((m) => m.refreshBodies && m.refreshBodies()); }),
 

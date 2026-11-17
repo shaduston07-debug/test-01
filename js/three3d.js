@@ -177,24 +177,24 @@ function buildGizmo() {
     const p = new T.Mesh(pick, pickMat); p.userData.handle = handle; p.renderOrder = 1000; part.add(p);
     g.add(part);
   };
-  const ring = () => new T.TorusGeometry(1, 0.014, 8, 96), ringPick = () => new T.TorusGeometry(1, 0.09, 6, 48);
+  const ring = () => new T.TorusGeometry(1, 0.014, 8, 96), ringPick = () => new T.TorusGeometry(1, 0.2, 6, 48);
   add('rx', [ring()], ringPick(), [0, Math.PI / 2, 0]);
   add('ry', [ring()], ringPick(), [Math.PI / 2, 0, 0]);
   add('rz', [ring()], ringPick());
   // arrows reach past the rings so the two never share a spot
   const arrow = () => [new T.CylinderGeometry(0.018, 0.018, 1.15, 10).translate(0, 0.775, 0), new T.ConeGeometry(0.07, 0.22, 16).translate(0, 1.45, 0)];
-  const arrowPick = () => new T.CylinderGeometry(0.11, 0.11, 0.5, 8).translate(0, 1.36, 0);
+  const arrowPick = () => new T.CylinderGeometry(0.2, 0.2, 0.75, 8).translate(0, 1.3, 0);
   add('mx', arrow(), arrowPick(), [0, 0, -Math.PI / 2]);
   add('my', arrow(), arrowPick());
   add('mz', arrow(), arrowPick(), [Math.PI / 2, 0, 0]);
   add('mf', [new T.PlaneGeometry(0.3, 0.3).rotateX(-Math.PI / 2).translate(0.42, 0, 0.42)], new T.PlaneGeometry(0.42, 0.42).rotateX(-Math.PI / 2).translate(0.42, 0, 0.42));
-  add('mv', [new T.SphereGeometry(0.09, 16, 12)], new T.SphereGeometry(0.2, 8, 6));
+  add('mv', [new T.SphereGeometry(0.09, 16, 12)], new T.SphereGeometry(0.24, 8, 6));
   // scale: orange cubes out on the diagonals with a thin stem — drag away from the centre to enlarge
   const d = 1.32 / Math.SQRT2;
   const cube = (x, y, z) => [new T.BoxGeometry(0.13, 0.13, 0.13).translate(x, y, z)];
   for (const [x, y, z] of [[d, d, 0], [-d, -d, 0]]) {
     const geo = cube(x, y, z); const st = new T.CylinderGeometry(0.01, 0.01, 0.36, 6).rotateZ(-Math.PI / 4).translate(x * 0.86, y * 0.86, z);
-    add('sc', [...geo, st], new T.BoxGeometry(0.3, 0.3, 0.3).translate(x, y, z));
+    add('sc', [...geo, st], new T.BoxGeometry(0.42, 0.42, 0.42).translate(x, y, z));
   }
   return g;
 }
@@ -214,7 +214,7 @@ function placeGizmo(rt) {
   rt.scene.updateMatrixWorld(true);
   const c = gizmoCenter(e, tg.joint);
   g.position.copy(c);
-  g.scale.setScalar(rt.camera.position.distanceTo(c) * Math.tan(rt.camera.fov * Math.PI / 360) * (tg.joint ? 0.14 : 0.3));
+  g.scale.setScalar(rt.camera.position.distanceTo(c) * Math.tan(rt.camera.fov * Math.PI / 360) * (tg.joint ? 0.2 : 0.3));
   for (const p of g.children) p.visible = !tg.joint || p.userData.handle[0] === 'r';
   // a joint's rings follow the bone, like Clip Studio: one twists along it, two bend it
   const j = tg.joint && e.joints && e.joints[tg.joint];
@@ -1080,7 +1080,7 @@ export function tool3d(app) {
           // drag a hand / foot: the arm / leg follows (two-bone IK), like Clip Studio
           const j = e.joints[this.joint], at = j.getWorldPosition(new T.Vector3());
           const k = unit(cam.position.distanceTo(at));
-          const g = this.pg(); const target = at.add(right.clone().multiplyScalar(dx * k * g)).add(up.clone().multiplyScalar(-dy * k * g));
+          const g = this.pp(); const target = at.add(right.clone().multiplyScalar(dx * k * g)).add(up.clone().multiplyScalar(-dy * k * g));
           for (const n of M.solveIK(e.joints, this.joint, target)) o.pose[n] = e.joints[n].quaternion.toArray();
         } else if ((this.mode === 'pose' || this.dragPose) && this.joint && e.joints) {
           // Clip Studio-style: the dragged part follows the pencil — the joint turns so the end of
@@ -1097,7 +1097,7 @@ export function tool3d(app) {
             const h1 = this.rayAt(p, cam).ray.intersectPlane(plane, new T.Vector3());
             const h0 = this.rayAt({ x: p.x - dx, y: p.y - dy }, cam).ray.intersectPlane(plane, new T.Vector3());
             if (h1 && h0 && tip.distanceTo(at) > 1e-4) {
-              const to = tip.clone().add(h1.sub(h0).multiplyScalar(this.pg()));
+              const to = tip.clone().add(h1.sub(h0).multiplyScalar(this.pp()));
               if (to.distanceTo(at) > 1e-4) {
                 const w = new T.Quaternion().setFromUnitVectors(tip.clone().sub(at).normalize(), to.sub(at).normalize());
                 local = pq.clone().invert().multiply(w).multiply(pq).multiply(j.quaternion);
@@ -1166,10 +1166,20 @@ export function tool3d(app) {
         if (hd[0] === 'r' && Math.abs(view.dot(new T.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[hd[1]]).applyQuaternion(rt.gizmo.quaternion))) < 0.15) return;
         picks.push(o);
       });
-      const hits = this.rayAt(p, rt.camera).intersectObjects(picks, false);
-      // arrows, the floor square and the ball win over the rings they cross
-      const hit = hits.find((x) => x.object.userData.handle[0] === 'm' || x.object.userData.handle === 'sc') || hits[0];
-      return hit ? hit.object.userData.handle : null;
+      const at = (q) => {
+        const hits = this.rayAt(q, rt.camera).intersectObjects(picks, false);
+        // arrows, the floor square and the ball win over the rings they cross
+        const hit = hits.find((x) => x.object.userData.handle[0] === 'm' || x.object.userData.handle === 'sc') || hits[0];
+        return hit ? hit.object.userData.handle : null;
+      };
+      let h0 = at(p); if (h0) return h0;
+      // a near miss (a finger is wide): the closest handle within about a fingertip
+      const z = (app.view && app.view.zoom) || 1;
+      for (const rpx of [12, 22]) for (let k = 0; k < 8; k++) {
+        const a = k * Math.PI / 4, hh = at({ x: p.x + Math.cos(a) * rpx / z, y: p.y + Math.sin(a) * rpx / z });
+        if (hh) return hh;
+      }
+      return null;
     },
     startGizmo(handle, p) {
       const rt = runtimes.get(this.layer()), e = this.selEntry(); if (!e || !rt.gizmoTarget) return false;
@@ -1264,6 +1274,8 @@ export function tool3d(app) {
     gain() { const g = app.settings.sens3d ?? 0.6; return g * (this.fineRot ? 0.25 : 1); },
     // posing / rings: ¾ of the pencil's movement at the default sensitivity
     pg() { return Math.min(1.25, this.gain() / 0.8); },
+    // dragging a body part into a pose (Settings › 3D › Pose drag sensitivity)
+    pp() { return this.pg() * (app.settings.sensPose ?? 1); },
     // a drag of doc px in screen px (so turning the model feels the same at any canvas zoom)
     scr(v) { return v * ((app.view && app.view.zoom) || 1); },
     poseTip(e, name) {
@@ -1405,6 +1417,7 @@ export function tool3d(app) {
         out.push(sec('Pose', grid(btn('Poses…', () => this.poseMenu()), human && btn('Hands…', () => this.handMenu()), human && btn('Mirror', () => this.mirrorPose()), human && btn('BVH…', () => this.bvhMenu()), btn('Reset pose', () => this.resetPose())),
           human && switchRow('IK (drag a hand / foot to move the limb)', this.ik, (v) => { this.ik = v; app.updateCtxBar(); }),
           field('Sensitivity', { min: 0.2, max: 1.5, step: 0.05, value: app.settings.sens3d ?? 0.6, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { app.settings.sens3d = v; app.applySettings(); } }),
+          field('Pose drag sensitivity', { min: 0.25, max: 2, step: 0.05, value: app.settings.sensPose ?? 1, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { app.settings.sensPose = v; app.applySettings(); } }),
           switchRow('Fine rotation (¼ speed)', !!this.fineRot, (v) => { this.fineRot = v; store.prefs.set('fineRot', v); }),
           h('p', { class: 'hint' }, this.joint ? `${this.jointLabel(this.joint)}: drag it or its rings to turn it. Drag empty space to turn the camera.` : 'Drag a body part of the selected model to pose it, empty space to turn the camera. Tap a part for its rings.')));
       }
