@@ -1,0 +1,178 @@
+/* Classic studio layout (hidden switch: tap the "Inkwell Studio" logo in the Gallery).
+   A desktop paint-program workspace in the manner of Clip Studio Paint: flat grey docked
+   panels, a command bar across the top, the tool palette and brush sliders down the left,
+   tool options under the command bar, Colours and Layers docked on the right.
+   Everything is the same app underneath; tapping the logo again returns to the glass layout. */
+body.classic-ui {
+  --bg: #2b2b2d;
+  --work: #58585c;
+  --glass: #3a3a3d;
+  --glass-strong: #3a3a3d;
+  --glass-edge: #1e1e20;
+  --glass-hi: rgba(255, 255, 255, 0.06);
+  --blur: none;
+  --fill-1: #4a4a4e;
+  --fill-2: #5a5a5f;
+  --line: #242426;
+  --radius: 3px;
+  --c-bar: 38px;        /* command bar height */
+  --c-tools: 46px;      /* tool palette width */
+  --c-sliders: 46px;    /* brush size / opacity column */
+  --c-dock: 292px;      /* right dock width */
+  --c-opts: 44px;       /* tool options strip height */
+  font-size: 13px;
+}
+body.classic-ui .glass, body.classic-ui #topbar .tb-left, body.classic-ui #topbar .tb-right, body.classic-ui #sidebar, body.classic-ui #ctxbar, body.classic-ui #popover,
+body.classic-ui .float-win, body.classic-ui .side-sheet, body.classic-ui .blend-pop, body.classic-ui .modal, body.classic-ui #timeline, body.classic-ui #hud, body.classic-ui #toast,
+body.classic-ui #slider-bubble, body.classic-ui .mode-card, body.classic-ui .app-tabs {
+  background: var(--glass); background-image: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  border: 1px solid var(--glass-edge); border-radius: 3px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+body.classic-ui .ico, body.classic-ui .pill, body.classic-ui .cb-btn, body.classic-ui .small-btn, body.classic-ui .icon-btn, body.classic-ui .seg, body.classic-ui .seg button,
+body.classic-ui .sb-btn, body.classic-ui .sb-mod, body.classic-ui .layer-row, body.classic-ui .gal-thumb, body.classic-ui .gal-card, body.classic-ui .text-in, body.classic-ui .preset,
+body.classic-ui .menu-item, body.classic-ui .tb-text, body.classic-ui .vslider, body.classic-ui .vslider .knob, body.classic-ui .quick-act, body.classic-ui .app-tab, body.classic-ui .badge { border-radius: 3px; }
+body.classic-ui .ico.active { color: #fff; background: var(--accent); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
+body.classic-ui .cb-btn.on, body.classic-ui .seg button.on { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+body.classic-ui .pop-arrow { display: none; }
+body.classic-ui #popover { animation: none; }
+
+/* ── studio geometry ──
+   ┌ menu bar ─────────────────────────────────────────────────────────────┐
+   ├ command bar ─────────────────────────────────────────── [doc tab ×] ──┤
+   │tools│ Sub Tool      │ tool options strip                  │ Colour     │
+   │     │ (brush groups │                                     │            │
+   │     │  + list)      │            canvas                   ├ Layer Prop ┤
+   │     │ Brush Size    │                                     │ Layers     │
+   │     │ Tool Property │ status bar (zoom · rotation)        │            │
+   └─────┴───────────────┴─────────────────────────────────────┴────────────┘ */
+body.classic-ui { --cs-menu: 28px; --cs-cmd: 40px; --cs-top: calc(var(--cs-menu) + var(--cs-cmd) + var(--safe-t)); --c-tools: 46px; --cs-left: 236px; --c-dock: 292px; --cs-opts: 44px; --cs-status: 30px; }
+#cs-chrome { position: absolute; inset: 0; pointer-events: none; z-index: 5; font-size: 12.5px; }
+#cs-chrome > * { pointer-events: auto; }
+body:not(.classic-ui) #cs-chrome { display: none; }
+body.classic-ui.ui-hidden #cs-chrome { opacity: 0; pointer-events: none; }
+body.classic-ui.ui-hidden #cs-chrome > * { pointer-events: none; }
+/* menu bar + command bar */
+.cs-menubar { position: absolute; top: var(--safe-t); left: 0; right: 0; height: var(--cs-menu); display: flex; align-items: stretch; background: #232325; border-bottom: 1px solid #161618; padding-left: 6px; }
+.cs-menubar > button { padding: 0 11px; color: #d8d8dc; font-size: 13px; }
+.cs-menubar > button.on, .cs-menubar > button:active { background: var(--accent); color: var(--on-accent); }
+.cs-cmdbar { position: absolute; top: calc(var(--safe-t) + var(--cs-menu)); left: 0; right: 0; height: var(--cs-cmd); display: flex; align-items: center; gap: 2px; padding: 0 6px; background: #2f2f32; border-bottom: 1px solid #1a1a1c; overflow-x: auto; scrollbar-width: none; }
+.cs-cmd { min-width: 34px; height: 32px; display: grid; place-items: center; border-radius: 3px; color: #e6e6ea; flex: none; }
+.cs-cmd svg { width: 19px; height: 19px; }
+.cs-cmd.txt { padding: 0 9px; font-size: 12.5px; white-space: nowrap; }
+.cs-cmd:active { background: #4a4a4e; }
+.cs-cmd-sep { width: 1px; height: 22px; background: #46464a; margin: 0 5px; flex: none; }
+.cs-doctab { margin-left: auto; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 12px; background: #3d3d41; border: 1px solid #1c1c1e; border-bottom: 0; border-radius: 3px 3px 0 0; align-self: flex-end; flex: none; max-width: 280px; }
+.cs-doctab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-doctab button { width: 20px; height: 20px; border-radius: 3px; color: #bbb; }
+.cs-menu { position: fixed; z-index: 600; min-width: 236px; padding: 4px 0; background: #2c2c2f; border: 1px solid #141416; box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5); font-size: 13px; }
+.cs-menu-item { display: flex; width: 100%; justify-content: space-between; gap: 18px; padding: 7px 14px; text-align: left; color: #e4e4e8; }
+.cs-menu-item small { color: #8d8d94; }
+.cs-menu-item:hover:not([disabled]), .cs-menu-item:active:not([disabled]) { background: var(--accent); color: var(--on-accent); }
+.cs-menu-item[disabled] { color: #66666c; }
+.cs-menu-sep { height: 1px; background: #3e3e42; margin: 4px 0; }
+/* the app's own top bar becomes the tool palette column (no Gallery button / title there) */
+body.classic-ui #topbar { top: var(--cs-top); left: 0; right: auto; width: var(--c-tools); height: auto; bottom: 0; background: transparent; border: 0; flex-direction: column; justify-content: flex-start; }
+body.classic-ui #btn-gallery, body.classic-ui .tb-title { display: none !important; }
+body.classic-ui #topbar .tb-right, body.classic-ui #topbar .tb-left {
+  position: fixed; left: var(--safe-l); width: var(--c-tools); flex-direction: column; padding: 4px 0; gap: 2px; border-radius: 0; border-width: 0 1px 0 0; box-shadow: none; background: #37373a; }
+body.classic-ui .tb-left > span.mode-only { flex-direction: column; gap: 2px; }
+body.classic-ui .tb-sep { width: 26px; height: 1px; margin: 3px 0; }
+body.classic-ui .ico { width: 38px; height: 36px; }
+body.classic-ui .ico svg { width: 21px; height: 21px; }
+body.classic-ui #btn-color { margin: 4px 0 2px; border-radius: 4px; width: 32px; height: 32px; }
+body.classic-ui #btn-color span { border-radius: 2px; }
+body.classic-ui #topbar .tb-left { bottom: 0; overflow-y: auto; scrollbar-width: none; }
+body.classic-ui #topbar .tb-right { top: var(--cs-top); height: 214px; border-bottom: 1px solid #242426; }
+body.classic-ui #topbar .tb-left { top: calc(var(--cs-top) + 214px); }
+/* Procreate-style sliders and undo column are replaced by Tool Property + the command bar */
+body.classic-ui #sidebar { display: none !important; }
+/* left column: Sub Tool, Brush Size, Tool Property */
+.cs-left { position: absolute; top: var(--cs-top); bottom: 0; left: calc(var(--c-tools) + var(--safe-l)); width: var(--cs-left); display: flex; flex-direction: column; background: #313134; border-right: 1px solid #1c1c1e; }
+.cs-panel { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid #1c1c1e; }
+.cs-panel > header { display: flex; align-items: center; justify-content: space-between; height: 26px; padding: 0 6px 0 9px; background: #2a2a2d; border-bottom: 1px solid #1c1c1e; color: #a9a9b0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; flex: none; }
+.cs-panel > header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-mini { width: 22px; height: 20px; border-radius: 3px; color: #ddd; font-size: 12px; }
+.cs-mini:active { background: #4a4a4e; }
+.cs-subtool { flex: 1 1 auto; }
+.cs-subtabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; flex: none; }
+.cs-subtabs button { padding: 3px 7px; border-radius: 3px; background: #3c3c40; color: #cfcfd4; font-size: 11.5px; }
+.cs-subtabs button.on { background: var(--accent); color: var(--on-accent); }
+.cs-sublist { overflow-y: auto; flex: 1 1 auto; min-height: 60px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.cs-sub { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 5px 9px; border-bottom: 1px solid #2a2a2d; text-align: left; }
+.cs-sub canvas { width: 150px; height: 22px; opacity: 0.85; }
+.cs-sub-name { font-size: 12.5px; color: #e4e4e8; }
+.cs-sub.on { background: rgba(var(--accent-rgb), 0.55); }
+.cs-sub.on .cs-sub-name { color: #fff; font-weight: 600; }
+.cs-sizes { flex: none; }
+.cs-size-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; padding: 4px; }
+.cs-size { height: 38px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border-radius: 3px; background: #3a3a3e; }
+.cs-size i { display: block; border-radius: 50%; background: #e8e8ec; }
+.cs-size small { font-size: 9px; color: #9a9aa2; }
+.cs-size.on { background: var(--accent); } .cs-size.on small { color: var(--on-accent); }
+.cs-toolprop { flex: none; max-height: 46%; }
+.cs-tp-body { overflow-y: auto; padding: 4px 0 6px; }
+.cs-dim { color: #8d8d94; padding: 8px 10px; margin: 0; line-height: 1.4; }
+/* value bars */
+.cs-vb { display: grid; grid-template-columns: 88px 20px 1fr 20px; align-items: center; gap: 3px; padding: 3px 6px 3px 9px; }
+.cs-vb label { color: #c8c8ce; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-vb-bar { position: relative; height: 20px; background: #1f1f22; border: 1px solid #141416; border-radius: 2px; overflow: hidden; touch-action: none; cursor: ew-resize; }
+.cs-vb-fill { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(var(--accent-rgb), 0.75); }
+.cs-vb-val { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11.5px; font-variant-numeric: tabular-nums; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+.cs-vb-step { height: 20px; border-radius: 2px; background: #3c3c40; color: #ddd; font-size: 13px; line-height: 1; }
+/* the tool options strip sits above the canvas */
+body.classic-ui #ctxbar { top: var(--cs-top); bottom: auto; left: calc(var(--c-tools) + var(--cs-left) + var(--safe-l)); right: var(--c-dock); transform: none; max-width: none; height: var(--cs-opts); border-radius: 0; border-width: 0 0 1px 0; box-shadow: none; padding: 4px 8px; background: #343437; }
+body.classic-ui.mode-animate #ctxbar { bottom: auto; }
+/* right dock: Colour, Layer Property, Layers */
+body.classic-ui .float-win[data-key=color], body.classic-ui .float-win[data-key=layers] {
+  left: auto !important; right: var(--safe-r) !important; width: var(--c-dock) !important; max-width: none; border-radius: 0; border-width: 0 0 1px 1px; box-shadow: none; z-index: 6 !important;
+}
+body.classic-ui .float-win[data-key=color] { top: var(--cs-top) !important; height: calc(42% - var(--cs-top)); max-height: none !important; }
+.cs-layerbar { position: absolute; right: var(--safe-r); width: var(--c-dock); top: 42%; height: 100px; background: #313134; border-left: 1px solid #1c1c1e; z-index: 7; }
+.cs-lb-row { padding: 5px 6px 3px 9px; }
+.cs-layerbar .cs-vb { padding-top: 2px; }
+.cs-blend { width: 100%; height: 26px; background: #1f1f22; color: #e8e8ec; border: 1px solid #141416; border-radius: 2px; padding: 0 6px; font-size: 12.5px; }
+body.classic-ui .float-win[data-key=layers] { top: calc(42% + 100px) !important; bottom: 0; height: auto; max-height: none !important; }
+body.classic-ui.mode-animate .float-win[data-key=layers] { bottom: 200px; }
+body.classic-ui .float-win[data-key=color] .pop-body, body.classic-ui .float-win[data-key=layers] .pop-body { max-height: none; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+body.classic-ui .float-win[data-key=color] .float-head, body.classic-ui .float-win[data-key=layers] .float-head { cursor: default; padding: 3px 8px; min-height: 26px; background: #2a2a2d; border-bottom: 1px solid #1c1c1e; }
+body.classic-ui .float-win[data-key=color] .float-close, body.classic-ui .float-win[data-key=layers] .float-close, body.classic-ui .float-win[data-key] .float-grip { display: none; }
+body.classic-ui .float-head h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #a9a9b0; }
+body.classic-ui .float-head .icon-btn { width: 26px; height: 24px; border-radius: 3px; }
+body.classic-ui .layer-row { margin: 0; border-bottom: 1px solid #2a2a2c; border-radius: 0; min-height: 44px; }
+body.classic-ui .layer-row.on { background: var(--accent); box-shadow: none; }
+/* status bar under the canvas */
+.cs-status { position: absolute; bottom: var(--safe-b); left: calc(var(--c-tools) + var(--cs-left) + var(--safe-l)); right: var(--c-dock); height: var(--cs-status); display: flex; align-items: center; gap: 4px; padding: 0 8px; background: #2a2a2d; border-top: 1px solid #1a1a1c; color: #c8c8ce; overflow: hidden; }
+body.classic-ui.mode-animate .cs-status { bottom: calc(200px + var(--safe-b)); }
+.cs-status button { min-width: 24px; height: 22px; padding: 0 5px; border-radius: 3px; background: #3a3a3e; font-size: 12px; flex: none; }
+.cs-status .cs-zs { width: 230px; flex: none; padding: 0; grid-template-columns: 22px 1fr 22px; }
+.cs-status .cs-zs label { display: none; }
+.cs-zoom, .cs-rot { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; flex: none; }
+.cs-sep { width: 1px; height: 16px; background: #46464a; margin: 0 4px; flex: none; }
+.cs-docinfo { margin-left: auto; color: #8d8d94; white-space: nowrap; }
+/* timeline spans the canvas area */
+body.classic-ui #timeline { left: calc(var(--c-tools) + var(--cs-left) + var(--safe-l)); right: 0; bottom: 0; border-radius: 0; border-width: 1px 0 0 0; box-shadow: none; }
+body.classic-ui #hud { top: calc(var(--cs-top) + var(--cs-opts) + 10px); }
+@media (max-width: 1000px) { body.classic-ui { --cs-left: 204px; --c-dock: 240px; } .cs-vb { grid-template-columns: 70px 18px 1fr 18px; } .cs-size-grid { grid-template-columns: repeat(6, 1fr); } }
+
+/* ── gallery ── */
+body.classic-ui #gallery, body.classic-ui #learning { background: #333336; }
+body.classic-ui .gal-head { background: #2b2b2d; margin: calc(-18px - var(--safe-t)) calc(-28px - var(--safe-r)) 16px calc(-28px - var(--safe-l)); padding: calc(8px + var(--safe-t)) 16px 8px; border-bottom: 1px solid #1c1c1e; }
+body.classic-ui .brand { font-size: 17px; gap: 8px; }
+body.classic-ui .brand .logo { width: 22px; height: 22px; }
+body.classic-ui .gal-modes { gap: 0; margin-bottom: 16px; border-bottom: 1px solid #1c1c1e; grid-template-columns: repeat(3, max-content); }
+body.classic-ui .mode-card { padding: 8px 18px 8px 10px; grid-template-columns: 22px 1fr; column-gap: 8px; border-width: 1px 1px 0 1px; box-shadow: none; background: #2f2f32; }
+body.classic-ui .mode-card.on { background: #47474b; box-shadow: inset 0 2px 0 var(--accent); border-color: #1e1e20; }
+body.classic-ui .mode-card small { display: none; }
+body.classic-ui .mode-card b { font-size: 13px; }
+body.classic-ui .mode-card .mc-count { position: static; grid-column: 2; font-size: 11px; }
+body.classic-ui .mc-ico { width: 22px; height: 22px; border-radius: 3px; }
+body.classic-ui .gal-thumb { box-shadow: 0 0 0 1px #1c1c1e; }
+body.classic-ui .pill { background: #4a4a4e; border: 1px solid #1e1e20; min-height: 30px; padding: 0 12px; font-size: 12.5px; }
+body.classic-ui .pill.primary { background: var(--accent); }
+
+/* four-finger tap (hide interface) also hides the docks */
+body.classic-ui.ui-hidden .float-win[data-key=color], body.classic-ui.ui-hidden .float-win[data-key=layers] { opacity: 0; pointer-events: none; }
+
+body.classic-ui #ctxbar .cb-btn { min-height: 30px; height: 32px; padding: 0 10px; font-size: 12.5px; border-radius: 3px; }
+body.classic-ui #ctxbar .cb-label { font-size: 12px; }
+body.classic-ui #ctxbar { align-items: center; }
