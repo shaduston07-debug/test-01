@@ -1140,7 +1140,21 @@ function shapePlanar(mesh, b, H, inPlace = false) {
   const names = mesh.skeleton.bones.map((bn) => base(bn.userData.name || bn.name));
   // a bone's place in the mesh's own (bind) space: from its bind matrix, not its place in the scene
   const at = (name) => { const k = names.indexOf(name); return k < 0 ? null : new T.Vector3().setFromMatrixPosition(mesh.skeleton.boneInverses[k].clone().invert()).applyMatrix4(bindInv); };
-  const wOf = (v, test) => { let w = 0; for (let k = 0; k < 4; k++) { const n = names[si.getComponent(v, k)]; if (n && test(n)) w += sw.getComponent(v, k); } return w; };
+  // weight of the bones a test picks: the test is run once per bone (not per point and weight),
+  // remembered by its text — tests that depend on a side / limb pass their own key
+  // the weights never change while reshaping, so each test's weight per point is worked out once
+  // for this mesh and kept with it
+  const SI = si.array, SW = sw.array, wCache = (g.userData.wCache ||= new Map());
+  const wOf = (v, test, key) => {
+    let arr = key ? wCache.get(key) : null;
+    if (!arr) {
+      const m = new Uint8Array(names.length); for (let b2 = 0; b2 < names.length; b2++) m[b2] = names[b2] && test(names[b2]) ? 1 : 0;
+      arr = new Float32Array(P.count);
+      for (let i2 = 0, o = 0; i2 < P.count; i2++, o += 4) { let w = 0; for (let k = 0; k < 4; k++) if (m[SI[o + k]]) w += SW[o + k]; arr[i2] = w; }
+      if (key) wCache.set(key, arr); else return arr[v];
+    }
+    return arr[v];
+  };
   // slider 0…1 → −1…1. With "sliders only add" (the default) the stats that would cave the body
   // in (breasts, butt, chest, traps, muscles) don't go below the model's own shape; sizes and
   // proportions (head, hands, limb length…) still can
@@ -1185,7 +1199,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     for (let i = 0; i < P.count; i++) {
       v.fromBufferAttribute(P, i); if ((v.x - spineX) * sd <= 0) continue;
       const d = Math.hypot(v.x - br.x, (v.y - br.y) * 0.9); if (d < R0 * 1.0 || d > R0 * 1.3 || v.z < br.z - 0.12 * H) continue;
-      if (wOf(i, (n) => n === 'ribcage') < 0.5) continue;
+      if (wOf(i, (n) => n === 'ribcage', 'k0') < 0.5) continue;
       zs += v.z; nz++;
     }
     const zc = nz ? zs / nz : br.z - 0.5 * R0, p0 = Math.max(0.2 * R0, br.z - zc);
@@ -1205,6 +1219,9 @@ function shapePlanar(mesh, b, H, inPlace = false) {
       prof: (u) => 0.45 * s(b.wrist ?? 0.5) * sst(0.5, 1.0, u), wristS: S },
     { ax: limb('thigh.' + S, 'calf.' + S), test: (n) => n === 'thigh.' + S, k: 1 + 0.3 * s(b.thighs) + 0.14 * s(b.muscle) + 0.16 * s(b.fat), bulge: 0.1 * s(b.muscle) },
     { ax: limb('calf.' + S, 'footControl.' + S), test: (n) => n === 'calf.' + S, k: 1 + 0.3 * s(b.calves) + 0.12 * s(b.muscle) + 0.1 * s(b.fat), bulge: 0.12 * s(b.muscle) });
+  LIMBS.forEach((Lm, k) => { Lm.id = k; });
+  const onSideL = (x) => sst(-0.004 * H, 0.03 * H, x - spineX), onSideR = (x) => sst(-0.004 * H, 0.03 * H, spineX - x);
+  const dirB = new T.Vector3();
   const hipY = J['thigh.L'].y, waistY = J.lumbar2.y, chestY = (J.ribcage.y + J.neck1.y) / 2, shY = J['upperArm.L'].y;
   const c = new T.Vector3(), q = new T.Vector3(), pec = new T.Vector3(), C = new T.Vector3(), dv = new T.Vector3();
   // swell (amt > 0) or flatten the surface near L on the side facing dir (+1 front, −1 back):
@@ -1236,21 +1253,21 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     // limbs: thicker / thinner around their bone, muscles bulge mid-way
     for (const Lm of LIMBS) {
       if (Lm.wristS && Lm.ax) {
-        const wH = wOf(i, (n) => n === 'hand.' + Lm.wristS);
+        const wH = wOf(i, (n) => n === 'hand.' + Lm.wristS, 'hand.' + Lm.wristS);
         if (wH > 0.01) {
           const t2 = q.copy(v).sub(Lm.ax.A).dot(Lm.ax.d) - Lm.ax.L; // past the wrist, along the forearm's line
           const f = 0.45 * s(b.wrist ?? 0.5) * (1 - sst(0, 0.35 * Lm.ax.L, t2)) * (t2 > -0.1 * Lm.ax.L ? 1 : 0);
           if (f) { c.copy(Lm.ax.d).multiplyScalar(Lm.ax.L + Math.max(0, t2)).add(Lm.ax.A); v.sub(c).multiplyScalar(1 + f * wH).add(c); }
         }
       }
-      if (!Lm.ax) continue; const w = wOf(i, Lm.test); if (w < 0.01) continue;
+      if (!Lm.ax) continue; const w = wOf(i, Lm.test, 'limb:' + Lm.id); if (w < 0.01) continue;
       const t = Math.max(0, Math.min(Lm.ax.L, q.copy(v).sub(Lm.ax.A).dot(Lm.ax.d)));
       c.copy(Lm.ax.d).multiplyScalar(t).add(Lm.ax.A);
       const kk = 1 + (Lm.k - 1 + Lm.bulge * Math.sin(Math.PI * t / Lm.ax.L) + (Lm.prof ? Lm.prof(t / Lm.ax.L) : 0)) * w;
       v.sub(c).multiplyScalar(kk).add(c);
     }
     // torso: around the spine line
-    const wT = wOf(i, (n) => /^(pelvis|lumbar|ribcage|clavicle|neck)/.test(n));
+    const wT = wOf(i, (n) => /^(pelvis|lumbar|ribcage|clavicle|neck)/.test(n), 'k1');
     if (wT > 0.01) {
       const y = v.y, sz = spineZ(y);
       let kx = 1, kz = 1;
@@ -1265,10 +1282,10 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     // where that fat / muscle sits (not the whole torso), and only on the torso / thighs
     // breasts: only the ribcage's own skin (never the shoulders, arms or collar), and only inside
     // the breast's own footprint. Size = how wide the breast is, volume = how far it stands out.
-    const wB = wOf(i, (n) => /^(ribcage|lumbar)/.test(n)), wSeat = wOf(i, (n) => /^(pelvis|lumbar1|thigh)/.test(n));
+    const wB = wOf(i, (n) => /^(ribcage|lumbar)/.test(n), 'k2'), wSeat = wOf(i, (n) => /^(pelvis|lumbar1|thigh)/.test(n), 'k3');
     for (const sd of ['L', 'R']) {
       const br = lm['breast' + sd], bt = lm['butt' + sd];
-      const onSide = (x) => sst(-0.004 * H, 0.03 * H, (x - spineX) * (sd === 'L' ? 1 : -1));
+      const onSide = sd === 'L' ? onSideL : onSideR;
       const bal = balloons[sd];
       if (bal && wB > 0.01) {
         // the breast's surface: a round shape a little fuller and lower at the bottom (a soft
@@ -1276,10 +1293,9 @@ function shapePlanar(mesh, b, H, inPlace = false) {
         // a little too, so it blends into the chest instead of sitting on it with a hard edge.
         if ((v.x - spineX) * bal.sd > Math.abs(bal.br.x - spineX) * 0.12 && q3.copy(v).sub(bal.B0).dot(bal.ax) > -0.6 * bal.base) {
           // worked out in a space squashed a little at the bottom (so the real shape hangs lower)
-          const sq = (p3, out) => { out.copy(p3).sub(bal.C); out.y *= out.y < 0 ? 0.82 : 1.08; return out; };
-          const ps = sq(v, dv), bs3 = sq(bal.B0, q3);
+          const ps = dv.copy(v).sub(bal.C), bs3 = q3.copy(bal.B0).sub(bal.C); ps.y *= ps.y < 0 ? 0.82 : 1.08; bs3.y *= bs3.y < 0 ? 0.82 : 1.08;
           // from the base of the breast on the chest, out through this point to the balloon's skin
-          const dir = ps.clone().sub(bs3), dist = dir.length();
+          const dir = dirB.copy(ps).sub(bs3), dist = dir.length();
           if (dist > 1e-6) {
             dir.divideScalar(dist);
             const bb = bs3.dot(dir), cc = bs3.lengthSq() - bal.r * bal.r, disc = bb * bb - cc;
@@ -1288,7 +1304,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
               if (t > 0 && d > -3 * f) {
                 const sp = (x) => 0.5 * (x + Math.sqrt(x * x + f * f)); // smooth max(x, 0)
                 const push = sp(d) - sp(-3 * f) * (1 - Math.max(0, Math.min(1, (d + 3 * f) / (6 * f))));
-                const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n))) * onSide(v.x);
+                const W = Math.min(1, wOf(i, (n) => /^(ribcage|lumbar2)/.test(n), 'k4')) * onSide(v.x);
                 ps.addScaledVector(dir, Math.max(0, push) * W);
                 ps.y /= ps.y < 0 ? 0.82 : 1.08;
                 v.copy(bal.C).add(ps); roundPts[i] = 1;
@@ -1302,7 +1318,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
         // nothing at the edge of a cone, so it grows from the front and the side alike. Size =
         // how wide the cone is, Volume = how far it swells. The cone is shallower above the
         // landmark (the upper chest stays) and stops short of the middle (no merging).
-        const fem = b.sex !== 'male', R0 = (fem ? 0.06 : 0.065) * H, sd = Math.sign(br.x - spineX) || 1, wR = wOf(i, (n) => n === 'ribcage');
+        const fem = b.sex !== 'male', R0 = (fem ? 0.06 : 0.065) * H, sd = Math.sign(br.x - spineX) || 1, wR = wOf(i, (n) => n === 'ribcage', 'k5');
         bAx.set(sd * 0.22, -0.12, 1).normalize();
         C.copy(br).addScaledVector(bAx, -0.95 * R0);
         dv.copy(v).sub(C); const len = dv.length();
@@ -1332,7 +1348,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
       }
     }
     // hips and seat carry into the top of the thighs
-    const wTh = wOf(i, (n) => /^thigh/.test(n));
+    const wTh = wOf(i, (n) => /^thigh/.test(n), 'k6');
     if (wTh > 0.01) {
       const gH = gauss(v.y - hipY, 0.085 * H), sd = v.x > spineX ? 'L' : 'R', bt = lm['butt' + sd], hx = J['thigh.' + sd].x;
       if (Math.abs(v.x - spineX) > Math.abs(hx - spineX)) v.x = hx + (v.x - hx) * (1 + 0.45 * s(b.hips) * gH * wTh);
@@ -1343,9 +1359,9 @@ function shapePlanar(mesh, b, H, inPlace = false) {
       const sd = v.x > spineX ? 1 : -1, S = sd > 0 ? 'L' : 'R', sj = J['upperArm.' + S];
       const amt = (0.045 * s(b.shoulders) + 0.008 * s(b.muscle)) * H;
       if (amt && sj) {
-        const wArm = wOf(i, (n) => n.endsWith('.' + S) && /^(upperArm|foreArm|hand|thumb|index|middle|ring|pinky)/.test(n)), wCl = wOf(i, (n) => n === 'clavicle.' + S);
+        const wArm = wOf(i, (n) => n.endsWith('.' + S) && /^(upperArm|foreArm|hand|thumb|index|middle|ring|pinky)/.test(n), 'arm.' + S), wCl = wOf(i, (n) => n === 'clavicle.' + S, 'clav.' + S);
         // the torso around the shoulder follows part-way, fading toward the neck and below the armpit
-        const wTo = wOf(i, (n) => /^(ribcage|lumbar2)/.test(n));
+        const wTo = wOf(i, (n) => /^(ribcage|lumbar2)/.test(n), 'k7');
         // nothing moves at the neck; the full amount at the shoulder joint and beyond
         const xf = sst(0.035 * H, Math.abs(sj.x - spineX), Math.abs(v.x - spineX));
         const tor = wTo * Math.max(0, 1 - Math.abs(v.y - sj.y) / (0.09 * H));
@@ -1353,13 +1369,13 @@ function shapePlanar(mesh, b, H, inPlace = false) {
       }
       // traps: the slope from the neck to the shoulder rises and thickens toward the back
       const tp = lm['trap' + S], ta = (0.032 * s(b.traps ?? 0.5) + 0.008 * s(b.muscle)) * H;
-      if (tp && ta) { N.set(sd * 0.15, 1, -0.45).normalize(); padV(v, tp, N, 0.07 * H, ta, wOf(i, (n) => /^(ribcage|neck1|clavicle)/.test(n))); }
+      if (tp && ta) { N.set(sd * 0.15, 1, -0.45).normalize(); padV(v, tp, N, 0.07 * H, ta, wOf(i, (n) => /^(ribcage|neck1|clavicle)/.test(n), 'k8')); }
     }
-    const wN = wOf(i, (n) => /^neck/.test(n)); if (wN > 0.01) { const kk = 1 + (0.3 * s(b.neck) + 0.12 * s(b.muscle)) * wN, sz = J.neck1.z; v.x = spineX + (v.x - spineX) * kk; v.z = sz + (v.z - sz) * kk; }
-    const wHd = wOf(i, (n) => n === 'head'); if (wHd > 0.01 && J.head) { const kk = 1 + 0.25 * s(b.head) * wHd; v.sub(J.head).multiplyScalar(kk).add(J.head); }
+    const wN = wOf(i, (n) => /^neck/.test(n), 'k9'); if (wN > 0.01) { const kk = 1 + (0.3 * s(b.neck) + 0.12 * s(b.muscle)) * wN, sz = J.neck1.z; v.x = spineX + (v.x - spineX) * kk; v.z = sz + (v.z - sz) * kk; }
+    const wHd = wOf(i, (n) => n === 'head', 'k10'); if (wHd > 0.01 && J.head) { const kk = 1 + 0.25 * s(b.head) * wHd; v.sub(J.head).multiplyScalar(kk).add(J.head); }
     for (const S of ['L', 'R']) {
-      const wHa = wOf(i, (n) => n === 'hand.' + S || (/^(thumb|index|middle|ring|pinky)\d\./.test(n) && n.endsWith('.' + S))); if (wHa > 0.01 && J['hand.' + S]) { const kk = 1 + 0.3 * s(b.hands) * wHa; v.sub(J['hand.' + S]).multiplyScalar(kk).add(J['hand.' + S]); }
-      const wF = wOf(i, (n) => /^foot/.test(n) && n.endsWith('.' + S)); if (wF > 0.01 && J['footControl.' + S]) { const o = J['footControl.' + S], kk = 1 + 0.3 * s(b.feet) * wF, y0 = v.y; v.sub(o).multiplyScalar(kk).add(o); v.y = y0 * (1 + (kk - 1) * 0.5); }
+      const wHa = wOf(i, (n) => n === 'hand.' + S || (/^(thumb|index|middle|ring|pinky)\d\./.test(n) && n.endsWith('.' + S)), 'handF.' + S); if (wHa > 0.01 && J['hand.' + S]) { const kk = 1 + 0.3 * s(b.hands) * wHa; v.sub(J['hand.' + S]).multiplyScalar(kk).add(J['hand.' + S]); }
+      const wF = wOf(i, (n) => /^foot/.test(n) && n.endsWith('.' + S), 'foot.' + S); if (wF > 0.01 && J['footControl.' + S]) { const o = J['footControl.' + S], kk = 1 + 0.3 * s(b.feet) * wF, y0 = v.y; v.sub(o).multiplyScalar(kk).add(o); v.y = y0 * (1 + (kk - 1) * 0.5); }
     }
     P.setXYZ(i, v.x, v.y, v.z);
   }
@@ -1386,7 +1402,7 @@ function shapePlanar(mesh, b, H, inPlace = false) {
     }
     const kD = def > 0 ? 0.65 * def : 0.5 * def; // negative: softer (when shrinking is allowed)
     for (let i = 0; i < P.count; i++) {
-      const wSkip = wOf(i, (n) => /^(head|neck|hand|thumb|index|middle|ring|pinky|foot|toe)/.test(n));
+      const wSkip = wOf(i, (n) => /^(head|neck|hand|thumb|index|middle|ring|pinky|foot|toe)/.test(n), 'k11');
       let w = (1 - Math.min(1, wSkip)) * (roundPts[i] ? 0 : 1);
       if (b.sex !== 'male' && w > 0) { v.fromBufferAttribute(P, i); for (const sd2 of ['L', 'R']) { const brp = lm['breast' + sd2]; if (brp) { const dd = Math.hypot(v.x - brp.x, v.y - brp.y); w *= sst(0.06 * H, 0.085 * H, dd); if (dd < 0.075 * H && v.z > brp.z - 0.06 * H) roundPts[i] = 1; } } } // breasts stay smooth
       if (w < 0.01) continue;
